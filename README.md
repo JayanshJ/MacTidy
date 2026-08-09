@@ -1,4 +1,21 @@
-# MacTidy
+<p align="center">
+  <img src="assets/logo.svg" width="128" height="128" alt="MacTidy icon">
+</p>
+
+<h1 align="center">MacTidy</h1>
+
+<p align="center">
+  Reclaim disk space on macOS — <em>honestly</em>.<br>
+  No RAM-freeing theater, no fake "speed boosts", no <code>rm</code>.
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/macOS-14%2B-000000?logo=apple&logoColor=white" alt="macOS 14+">
+  <img src="https://img.shields.io/badge/Swift-SwiftUI%20%2B%20SwiftPM-F05138?logo=swift&logoColor=white" alt="Swift">
+  <img src="https://img.shields.io/badge/tests-36%20passing-30A14E" alt="36 tests passing">
+</p>
+
+---
 
 A native macOS app for reclaiming disk space and auditing startup items
 **honestly** — no RAM-freeing theater, no fake "speed boosts". Personal-use
@@ -8,32 +25,79 @@ Everything destructive flows through one path: a `DeletionPlan` validated by
 a hard `SafePathPolicy` denylist, executed as **move-to-Trash only** (never
 `rm`), with a dry-run mode that's on by default until you switch it off.
 
-## Build & run
+## Install
 
-Requires macOS 14+ and the Xcode Command Line Tools (full Xcode not needed).
+There is **no prebuilt download** — MacTidy isn't notarized or distributed as a
+release, so you build it yourself. It takes about a minute.
+
+**Requirements**
+
+- macOS 14 (Sonoma) or newer, Apple Silicon or Intel
+- Xcode Command Line Tools — full Xcode is *not* required. If you don't have
+  them: `xcode-select --install`
+
+**Steps**
 
 ```sh
-make cert   # one-time: create the "MacTidy Signing" certificate (see below)
-make test   # run the CoreKit safety/scanner test suite
+git clone https://github.com/JayanshJ/MacTidy.git
+cd MacTidy
+make cert   # one-time: self-signed cert, so Full Disk Access survives rebuilds
 make app    # release build → dist/MacTidy.app
-make run    # build + open
 ```
 
-On first launch the app asks for **Full Disk Access** (System Settings →
-Privacy & Security → Full Disk Access → add `dist/MacTidy.app`). Without it,
-scans of `~/Library` would be silently incomplete, so the app blocks until
-it's granted.
+Then move `dist/MacTidy.app` to `/Applications` (optional, but do it *before*
+granting Full Disk Access below — the grant is tied to the app's location):
+
+```sh
+mv dist/MacTidy.app /Applications/
+```
+
+Use `make run` instead of `make app` to build and launch in one step.
+
+**Grant Full Disk Access (required)**
+
+On first launch MacTidy blocks until you grant it. Open **System Settings →
+Privacy & Security → Full Disk Access**, click **+**, and add `MacTidy.app`.
+This isn't optional gatekeeping — without FDA, macOS hides parts of
+`~/Library` from the scanner and MacTidy would quietly under-report what it
+found. It refuses to show you an incomplete number.
+
+**First run**
+
+Dry-run mode is **on by default**. Every cleanup just logs what it *would*
+trash until you turn dry-run off in the toolbar. When it is off, deletions
+still only ever move files to the Trash — MacTidy never calls `rm` — so the
+Trash remains your undo, alongside the in-app **Recently Trashed** view.
+
+### Troubleshooting
+
+- **"MacTidy can't be opened because Apple cannot check it for malicious
+  software."** Expected for a self-signed local build. Right-click the app →
+  **Open** → **Open**, once. (Or `xattr -dr com.apple.quarantine
+  /Applications/MacTidy.app`.)
+- **The app keeps asking for Full Disk Access after a rebuild.** You skipped
+  `make cert`. Ad-hoc signing gives the binary a new identity on every build,
+  so macOS drops the grant. Run `make cert`, rebuild, re-add the app once.
+- **Re-granting after moving the app.** FDA is per-path — if you move the
+  `.app` after granting, remove the old entry and add the new location.
+
+## Development
+
+```sh
+make test   # CoreKit safety/scanner suite — 36 tests, Swift Testing
+make clean
+```
+
+> Note: `swift test` alone won't work with bare Command Line Tools — the
+> Testing.framework lives outside the default search paths and SwiftPM's
+> synthesized runner silently no-ops without a global `-F` flag. `make test`
+> passes the right flags; see the Makefile comment.
 
 **Signing:** `make cert` creates a self-signed "MacTidy Signing" certificate
 in the login keychain (one-time; may prompt twice). With it, the FDA grant
 survives rebuilds. Without it, `make app` falls back to ad-hoc signing
 (`codesign -s -`), whose identity changes every build — macOS then drops the
 FDA grant and you must re-add the app after each rebuild.
-
-> Note: `swift test` alone won't work with bare Command Line Tools — the
-> Testing.framework lives outside the default search paths and SwiftPM's
-> synthesized runner silently no-ops without a global `-F` flag. `make test`
-> passes the right flags; see the Makefile comment.
 
 ## Layout
 

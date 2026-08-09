@@ -27,9 +27,10 @@ test:
 # the whole tool. Grant the app Full Disk Access on first run.
 app: build
 	rm -rf $(APP)
-	mkdir -p $(APP)/Contents/MacOS
+	mkdir -p $(APP)/Contents/MacOS $(APP)/Contents/Resources
 	cp .build/release/MacTidy $(APP)/Contents/MacOS/MacTidy
 	cp Support/Info.plist $(APP)/Contents/Info.plist
+	cp Support/AppIcon.icns $(APP)/Contents/Resources/AppIcon.icns
 	codesign --force --sign "$(SIGN_IDENTITY)" $(APP)
 	@echo "Built $(APP) (signed: $(SIGN_IDENTITY))"
 
