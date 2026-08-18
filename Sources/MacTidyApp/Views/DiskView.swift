@@ -111,10 +111,7 @@ struct CategoryCleanupView: View {
             HStack {
                 Text(result.category.displayName)
                 if !result.category.isPreselectable {
-                    Text("SUGGEST-ONLY")
-                        .font(.caption2.bold())
-                        .padding(.horizontal, 4)
-                        .background(.orange.opacity(0.25), in: Capsule())
+                    Badge(text: "Suggest-only", tint: Theme.Status.caution)
                         .help("Build artifacts of possibly-active projects; check before trashing.")
                 }
                 Spacer()

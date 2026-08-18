@@ -8,3 +8,7 @@ dist/
 
 # macOS
 .DS_Store
+
+# opencode (machine-local server config; password lives in ~/.zshrc)
+opencode.json
+graphify-out/

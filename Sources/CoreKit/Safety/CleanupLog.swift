@@ -86,4 +86,21 @@ public final class CleanupLog: @unchecked Sendable {
     public func clear() {
         queue.sync { try? FileManager.default.removeItem(at: fileURL) }
     }
+
+    /// Removes entries older than the given number of days. No-op when `days`
+    /// is zero or negative. The reclaimed-over-time stat only reflects what's
+    /// still logged, so pruning narrows the window the stat covers.
+    public func pruneOlderThan(days: Int) {
+        guard days > 0 else { return }
+        let cutoff = Date().addingTimeInterval(-Double(days) * 86400)
+        queue.sync {
+            guard let data = try? Data(contentsOf: fileURL),
+                  var entries = try? JSONDecoder().decode([CleanupEntry].self, from: data)
+            else { return }
+            let before = entries.count
+            entries.removeAll { $0.date < cutoff }
+            guard entries.count != before else { return }
+            try? JSONEncoder().encode(entries).write(to: fileURL, options: .atomic)
+        }
+    }
 }

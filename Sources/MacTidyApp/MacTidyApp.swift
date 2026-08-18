@@ -10,6 +10,7 @@ struct MacTidyApp: App {
         WindowGroup("MacTidy") {
             RootView()
                 .environment(state)
+                .tint(Theme.accent)
                 .frame(minWidth: 940, minHeight: 600)
         }
     }

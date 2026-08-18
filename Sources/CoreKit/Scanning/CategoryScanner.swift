@@ -39,7 +39,8 @@ public struct CategoryScanner: Sendable {
     }
 
     public func scanAll(
-        progress: (@Sendable (Category) -> Void)? = nil
+        progress: (@Sendable (Category) -> Void)? = nil,
+        completed: (@Sendable (CategoryResult) -> Void)? = nil
     ) async -> [CategoryResult] {
         await withTaskGroup(of: CategoryResult.self) { group in
             for category in Category.allCases {
@@ -51,7 +52,10 @@ public struct CategoryScanner: Sendable {
                 }
             }
             var results: [CategoryResult] = []
-            for await result in group { results.append(result) }
+            for await result in group {
+                completed?(result)
+                results.append(result)
+            }
             return results.sorted { $0.totalBytes > $1.totalBytes }
         }
     }

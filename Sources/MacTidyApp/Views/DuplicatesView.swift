@@ -147,16 +147,10 @@ struct DuplicatesView: View {
                     HStack {
                         ScanItemRow(item: item, selection: $selection)
                         if fileIndex > 0 {
-                            Text("CLONE — takes no extra space")
-                                .font(.caption2.bold())
-                                .padding(.horizontal, 4)
-                                .background(.green.opacity(0.25), in: Capsule())
-                                .help("Already shares its on-disk blocks with the copy above.")
+                            Badge(text: "Clone", tint: Theme.Status.good)
+                                .help("Already shares its on-disk blocks with the copy above — takes no extra space.")
                         } else if groupIndex > 0 {
-                            Text("EXTRA COPY")
-                                .font(.caption2.bold())
-                                .padding(.horizontal, 4)
-                                .background(.orange.opacity(0.25), in: Capsule())
+                            Badge(text: "Extra copy", tint: Theme.Status.caution)
                                 .help("Independent second copy — this one actually wastes space.")
                         }
                     }

@@ -67,7 +67,10 @@ ScanItem(s) → DeletionPlan → SafePathPolicy.classify (per item) → Trasher.
   overwrites). Only real (non-dry-run) records are persisted.
 - `Sources/CoreKit/Safety/CleanupLog.swift` — the honest reclaim-over-time log:
   one `CleanupEntry` per real cleanup (date, kind, reclaimedBytes, itemCount).
-  Powers the "freed across N cleanups" stat on the Overview.
+  Powers the "freed across N cleanups" stat on the Overview. `Kind.uninstall`
+  is written by the uninstaller path (distinct from generic `.deletion`).
+  `pruneOlderThan(days:)` drops entries outside the retention window set in
+  Settings (0 = keep forever, bounded by `maxEntries`).
 - `CloneDeduplicator` (same `Safety/` folder) is the one other mutator: replaces
   extra duplicate copies with APFS clones (`clonefile` + atomic `RENAME_SWAP`),
   sending the swapped-out originals to Trash. Now also partial (per-target
@@ -75,7 +78,9 @@ ScanItem(s) → DeletionPlan → SafePathPolicy.classify (per item) → Trasher.
 
 Any new destructive feature must route through `SafePathPolicy` + `Trasher` (or
 `CloneDeduplicator`), and record to `TrashLog`/`CleanupLog` via `AppState`. Never
-bypass the policy, never call `removeItem`, never `rm`.
+bypass the policy, never call `removeItem`, never `rm`. The one exception is
+`LaunchItemsAuditor`'s system-domain disable/restore, which moves plists (not
+user data) via an `osascript` admin prompt — see below.
 
 ### Scanning (read-only)
 
@@ -84,7 +89,11 @@ bypass the policy, never call `removeItem`, never `rm`.
 also `largeFiles(under:minSize:)` which skips build/VCS trees to avoid overlap),
 `CategoryScanner` (the curated cleanup categories), `AppUninstaller`,
 `LaunchItemsAuditor`, `DuplicateFinder` (clone-aware via inode + `F_LOG2PHYS`),
-`DockerInfo` (read-only display only — MacTidy never runs `docker system prune`).
+`DockerInfo` (read-only display only — MacTidy never runs `docker system prune`),
+`Recommendations` (byte-weighted ranking of scan results into a one-click cleanup
+plan — biggest × safest × stalest; suggest-only items surfaced but never
+auto-selected), `ScanHistory` (rolling `ScanSnapshot` log capped at 50, powers the
+reclaimable trend on the Overview).
 
 **Avoiding double-counting** is a core honesty invariant: the reclaim total on the
 Overview sums every category, so categories must not overlap. `devCaches` only
@@ -103,27 +112,48 @@ silently incomplete.
 launchctl). Degrades gracefully (missing tool → nil, never throws) and does not
 consult `$PATH` — only standard locations, so behavior is independent of shell config.
 
+`LaunchItemsAuditor` now toggles all three domains, not just user agents. System
+agents/daemons run their `launchctl bootout`/`bootstrap` + plist move via a single
+`osascript` "do shell script … with administrator privileges" prompt (no embedded
+privileged helper — keeps the SwiftPM/ad-hoc-signing story intact). Disabled
+plists are parked in per-domain subfolders of the Disabled folder so Restore sends
+each back to the right `LaunchAgents`/`LaunchDaemons` directory. User-cancelled
+auth (`-128`) is reported distinctly from a real command failure.
+
 ### App layer
 
 `Sources/MacTidyApp/AppState.swift` — `@MainActor @Observable` model. The UI's single
-gateway for every destructive action: `AppState.execute(_:extraAllowedRoots:)`
+gateway for every destructive action: `AppState.execute(_:extraAllowedRoots:kind:)`
 constructs a `DeletionExecutor` with the current `dryRun` and `SafePathPolicy`,
 then records to `TrashLog` + `CleanupLog` and sets `lastUndoableOutcome` for the
-Undo toast. `execute`/`deduplicate` are non-throwing (policy issues come back as
-skipped records). `dryRun` is persisted in UserDefaults and on by default. The
-last scan results are persisted to `~/Library/Application Support/MacTidy/last-
-scan.json` (`ScanItem`/`CategoryResult` are `Codable`) so relaunch isn't a blank
-screen + full rescan; `rescanCategories()` is cancellable and reports per-category
-progress. Views are a sidebar
-(Overview · Disk · Uninstaller · Startup Items · Duplicates · Recently Trashed)
-under `Views/`. `MainSplitView` hosts the post-cleanup `UndoToast`; `DiskView`
-has a List/Map toggle where Map renders `TreemapView` (a recursive binary-split
-treemap of the current directory's children).
+Undo toast. The uninstaller passes `kind: .uninstall` so its cleanups are bucketed
+separately from generic deletions. `execute`/`deduplicate` are non-throwing (policy
+issues come back as skipped records). Persisted settings: `dryRun` (on by default),
+`extraAllowedRoots` (applied to every action in addition to the policy's built-in
+roots), `autoScanOnLaunch`, and `logRetentionDays` (prunes `TrashLog`/`CleanupLog`).
+The last scan results are persisted to `~/Library/Application Support/MacTidy/last-
+scan.json` and a rolling `ScanHistory` (capped at 50) drives the reclaimable trend
+on the Overview. `rescanCategories()` is cancellable and reports per-category
+progress. The UI is a **single-window guided flow** (no sidebar): `FlowView`
+hosts a `FlowPhase` state machine (`welcome → scanning → dashboard → allClean`)
+driven by `AppState`'s flow controller. `startFlow()` runs a category scan plus
+an uninstall/launch-item scan in parallel, then lands on the **dashboard**.
+The dashboard shows everything at once: a tab bar switches between Cleanup
+(category cards grid; tap a card to drill into its items with multi-select +
+Trash), Uninstaller, Startup, and Duplicates — all in the new design system.
+The first pass is a **dry preview** (`flowPass == .dry`); `startRealPass()`
+turns `dryRun` off and stays on the dashboard so the user trashes for real.
+`FlowToolbar` carries a Home button and the escape hatches (Browse disk,
+Recently Trashed, Settings) as sheets. `DiskView` (List/Map toggle, Map renders
+`TreemapView`, a recursive binary-split treemap), `SettingsView`, and `TrashView`
+are sheets reachable from the toolbar. `UndoToast` overlays post-cleanup undo.
 
 ## Tests
 
 `Tests/CoreKitTests/` uses **Swift Testing** (`import Testing`, `@Suite`, `@Test`,
 `#expect`), not XCTest — XCTest isn't available with bare CLT. Tests cover the
-safety layer (`SafePathPolicy`, `DeletionPlan`, `CloneDedup`) and scanners
-(`Scanning`, `CategoryScanner`). Tests that exercise real trashing clean up their
-Trash entry afterwards so `make test` doesn't litter.
+safety layer (`SafePathPolicy`, `DeletionPlan`, `CloneDedup`), scanners
+(`Scanning`, `CategoryScanner`), `Recommendations` ranking, `FlowAction` model,
+`ScanHistory`, log retention pruning, and `LaunchItemsAuditor` helpers. Tests
+that exercise real trashing clean up their Trash entry afterwards so
+`make test` doesn't litter.

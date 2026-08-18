@@ -11,6 +11,7 @@ struct DeletionConfirmationSheet: View {
     let title: String
     let plan: DeletionPlan
     var extraAllowedRoots: [URL] = []
+    var kind: TrashRecord.Kind = .deletion
     var onCompleted: (DeletionOutcome) -> Void = { _ in }
 
     @State private var outcome: DeletionOutcome?
@@ -71,7 +72,7 @@ struct DeletionConfirmationSheet: View {
     private func execute() {
         // Non-throwing: policy violations come back as per-item skipped
         // records in the outcome rather than aborting the whole plan.
-        outcome = state.execute(plan, extraAllowedRoots: extraAllowedRoots)
+        outcome = state.execute(plan, extraAllowedRoots: extraAllowedRoots, kind: kind)
     }
 
     @ViewBuilder

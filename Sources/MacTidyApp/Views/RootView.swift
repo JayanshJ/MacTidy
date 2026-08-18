@@ -7,7 +7,7 @@ struct RootView: View {
     var body: some View {
         Group {
             if state.fdaGranted {
-                MainSplitView()
+                FlowView()
             } else {
                 FDAOnboardingView()
             }
@@ -15,6 +15,11 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(
             for: NSApplication.didBecomeActiveNotification)) { _ in
             state.refreshFDA()
+        }
+        .task {
+            if state.fdaGranted && state.autoScanOnLaunch && state.categoryResults.isEmpty {
+                await state.rescanCategories()
+            }
         }
     }
 }

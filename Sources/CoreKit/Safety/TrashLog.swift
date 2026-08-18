@@ -8,6 +8,7 @@ public struct TrashRecord: Identifiable, Sendable, Codable, Hashable {
     public enum Kind: String, Sendable, Codable {
         case deletion
         case dedup
+        case uninstall
     }
 
     public let id: UUID
@@ -109,6 +110,23 @@ public final class TrashLog: @unchecked Sendable {
 
     public func clear() {
         queue.sync { try? FileManager.default.removeItem(at: fileURL) }
+    }
+
+    /// Removes records older than the given number of days. No-op when `days`
+    /// is zero or negative. The items themselves stay in the Trash — only the
+    /// undo log entries are dropped.
+    public func pruneOlderThan(days: Int) {
+        guard days > 0 else { return }
+        let cutoff = Date().addingTimeInterval(-Double(days) * 86400)
+        queue.sync {
+            guard let data = try? Data(contentsOf: fileURL),
+                  var entries = try? JSONDecoder().decode([TrashRecord].self, from: data)
+            else { return }
+            let before = entries.count
+            entries.removeAll { $0.date < cutoff }
+            guard entries.count != before else { return }
+            try? JSONEncoder().encode(entries).write(to: fileURL, options: .atomic)
+        }
     }
 }
 

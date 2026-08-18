@@ -52,6 +52,13 @@ public struct DeletionOutcome: Sendable {
     public let trashed: [TrashedRecord]
     public let skipped: [SkippedRecord]
     public let reclaimedBytes: Int64
+
+    public init(dryRun: Bool, trashed: [TrashedRecord], skipped: [SkippedRecord], reclaimedBytes: Int64) {
+        self.dryRun = dryRun
+        self.trashed = trashed
+        self.skipped = skipped
+        self.reclaimedBytes = reclaimedBytes
+    }
 }
 
 /// The single execution path for every destructive action in the app.

@@ -71,7 +71,7 @@ struct TrashView: View {
     @ViewBuilder
     private func row(_ record: TrashRecord) -> some View {
         HStack {
-            Image(systemName: record.kind == .dedup ? "doc.on.doc" : "trash")
+            Image(systemName: rowIcon(record.kind))
                 .foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 2) {
                 Text(record.original.lastPathComponent).lineLimit(1)
@@ -103,6 +103,14 @@ struct TrashView: View {
         }
         .contextMenu {
             Button("Show in Finder") { showInFinder(record.original) }
+        }
+    }
+
+    private func rowIcon(_ kind: TrashRecord.Kind) -> String {
+        switch kind {
+        case .deletion: "trash"
+        case .dedup: "doc.on.doc"
+        case .uninstall: "trash.slash"
         }
     }
 

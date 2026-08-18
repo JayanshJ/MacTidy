@@ -50,13 +50,13 @@ struct StartupItemsView: View {
                 Text("None found").foregroundStyle(.tertiary)
             }
             ForEach(domainItems) { item in
-                row(item, action: domain.isToggleable ? .disable : nil)
+                row(item, action: .disable)
             }
         } header: {
             Text(domain.rawValue)
         } footer: {
-            if !domain.isToggleable {
-                Text("System items need admin rights to change — shown read-only in this version.")
+            if domain.requiresAdmin {
+                Text("System items need administrator rights to change. macOS will prompt for your password each time you disable or restore one.")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
             }
@@ -72,16 +72,13 @@ struct StartupItemsView: View {
                 HStack(spacing: 6) {
                     Text(item.label).fontWeight(.medium).lineLimit(1)
                     if item.isLoaded {
-                        Text("LOADED")
-                            .font(.caption2.bold())
-                            .padding(.horizontal, 4)
-                            .background(.green.opacity(0.25), in: Capsule())
+                        Badge(text: "Loaded", tint: Theme.Status.good, filled: true)
                     }
                     if item.runAtLoad == true {
-                        Text("RUNS AT LOGIN")
-                            .font(.caption2.bold())
-                            .padding(.horizontal, 4)
-                            .background(.blue.opacity(0.2), in: Capsule())
+                        Badge(text: "Runs at login", tint: .blue)
+                    }
+                    if item.domain.requiresAdmin {
+                        Badge(text: "Admin", tint: Theme.Status.caution)
                     }
                 }
                 if let program = item.program {

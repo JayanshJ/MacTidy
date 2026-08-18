@@ -13,11 +13,35 @@ final class AppState {
         didSet { UserDefaults.standard.set(dryRun, forKey: "MacTidy.dryRun") }
     }
 
+    /// Extra roots the user has allow-listed in Settings, applied to every
+    /// destructive action in addition to the policy's built-in roots.
+    var extraAllowedRoots: [URL] {
+        didSet { persistExtraAllowedRoots() }
+    }
+
+    /// Rescan the cleanup categories automatically when the app launches.
+    var autoScanOnLaunch: Bool {
+        didSet { UserDefaults.standard.set(autoScanOnLaunch, forKey: "MacTidy.autoScanOnLaunch") }
+    }
+
+    /// Days of log history to keep. 0 = keep everything (bounded only by the
+    /// logs' max-entry caps). Applied at launch and when changed in Settings.
+    var logRetentionDays: Int {
+        didSet {
+            UserDefaults.standard.set(logRetentionDays, forKey: "MacTidy.logRetentionDays")
+            applyLogRetention()
+        }
+    }
+
     var categoryResults: [CategoryResult] = []
     var isScanningCategories = false
     var scanStatus: String = ""
     /// Human-readable progress for the current category scan ("Scanning User caches…").
     var scanProgress: String = ""
+    /// Completed vs total category count for the running scan, drives the
+    /// determinate progress bar on the Overview.
+    var scanCompleted: Int = 0
+    var scanTotal: Int = 0
 
     /// Everything MacTidy has trashed, newest first. Drives the "Recently
     /// Trashed" view and the post-cleanup Undo toast.
@@ -28,28 +52,62 @@ final class AppState {
     /// Completed cleanups, newest first — the honest reclaim-over-time log.
     var cleanupHistory: [CleanupEntry] = []
 
+    /// Recent scan snapshots, newest first — drives the reclaimable trend.
+    var scanHistory: [ScanSnapshot] = []
+
+    // MARK: - Guided flow state
+
+    /// The current phase of the guided cleanup wizard.
+    var flowPhase: FlowPhase = .welcome
+    /// The ranked queue of actions the wizard walks through, one at a time.
+    var flowQueue: [FlowAction] = []
+    /// Index into `flowQueue` of the action currently under review.
+    var flowIndex: Int = 0
+    /// The action currently under review (or nil if past the end / not in review).
+    var flowCurrent: FlowAction? { flowQueue.indices.contains(flowIndex) ? flowQueue[flowIndex] : nil }
+    /// Whether the current pass is the dry preview or the real cleanup.
+    var flowPass: CleanPass = .dry
+    /// The most recent applied outcome, shown briefly on the applying screen.
+    var flowLastOutcome: DeletionOutcome?
+    /// Apps + leftovers scanned during the flow, for uninstall action cards.
+    var flowApps: [(app: InstalledApp, leftovers: [ScanItem])] = []
+    /// Launch items scanned during the flow, for disable action cards.
+    var flowLaunchItems: [LaunchItem] = []
+    /// Items the user skipped during this pass — suppressed from re-surfacing
+    /// until the queue is rebuilt.
+    private var flowSkipped: Set<String> = []
+
     /// The scan task, kept so the UI can cancel an in-flight scan.
     private var scanTask: Task<Void, Never>?
 
     private let trashLog: TrashLog
     private let cleanupLog: CleanupLog
+    private let scanHistoryStore: ScanHistory
     private let lastScanURL: URL
 
     init(
         trashLog: TrashLog = .shared,
-        cleanupLog: CleanupLog = .shared
+        cleanupLog: CleanupLog = .shared,
+        scanHistory: ScanHistory = .shared
     ) {
         self.trashLog = trashLog
         self.cleanupLog = cleanupLog
+        self.scanHistoryStore = scanHistory
         let support = FileManager.default.homeDirectoryForCurrentUser
             .appending(path: "Library/Application Support/MacTidy")
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         self.lastScanURL = support.appending(path: "last-scan.json")
         self.dryRun = UserDefaults.standard.object(forKey: "MacTidy.dryRun") as? Bool ?? true
+        self.extraAllowedRoots = Self.loadExtraAllowedRoots()
+        self.autoScanOnLaunch = UserDefaults.standard.object(forKey: "MacTidy.autoScanOnLaunch") as? Bool ?? false
+        self.logRetentionDays = UserDefaults.standard.object(forKey: "MacTidy.logRetentionDays") as? Int ?? 0
 
         // Restore persisted state so relaunch isn't a blank screen + full rescan.
         self.recentTrashed = trashLog.load()
         self.cleanupHistory = cleanupLog.load()
+        self.scanHistory = scanHistoryStore.load()
+        // Drop log entries older than the retention window before showing them.
+        applyLogRetention()
         if let results = Self.loadLastScan(from: lastScanURL) {
             self.categoryResults = results
             self.scanStatus = "Last scan restored from previous session"
@@ -65,21 +123,37 @@ final class AppState {
         scanTask?.cancel()
         isScanningCategories = true
         scanProgress = "Starting…"
+        scanTotal = Category.allCases.count
+        scanCompleted = 0
         let task = Task {
             let scanner = CategoryScanner()
-            let results = await scanner.scanAll { category in
-                Task { @MainActor in self.scanProgress = "Scanning \(category.displayName)…" }
-            }
+            var completed = 0
+            let results = await scanner.scanAll(
+                progress: { category in
+                    Task { @MainActor in self.scanProgress = "Scanning \(category.displayName)…" }
+                },
+                completed: { _ in
+                    completed += 1
+                    Task { @MainActor in self.scanCompleted = completed }
+                }
+            )
             if Task.isCancelled {
-                await MainActor.run { isScanningCategories = false; scanProgress = "" }
+                await MainActor.run { isScanningCategories = false; scanProgress = ""; scanCompleted = 0 }
                 return
             }
             await MainActor.run {
                 categoryResults = results
                 isScanningCategories = false
                 scanProgress = ""
+                scanCompleted = scanTotal
                 scanStatus = "Last scan: \(Date.now.formatted(date: .omitted, time: .shortened))"
                 persistLastScan(results)
+                let snapshot = ScanSnapshot(
+                    reclaimableBytes: results.reduce(0) { $0 + $1.totalBytes },
+                    itemCount: results.reduce(0) { $0 + $1.items.count }
+                )
+                scanHistoryStore.append(snapshot)
+                scanHistory = scanHistoryStore.load()
             }
         }
         scanTask = task
@@ -88,6 +162,133 @@ final class AppState {
 
     func cancelScan() {
         scanTask?.cancel()
+    }
+
+    // MARK: - Guided flow control
+
+    /// Start the wizard: kick off a scan, then land on the dashboard where
+    /// every category and tool is visible at once.
+    func startFlow() async {
+        flowSkipped.removeAll()
+        flowPhase = .scanning
+        await rescanCategories()
+        // Scan apps and launch items in parallel so the dashboard's
+        // Uninstaller / Startup tabs have data ready immediately.
+        async let apps = scanUninstallCandidates()
+        async let launch = Task.detached { LaunchItemsAuditor.audit() }.value
+        flowApps = await apps
+        flowLaunchItems = await launch
+        rebuildFlowQueue()
+        flowIndex = 0
+        if flowQueue.isEmpty {
+            flowPhase = .allClean
+        } else {
+            flowPhase = .dashboard
+        }
+    }
+
+    /// Scans installed apps and their leftovers, keeping only non-Apple apps
+    /// with meaningful size, for the uninstall action cards.
+    private func scanUninstallCandidates() async -> [(app: InstalledApp, leftovers: [ScanItem])] {
+        let apps = await AppUninstaller.installedApps()
+        var result: [(InstalledApp, [ScanItem])] = []
+        for app in apps where !app.isApple && app.sizeBytes > 50 * 1024 * 1024 {
+            let leftovers = await AppUninstaller.leftovers(for: app)
+            result.append((app, leftovers))
+        }
+        // Largest first.
+        return result.sorted { $0.0.sizeBytes > $1.0.sizeBytes }
+    }
+
+    /// Rebuilds the ranked action queue from the current scan results plus
+    /// uninstaller / launch-item / duplicate suggestions. Skipped items stay
+    /// suppressed within a pass.
+    func rebuildFlowQueue() {
+        var queue: [FlowAction] = []
+
+        // Cleanup recommendations from CoreKit's ranking engine — the core.
+        let recs = Recommendations.ranked(from: categoryResults, limit: 100)
+        for rec in recs where !flowSkipped.contains(rec.item.id.uuidString) {
+            queue.append(.trash(
+                items: [rec.item],
+                title: rec.item.url.lastPathComponent,
+                why: why(for: rec),
+                icon: icon(for: rec)
+            ))
+        }
+
+        // Uninstall suggestions: large non-Apple apps, folded in as actions.
+        for (app, leftovers) in flowApps where !flowSkipped.contains("uninstall:" + app.id) {
+            queue.append(.uninstall(app: app, leftovers: leftovers))
+        }
+
+        // Launch items that run at login but aren't loaded — stale candidates.
+        let staleLaunch = flowLaunchItems.filter { $0.runAtLoad == true && !$0.isLoaded && $0.domain == .userAgent }
+        if !staleLaunch.isEmpty {
+            queue.append(.disableLaunch(items: staleLaunch))
+        }
+
+        // Rank by reclaimable bytes so the biggest wins lead. Non-byte actions
+        // (disable, duplicates) sort toward the end naturally with 0 bytes.
+        flowQueue = queue.sorted { $0.reclaimableBytes > $1.reclaimableBytes }
+    }
+
+    /// Applies the current trash action via the destructive gateway. In the
+    /// dry pass, `dryRun` is on so nothing is actually trashed.
+    @discardableResult
+    func flowApplyTrash(_ items: [ScanItem]) -> DeletionOutcome {
+        let plan = DeletionPlan(items: items)
+        let outcome = execute(plan, kind: .deletion)
+        flowLastOutcome = outcome
+        return outcome
+    }
+
+    /// Switch from the dry pass to the real pass: turn dry-run off, clear
+    /// skipped items, and return to the dashboard.
+    func startRealPass() {
+        dryRun = false
+        flowPass = .real
+        flowSkipped.removeAll()
+        flowIndex = 0
+        if flowQueue.isEmpty {
+            flowPhase = .allClean
+        } else {
+            flowPhase = .dashboard
+        }
+    }
+
+    /// Reset back to the welcome screen (e.g. after finishing).
+    func resetFlow() {
+        flowPhase = .welcome
+        flowQueue = []
+        flowIndex = 0
+        flowSkipped.removeAll()
+        flowLastOutcome = nil
+    }
+
+    private func why(for rec: Recommendation) -> String {
+        switch rec.reason {
+        case .safeCache:
+            "A cache — the app rebuilds it on demand. Safe to trash; you'll get the space back immediately."
+        case .staleInstaller:
+            "An installer in Downloads older than 30 days. You almost certainly already installed it."
+        case .staleBackup:
+            "An old device backup. Make sure the device is backed up elsewhere before trashing."
+        case .staleBuildDir:
+            "Build artifacts of a project. Restore with a rebuild (npm install / cargo build)."
+        case .bigFile:
+            "A large file. Review it before trashing — large isn't necessarily junk."
+        }
+    }
+
+    private func icon(for rec: Recommendation) -> String {
+        switch rec.reason {
+        case .safeCache: "internaldrive"
+        case .staleInstaller: "shippingbox"
+        case .staleBackup: "iphone"
+        case .staleBuildDir: "hammer"
+        case .bigFile: "doc"
+        }
     }
 
     var totalReclaimable: Int64 {
@@ -160,6 +361,16 @@ final class AppState {
 
     // MARK: - Recording
 
+    /// Maps a `TrashRecord.Kind` to the bucketed `CleanupEntry.Kind` for the
+    /// reclaim-over-time log.
+    private func cleanupKind(for kind: TrashRecord.Kind) -> CleanupEntry.Kind {
+        switch kind {
+        case .deletion: .deletion
+        case .dedup: .dedup
+        case .uninstall: .uninstall
+        }
+    }
+
     private func recordOutcome(
         _ outcome: DeletionOutcome, plan: DeletionPlan,
         kind: TrashRecord.Kind
@@ -180,11 +391,8 @@ final class AppState {
         }
         trashLog.append(records)
         recentTrashed = trashLog.load()
-        // Deletion and uninstall both flow through here as `.deletion`; the
-        // uninstaller doesn't pass a distinct kind, and bucketing them
-        // together is fine for the reclaim-over-time total.
         cleanupLog.append(CleanupEntry(
-            kind: kind == .dedup ? .dedup : .deletion,
+            kind: cleanupKind(for: kind),
             reclaimedBytes: outcome.reclaimedBytes,
             itemCount: outcome.trashed.count
         ))
@@ -229,5 +437,40 @@ final class AppState {
               let results = try? JSONDecoder().decode([CategoryResult].self, from: data)
         else { return nil }
         return results
+    }
+
+    // MARK: - Settings persistence
+
+    private static let extraRootsKey = "MacTidy.extraAllowedRoots"
+
+    private func persistExtraAllowedRoots() {
+        let paths = extraAllowedRoots.map(\.path)
+        UserDefaults.standard.set(paths, forKey: Self.extraRootsKey)
+    }
+
+    private static func loadExtraAllowedRoots() -> [URL] {
+        let paths = UserDefaults.standard.stringArray(forKey: extraRootsKey) ?? []
+        return paths.map { URL(fileURLWithPath: $0) }
+    }
+
+    /// Applies the current retention window to both logs and refreshes the
+    /// in-memory copies. Safe to call with `logRetentionDays == 0` (no-op).
+    func applyLogRetention() {
+        trashLog.pruneOlderThan(days: logRetentionDays)
+        cleanupLog.pruneOlderThan(days: logRetentionDays)
+        recentTrashed = trashLog.load()
+        cleanupHistory = cleanupLog.load()
+    }
+
+    /// Adds a root to the allow-list (deduped, symlink-resolved). No-op if the
+    /// picker was cancelled.
+    func addExtraAllowedRoot(_ url: URL) {
+        let resolved = url.resolvingSymlinksInPath()
+        guard !extraAllowedRoots.contains(where: { $0 == resolved }) else { return }
+        extraAllowedRoots.append(resolved)
+    }
+
+    func removeExtraAllowedRoot(_ url: URL) {
+        extraAllowedRoots.removeAll { $0 == url.resolvingSymlinksInPath() }
     }
 }

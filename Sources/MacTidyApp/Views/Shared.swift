@@ -6,8 +6,11 @@ func showInFinder(_ url: URL) {
 }
 
 /// Horizontal bar visualizing an item's share of the largest item in a list.
+/// Defaults to a 90pt fixed width for inline row use; pass `fillsWidth: true`
+/// to let it stretch to its container (used in category cards).
 struct SizeBar: View {
     let fraction: Double
+    var fillsWidth: Bool = false
 
     var body: some View {
         GeometryReader { proxy in
@@ -15,10 +18,11 @@ struct SizeBar: View {
                 Capsule().fill(.quaternary)
                 Capsule()
                     .fill(.tint)
-                    .frame(width: max(2, proxy.size.width * fraction))
+                    .frame(width: max(2, proxy.size.width * min(1, fraction)))
             }
         }
-        .frame(width: 90, height: 6)
+        .frame(height: 6)
+        .frame(maxWidth: fillsWidth ? .infinity : 90)
     }
 }
 
@@ -29,7 +33,7 @@ struct ScanItemRow: View {
     @Binding var selection: Set<UUID>
 
     var body: some View {
-        HStack {
+        HStack(spacing: Theme.Spacing.sm) {
             Toggle("", isOn: Binding(
                 get: { selection.contains(item.id) },
                 set: { isOn in
@@ -85,14 +89,25 @@ struct SelectionFooter: View {
 
     var body: some View {
         HStack {
-            Text("\(selectedCount) item\(selectedCount == 1 ? "" : "s") selected · \(selectedBytes.formattedBytes)")
-                .foregroundStyle(.secondary)
+            if selectedCount > 0 {
+                Text("\(selectedCount) item\(selectedCount == 1 ? "" : "s") selected")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Text(selectedBytes.formattedBytes)
+                    .font(.callout.bold().monospacedDigit())
+                    .foregroundStyle(Theme.accent)
+            } else {
+                Text("Nothing selected")
+                    .font(.callout)
+                    .foregroundStyle(.tertiary)
+            }
             Spacer()
             Button(buttonTitle, action: action)
                 .keyboardShortcut(.defaultAction)
                 .disabled(disabled || selectedCount == 0)
         }
-        .padding()
+        .padding(.horizontal, Theme.Spacing.lg)
+        .padding(.vertical, Theme.Spacing.md)
         .background(.bar)
     }
 }

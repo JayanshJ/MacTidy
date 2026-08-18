@@ -6,9 +6,33 @@ public struct LaunchItem: Identifiable, Hashable, Sendable {
         case systemAgent = "System launch agents"
         case systemDaemon = "System launch daemons"
 
-        /// Only user agents are toggleable in v1. System items would need a
-        /// privileged helper; they're shown read-only.
-        public var isToggleable: Bool { self == .userAgent }
+        /// User agents toggle without privilege. System agents/daemons need
+        /// admin rights, which MacTidy obtains via an `osascript` admin
+        /// prompt per action (no embedded privileged helper).
+        public var isToggleable: Bool { true }
+        public var requiresAdmin: Bool { self != .userAgent }
+
+        /// Where plists of this domain live on disk.
+        public var sourceDirectory: URL {
+            switch self {
+            case .userAgent:
+                FileManager.default.homeDirectoryForCurrentUser
+                    .appending(path: "Library/LaunchAgents")
+            case .systemAgent:
+                URL(fileURLWithPath: "/Library/LaunchAgents")
+            case .systemDaemon:
+                URL(fileURLWithPath: "/Library/LaunchDaemons")
+            }
+        }
+
+        /// The launchd domain target used by bootout/bootstrap, e.g.
+        /// `gui/501/<label>` for user agents or `system/<label>` for daemons.
+        public func domainTarget(label: String) -> String {
+            switch self {
+            case .userAgent: "gui/\(getuid())/\(label)"
+            case .systemAgent, .systemDaemon: "system/\(label)"
+            }
+        }
     }
 
     public let url: URL
@@ -22,19 +46,29 @@ public struct LaunchItem: Identifiable, Hashable, Sendable {
 
 /// Audits launchd plists — the real levers behind "my Mac starts slow".
 /// Disabling is reversible by design: bootout + move the plist into an
-/// app-managed folder, never delete it.
+/// app-managed folder, never delete it. System agents/daemons need admin
+/// rights, which MacTidy obtains via an `osascript` admin prompt.
 public enum LaunchItemsAuditor {
     public static var disabledFolder: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appending(path: "Library/Application Support/MacTidy/Disabled LaunchAgents")
     }
 
+    /// Where a disabled plist is parked, per domain. System-domain plists are
+    /// parked in subfolders so Restore knows where to put them back.
+    static func disabledFolder(for domain: LaunchItem.Domain) -> URL {
+        switch domain {
+        case .userAgent: disabledFolder
+        case .systemAgent: disabledFolder.appending(path: "SystemAgents")
+        case .systemDaemon: disabledFolder.appending(path: "SystemDaemons")
+        }
+    }
+
     public static func audit() -> [LaunchItem] {
-        let home = FileManager.default.homeDirectoryForCurrentUser
         let sources: [(URL, LaunchItem.Domain)] = [
-            (home.appending(path: "Library/LaunchAgents"), .userAgent),
-            (URL(fileURLWithPath: "/Library/LaunchAgents"), .systemAgent),
-            (URL(fileURLWithPath: "/Library/LaunchDaemons"), .systemDaemon),
+            (LaunchItem.Domain.userAgent.sourceDirectory, .userAgent),
+            (LaunchItem.Domain.systemAgent.sourceDirectory, .systemAgent),
+            (LaunchItem.Domain.systemDaemon.sourceDirectory, .systemDaemon),
         ]
         let loadedLabels = currentlyLoadedLabels()
 
@@ -49,14 +83,20 @@ public enum LaunchItemsAuditor {
         return items.sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
     }
 
-    /// Plists previously disabled by MacTidy, available for restore.
+    /// Plists previously disabled by MacTidy, available for restore. Each
+    /// parked item is tagged with its original domain via the subfolder it
+    /// lives in.
     public static func disabledItems() -> [LaunchItem] {
-        let plists = (try? FileManager.default.contentsOfDirectory(
-            at: disabledFolder, includingPropertiesForKeys: nil)) ?? []
-        return plists
-            .filter { $0.pathExtension == "plist" }
-            .map { read($0, domain: .userAgent, loadedLabels: []) }
-            .sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
+        var items: [LaunchItem] = []
+        for domain in LaunchItem.Domain.allCases {
+            let folder = disabledFolder(for: domain)
+            let plists = (try? FileManager.default.contentsOfDirectory(
+                at: folder, includingPropertiesForKeys: nil)) ?? []
+            for url in plists where url.pathExtension == "plist" {
+                items.append(read(url, domain: domain, loadedLabels: []))
+            }
+        }
+        return items.sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
     }
 
     private static func read(_ url: URL, domain: LaunchItem.Domain,
@@ -93,48 +133,100 @@ public enum LaunchItemsAuditor {
     public enum AuditError: Error, LocalizedError {
         case notToggleable
         case moveFailed(String)
+        case adminPromptCancelled
+        case adminCommandFailed(String)
 
         public var errorDescription: String? {
             switch self {
             case .notToggleable:
-                "Only user launch agents can be disabled. System items need admin rights (out of scope)."
+                "This launch item can't be toggled."
             case .moveFailed(let reason):
                 "Could not move the plist: \(reason)"
+            case .adminPromptCancelled:
+                "Administrator permission was required and you cancelled the prompt."
+            case .adminCommandFailed(let reason):
+                "The privileged launchctl command failed: \(reason)"
             }
         }
     }
 
-    /// Reversibly disables a user agent: bootout from launchd, then park the
-    /// plist in the app-managed Disabled folder so Restore can undo it.
+    /// Reversibly disables a launch item: bootout from launchd, then park the
+    /// plist in the app-managed Disabled folder so Restore can undo it. System
+    /// agents/daemons run their bootout + move via an `osascript` admin prompt.
     public static func disable(_ item: LaunchItem) throws {
-        guard item.domain.isToggleable else { throw AuditError.notToggleable }
-        let uid = getuid()
-        // Bootout can fail if the job simply isn't loaded; that's fine —
-        // moving the plist is what prevents it from loading next login.
-        _ = Shell.run("/bin/launchctl", ["bootout", "gui/\(uid)/\(item.label)"])
-
         let fm = FileManager.default
-        try fm.createDirectory(at: disabledFolder, withIntermediateDirectories: true)
-        let destination = disabledFolder.appending(path: item.url.lastPathComponent)
-        do {
-            if fm.fileExists(atPath: destination.path) { try fm.removeItem(at: destination) }
-            try fm.moveItem(at: item.url, to: destination)
-        } catch {
-            throw AuditError.moveFailed(error.localizedDescription)
+        let destination = disabledFolder(for: item.domain)
+            .appending(path: item.url.lastPathComponent)
+
+        if item.domain.requiresAdmin {
+            // One privileged shell that boots out, ensures the parked folder,
+            // and moves the plist — so the user sees a single auth prompt.
+            let bootout = "launchctl bootout \(item.domain.domainTarget(label: item.label)) 2>/dev/null || true"
+            let mkdir = "mkdir -p \(quote(destination.deletingLastPathComponent().path))"
+            let move = "mv -f \(quote(item.url.path)) \(quote(destination.path))"
+            try runPrivileged(commands: [bootout, mkdir, move])
+        } else {
+            let uid = getuid()
+            // Bootout can fail if the job simply isn't loaded; that's fine —
+            // moving the plist is what prevents it from loading next login.
+            _ = Shell.run("/bin/launchctl", ["bootout", "gui/\(uid)/\(item.label)"])
+            try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            do {
+                if fm.fileExists(atPath: destination.path) { try fm.removeItem(at: destination) }
+                try fm.moveItem(at: item.url, to: destination)
+            } catch {
+                throw AuditError.moveFailed(error.localizedDescription)
+            }
         }
     }
 
-    /// Moves a parked plist back into ~/Library/LaunchAgents and bootstraps it.
+    /// Moves a parked plist back to its original domain directory and
+    /// bootstraps it. System-domain restores run via an `osascript` admin
+    /// prompt.
     public static func restore(_ item: LaunchItem) throws {
         let fm = FileManager.default
-        let agents = fm.homeDirectoryForCurrentUser.appending(path: "Library/LaunchAgents")
-        try fm.createDirectory(at: agents, withIntermediateDirectories: true)
-        let destination = agents.appending(path: item.url.lastPathComponent)
-        do {
-            try fm.moveItem(at: item.url, to: destination)
-        } catch {
-            throw AuditError.moveFailed(error.localizedDescription)
+        let destination = item.domain.sourceDirectory
+            .appending(path: item.url.lastPathComponent)
+
+        if item.domain.requiresAdmin {
+            let mkdir = "mkdir -p \(quote(destination.deletingLastPathComponent().path))"
+            let move = "mv -f \(quote(item.url.path)) \(quote(destination.path))"
+            let bootstrap = "launchctl bootstrap \(item.domain.domainTarget(label: item.label)) \(quote(destination.path)) 2>/dev/null || true"
+            try runPrivileged(commands: [mkdir, move, bootstrap])
+        } else {
+            try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            do {
+                try fm.moveItem(at: item.url, to: destination)
+            } catch {
+                throw AuditError.moveFailed(error.localizedDescription)
+            }
+            _ = Shell.run("/bin/launchctl", ["bootstrap", "gui/\(getuid())", destination.path])
         }
-        _ = Shell.run("/bin/launchctl", ["bootstrap", "gui/\(getuid())", destination.path])
+    }
+
+    /// Runs shell commands with administrator privileges via `osascript`,
+    /// which surfaces macOS's standard auth dialog. Commands are joined into
+    /// one `do shell script` so the user sees a single prompt.
+    static func runPrivileged(commands: [String]) throws {
+        let script = commands.joined(separator: " ; ")
+        let escaped = script.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let appleScript = "do shell script \"\(escaped)\" with administrator privileges"
+        let out = Shell.run("/usr/bin/osascript", ["-e", appleScript])
+        guard let out else { throw AuditError.adminCommandFailed("osascript unavailable") }
+        // osascript exits 1 with "User canceled" when the auth dialog is
+        // dismissed — distinguish that from a real command failure.
+        if !out.succeeded {
+            if out.stderr.contains("User canceled") || out.stderr.contains("-128") {
+                throw AuditError.adminPromptCancelled
+            }
+            throw AuditError.adminCommandFailed(out.stderr.isEmpty ? out.stdout : out.stderr)
+        }
+    }
+
+    /// Shell-quotes a path so spaces / special chars in plist names survive the
+    /// round-trip through `do shell script`.
+    static func quote(_ path: String) -> String {
+        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }

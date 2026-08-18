@@ -34,7 +34,8 @@ struct UninstallerView: View {
         }
         .sheet(item: $sheetPlan) { plan in
             DeletionConfirmationSheet(title: "Uninstall \(selectedApp?.name ?? "app")?",
-                                      plan: plan) { outcome in
+                                      plan: plan,
+                                      kind: .uninstall) { outcome in
                 if !outcome.dryRun {
                     selectedAppID = nil
                     leftovers = []
@@ -57,10 +58,7 @@ struct UninstallerView: View {
                     HStack {
                         Text(app.name).lineLimit(1)
                         if app.isApple {
-                            Text("Apple")
-                                .font(.caption2)
-                                .padding(.horizontal, 4)
-                                .background(.quaternary, in: Capsule())
+                            Badge(text: "Apple")
                         }
                         Spacer()
                         Text(app.sizeBytes.formattedBytes)
