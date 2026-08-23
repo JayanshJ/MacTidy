@@ -45,6 +45,22 @@ struct OpenAICompatibleAdvisor: CleanAdvisor {
         return try parseExplanation(from: resp)
     }
 
+    func insights(for snapshot: SystemSnapshot, config: AIConfig) async throws -> [Insight] {
+        let payload = try InsightPrompts.userPayload(snapshot: snapshot, sendFilePaths: config.sendFilePaths)
+        let body: [String: Any] = [
+            "model": model,
+            "messages": [
+                ["role": "system", "content": InsightPrompts.system],
+                ["role": "user", "content": payload],
+            ],
+            "tools": [InsightPrompts.tool],
+            "tool_choice": ["type": "function", "function": ["name": "propose_insights"]],
+            "temperature": 0.3,
+        ]
+        let resp = try await HTTPClient.post(url: endpoint, headers: authHeaders(), body: body)
+        return try parseInsights(from: resp, snapshot: snapshot)
+    }
+
     func testConnection(config: AIConfig) async -> String {
         let body: [String: Any] = [
             "model": model,
@@ -148,6 +164,24 @@ struct OpenAICompatibleAdvisor: CleanAdvisor {
             return nil
         }()
         return ItemExplanation(summary: content, verdict: verdict)
+    }
+
+    private func parseInsights(from resp: HTTPClient.Response, snapshot: SystemSnapshot) throws -> [Insight] {
+        guard let json = resp.json as? [String: Any],
+              let choices = json["choices"] as? [[String: Any]],
+              let choice = choices.first,
+              let message = choice["message"] as? [String: Any] else {
+            throw HTTPClient.HTTPError.decoding("missing choices/message")
+        }
+        if let toolCalls = message["tool_calls"] as? [[String: Any]],
+           let call = toolCalls.first,
+           let function = call["function"] as? [String: Any],
+           let argsString = function["arguments"] as? String,
+           let argsData = argsString.data(using: .utf8),
+           let args = try? JSONSerialization.jsonObject(with: argsData) as? [String: Any] {
+            return InsightResolver.resolve(args, snapshot: snapshot)
+        }
+        return []
     }
 
     private func extractContent(from resp: HTTPClient.Response) -> String? {

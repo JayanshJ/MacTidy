@@ -370,6 +370,27 @@ final class AppState {
         }
     }
 
+    /// Builds a system snapshot and asks the advisor for proactive insights.
+    /// Falls back to deterministic, locally-generated insights when no provider
+    /// is configured or the call fails — so the Insights panel is useful even
+    /// without AI. Never throws.
+    func generateInsights() async -> [Insight] {
+        let processes = ProcessScanner.scan()
+        let memory = ProcessScanner.memorySummary()
+        let snapshot = SystemSnapshot(
+            categories: categoryResults, memory: memory, processes: processes
+        )
+        if let advisor = advisor {
+            do {
+                let result = try await advisor.insights(for: snapshot, config: aiConfig)
+                if !result.isEmpty { return result }
+            } catch {
+                // Fall through to deterministic insights on failure.
+            }
+        }
+        return DeterministicInsights.from(snapshot)
+    }
+
     /// Gateway for clone-based dedup — same policy and dry-run rules as
     /// deletion, but content-preserving (copies become APFS clones).
     @discardableResult

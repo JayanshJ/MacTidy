@@ -51,6 +51,25 @@ struct AnthropicAdvisor: CleanAdvisor {
         return try parseExplanation(from: resp)
     }
 
+    func insights(for snapshot: SystemSnapshot, config: AIConfig) async throws -> [Insight] {
+        let payload = try InsightPrompts.userPayload(snapshot: snapshot, sendFilePaths: config.sendFilePaths)
+        let body: [String: Any] = [
+            "model": config.model.isEmpty ? AIProvider.anthropic.defaultModel : config.model,
+            "max_tokens": 1024,
+            "system": InsightPrompts.system,
+            "messages": [["role": "user", "content": payload]],
+            "tools": [InsightPrompts.anthropicTool],
+            "tool_choice": ["type": "tool", "name": "propose_insights"],
+            "temperature": 0.3,
+        ]
+        let headers: [String: String] = [
+            "x-api-key": apiKey,
+            "anthropic-version": "2023-06-01",
+        ]
+        let resp = try await HTTPClient.post(url: anthropicEndpoint, headers: headers, body: body)
+        return try parseInsights(from: resp, snapshot: snapshot)
+    }
+
     func testConnection(config: AIConfig) async -> String {
         let body: [String: Any] = [
             "model": config.model.isEmpty ? AIProvider.anthropic.defaultModel : config.model,
@@ -139,6 +158,21 @@ struct AnthropicAdvisor: CleanAdvisor {
             return nil
         }()
         return ItemExplanation(summary: text, verdict: verdict)
+    }
+
+    private func parseInsights(from resp: HTTPClient.Response, snapshot: SystemSnapshot) throws -> [Insight] {
+        guard let json = resp.json as? [String: Any],
+              let content = json["content"] as? [[String: Any]] else {
+            throw HTTPClient.HTTPError.decoding("missing content blocks")
+        }
+        for block in content {
+            if block["type"] as? String == "tool_use",
+               let name = block["name"] as? String, name == "propose_insights",
+               let input = block["input"] as? [String: Any] {
+                return InsightResolver.resolve(input, snapshot: snapshot)
+            }
+        }
+        return []
     }
 
     private func extractText(from resp: HTTPClient.Response) -> String? {

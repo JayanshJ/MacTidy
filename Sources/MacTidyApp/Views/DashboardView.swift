@@ -16,6 +16,7 @@ struct DashboardView: View {
     @State private var showNodeInspector = false
 
     enum DashboardTab: String, CaseIterable, Identifiable {
+        case insights = "Insights"
         case cleanup = "Cleanup"
         case byApp = "Storage by App"
         case uninstaller = "Uninstaller"
@@ -24,6 +25,7 @@ struct DashboardView: View {
         var id: String { rawValue }
         var icon: String {
             switch self {
+            case .insights: "sparkles"
             case .cleanup: "square.grid.2x2"
             case .byApp: "person.crop.square"
             case .uninstaller: "trash.slash"
@@ -99,6 +101,7 @@ struct DashboardView: View {
     @ViewBuilder
     private var content: some View {
         switch tab {
+        case .insights: InsightsTab()
         case .cleanup:
             if let cat = drilledCategory {
                 categoryDetail(cat)
@@ -328,7 +331,7 @@ struct DashboardView: View {
 
     private var sheetPlanTitle: String {
         switch tab {
-        case .cleanup:
+        case .insights, .cleanup:
             sheetPlanIsCleanAll ? "Clean all safe items?" : "Trash selected items?"
         case .byApp: "Trash selected items?"
         case .uninstaller: "Uninstall \(state.flowApps.first?.app.name ?? "app")?"

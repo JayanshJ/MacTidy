@@ -61,6 +61,15 @@ public protocol CleanAdvisor: Sendable {
         config: AIConfig
     ) async throws -> ItemExplanation
 
+    /// Generate proactive insights over the full system snapshot (disk +
+    /// memory + processes). Returns narrative reasoning + proposed actions,
+    /// sorted by priority. The model never executes — each action routes
+    /// through the existing confirmation flow.
+    func insights(
+        for snapshot: SystemSnapshot,
+        config: AIConfig
+    ) async throws -> [Insight]
+
     /// Light-weight connectivity check used by the Settings "Test connection"
     /// button. Returns a short human-readable status string.
     func testConnection(config: AIConfig) async -> String
