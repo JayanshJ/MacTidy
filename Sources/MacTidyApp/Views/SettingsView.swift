@@ -6,6 +6,12 @@ import CoreKit
 struct SettingsView: View {
     @Environment(AppState.self) private var state
     @State private var showRootPicker = false
+    @State private var apiKeyInput = ""
+    @State private var keyStatus: String?
+    @State private var keyStatusGood = false
+    @State private var isTestingConnection = false
+    @State private var connectionStatus: String?
+    @State private var connectionStatusGood = false
 
     var body: some View {
         Form {
@@ -71,6 +77,77 @@ struct SettingsView: View {
                     .help("Run a category scan when the app opens, if nothing is cached.")
             }
 
+            // MARK: - AI
+            Section {
+                @Bindable var state = state
+                Picker("Provider", selection: $state.aiConfig.provider) {
+                    ForEach(AIProvider.allCases) { p in
+                        Text(p.displayName).tag(p)
+                    }
+                }
+                if state.aiConfig.provider != .none {
+                    TextField("Model", text: $state.aiConfig.model, prompt: Text(state.aiConfig.provider.defaultModel))
+                        .autocorrectionDisabled()
+                }
+                if state.aiConfig.provider == .ollama {
+                    TextField("Ollama base URL", text: $state.aiConfig.ollamaBaseURL, prompt: Text(AIConfig.defaultOllamaURL))
+                        .autocorrectionDisabled()
+                }
+                if state.aiConfig.provider.requiresAPIKey {
+                    SecureField("API key", text: $apiKeyInput)
+                        .autocorrectionDisabled()
+                    if let keyStatus {
+                        Text(keyStatus)
+                            .font(.caption)
+                            .foregroundStyle(keyStatusGood ? Color.secondary : Color.orange)
+                    }
+                    Button("Save key to Keychain") { saveKey() }
+                        .disabled(apiKeyInput.isEmpty)
+                    Button("Remove stored key", role: .destructive) { removeKey() }
+                        .disabled(KeychainHelper.load(for: state.aiConfig.provider) == nil)
+                }
+            } header: {
+                Text("AI assistant")
+            } footer: {
+                Text("BYO key — stored in the macOS Keychain, never sent anywhere except the provider you choose. Ollama runs locally; cloud providers (OpenAI, Anthropic) need your own API key.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                @Bindable var state = state
+                Toggle("Send file paths to model", isOn: $state.aiConfig.sendFilePaths)
+                    .help("Off by default. When on, file names/paths are sent for richer per-file reasoning. Only a privacy concern for cloud providers — Ollama runs on your Mac.")
+                if state.aiConfig.sendFilePaths && state.aiConfig.provider != .ollama && state.aiConfig.provider != .none {
+                    Label("File paths will leave your Mac via \(state.aiConfig.provider.displayName).", systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+                if state.aiConfig.provider != .none {
+                    Button {
+                        Task { await testConnection() }
+                    } label: {
+                        if isTestingConnection {
+                            HStack { ProgressView().controlSize(.small); Text("Testing…") }
+                        } else {
+                            Label("Test connection", systemImage: "network")
+                        }
+                    }
+                    .disabled(isTestingConnection)
+                    if let connectionStatus {
+                        Text(connectionStatus)
+                            .font(.caption)
+                            .foregroundStyle(connectionStatusGood ? Color.secondary : Color.orange)
+                    }
+                }
+            } header: {
+                Text("Privacy & connection")
+            } footer: {
+                Text("By default MacTidy sends only category labels, item counts, byte sizes, and staleness to the model — never file paths.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section {
                 @Bindable var state = state
                 Picker("Keep log history for", selection: $state.logRetentionDays) {
@@ -105,5 +182,45 @@ struct SettingsView: View {
             ?? bundle.url(forResource: "AppIcon", withExtension: "png")
         guard let url else { return nil }
         return NSImage(contentsOf: url)
+    }
+
+    // MARK: - AI key + connection helpers
+
+    private func saveKey() {
+        let provider = state.aiConfig.provider
+        do {
+            try KeychainHelper.save(apiKeyInput, for: provider)
+            keyStatus = "Key saved to Keychain."
+            keyStatusGood = true
+            apiKeyInput = ""
+        } catch {
+            keyStatus = "Failed to save key: \(error.localizedDescription)"
+            keyStatusGood = false
+        }
+    }
+
+    private func removeKey() {
+        let provider = state.aiConfig.provider
+        do {
+            try KeychainHelper.delete(for: provider)
+            keyStatus = "Stored key removed."
+            keyStatusGood = true
+        } catch {
+            keyStatus = "Failed to remove key: \(error.localizedDescription)"
+            keyStatusGood = false
+        }
+    }
+
+    private func testConnection() async {
+        isTestingConnection = true
+        defer { isTestingConnection = false }
+        guard let advisor = state.advisor else {
+            connectionStatus = "No advisor configured."
+            connectionStatusGood = false
+            return
+        }
+        let result = await advisor.testConnection(config: state.aiConfig)
+        connectionStatus = result
+        connectionStatusGood = result.hasPrefix("Connected")
     }
 }

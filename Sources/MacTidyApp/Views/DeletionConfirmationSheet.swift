@@ -16,6 +16,9 @@ struct DeletionConfirmationSheet: View {
     /// group and run after the files are trashed. Empty for non-uninstall
     /// actions.
     var uninstallActions: [UninstallAction] = []
+    /// Optional one-line reasoning from the AI advisor (or the deterministic
+    /// fallback), shown above the plan to explain why these items were picked.
+    var reasoning: String? = nil
     var onCompleted: (DeletionOutcome) -> Void = { _ in }
 
     @State private var outcome: DeletionOutcome?
@@ -38,6 +41,16 @@ struct DeletionConfirmationSheet: View {
         @Bindable var state = state
 
         Text(title).font(.title2.bold())
+        if let reasoning, !reasoning.isEmpty {
+            HStack(alignment: .top, spacing: 6) {
+                Image(systemName: "sparkles")
+                    .foregroundStyle(Theme.accent)
+                Text(reasoning)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 2)
+        }
         Text("\(plan.candidates.count) item\(plan.candidates.count == 1 ? "" : "s") · \(plan.totalBytes.formattedBytes) will be moved to the Trash. Nothing is permanently deleted — restore from the Trash to undo.")
             .foregroundStyle(.secondary)
 
