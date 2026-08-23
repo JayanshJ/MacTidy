@@ -12,10 +12,7 @@ struct DashboardView: View {
     @State private var drilledCategory: CoreKit.Category?
     @State private var sheetPlan: DeletionPlan?
     @State private var sheetPlanIsCleanAll = false
-    @State private var sheetPlanReasoning: String?
     @State private var selection = Set<UUID>()
-    @State private var aiIntent = ""
-    @State private var aiThinking = false
     @State private var showNodeInspector = false
 
     enum DashboardTab: String, CaseIterable, Identifiable {
@@ -51,12 +48,10 @@ struct DashboardView: View {
             DeletionConfirmationSheet(
                 title: sheetPlanTitle,
                 plan: plan,
-                kind: sheetPlanKind,
-                reasoning: sheetPlanReasoning
+                kind: sheetPlanKind
             ) { outcome in
                 if !outcome.dryRun {
                     selection.removeAll()
-                    sheetPlanReasoning = nil
                     Task { await state.rescanCategories() }
                 }
             }
@@ -192,60 +187,6 @@ struct DashboardView: View {
                 .help("Trash every item in the safe categories (caches, build artifacts, old installers). Suggest-only categories like Downloads and large files are never included.")
             }
             passBanner
-            commandBar
-        }
-    }
-
-    /// The natural-language AI command bar. Type an intent ("free up 15 GB",
-    /// "clean Xcode stuff") and the configured advisor proposes a plan that
-    /// opens in the existing confirmation sheet. Falls back to the
-    /// deterministic ranking when no provider is configured or the call fails.
-    private var commandBar: some View {
-        HStack(spacing: Theme.Spacing.sm) {
-            Image(systemName: "sparkles")
-                .foregroundStyle(state.aiConfig.provider == .none
-                                 ? AnyShapeStyle(.tertiary)
-                                 : AnyShapeStyle(Theme.accent))
-            TextField("Ask MacTidy to clean…  e.g. \"free up 10 GB\" or \"clean Xcode caches\"",
-                      text: $aiIntent)
-                .textFieldStyle(.roundedBorder)
-                .onSubmit { runAI() }
-            if aiThinking {
-                ProgressView().controlSize(.small)
-            }
-            Button {
-                runAI()
-            } label: {
-                Label("Suggest", systemImage: "arrow.up.circle.fill")
-                    .labelStyle(.titleAndIcon)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
-            .disabled(aiIntent.trimmingCharacters(in: .whitespaces).isEmpty || aiThinking)
-            .help(state.aiConfig.provider == .none
-                  ? "No AI provider configured — will use the built-in ranking. Add one in Settings."
-                  : "Ask the configured AI model for a cleanup plan.")
-        }
-        .padding(.horizontal, Theme.Spacing.md)
-        .padding(.vertical, Theme.Spacing.xs)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Theme.accent.opacity(0.06))
-        )
-    }
-
-    private func runAI() {
-        let intent = aiIntent.trimmingCharacters(in: .whitespaces)
-        guard !intent.isEmpty else { return }
-        aiThinking = true
-        Task {
-            let result = await state.aiPlan(for: intent)
-            await MainActor.run {
-                aiThinking = false
-                sheetPlanIsCleanAll = false
-                sheetPlanReasoning = result.reasoning
-                sheetPlan = result.plan
-            }
         }
     }
 
