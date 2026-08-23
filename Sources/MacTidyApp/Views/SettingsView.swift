@@ -36,8 +36,8 @@ struct SettingsView: View {
 
             Section("Safety") {
                 @Bindable var state = state
-                Toggle("Dry run by default", isOn: $state.dryRun)
-                    .help("Preview deletions without touching anything. You can still override per action.")
+                Toggle("Preview before deleting", isOn: $state.dryRun)
+                    .help("Scan and review without trashing anything. You can still override per action.")
                 Text("Deletion always means Move to Trash. A hard denylist protects /System, your documents, photos, and media no matter what a scan proposes.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -75,6 +75,33 @@ struct SettingsView: View {
                 @Bindable var state = state
                 Toggle("Scan automatically on launch", isOn: $state.autoScanOnLaunch)
                     .help("Run a category scan when the app opens, if nothing is cached.")
+            }
+
+            // MARK: - Menu bar & alerts
+            Section {
+                @Bindable var monitor = state.monitor
+                Toggle("Notify me when space piles up", isOn: $monitor.notificationsEnabled)
+                    .help("A quick background check runs every 6 hours and alerts you only when reclaimable space crosses your threshold AND has grown since the last alert.")
+                if monitor.notificationsEnabled {
+                    Picker("Alert me above", selection: $monitor.thresholdBytes) {
+                        Text("500 MB").tag(Int64(536_870_912))
+                        Text("1 GB").tag(Int64(1_073_741_824))
+                        Text("2 GB").tag(Int64(2_147_483_648))
+                        Text("5 GB").tag(Int64(5_368_709_120))
+                    }
+                    .pickerStyle(.menu)
+                }
+                if let lastChecked = state.monitor.lastChecked {
+                    Text("Last quick check: \(lastChecked.formatted(date: .abbreviated, time: .shortened)) — \(state.monitor.reclaimableBytes.formattedBytes) reclaimable.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Menu bar & alerts")
+            } footer: {
+                Text("MacTidy keeps a menu bar icon with a live quick check. The quick check covers fast categories (caches, DerivedData, old installers) — open the app for the full scan.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             // MARK: - AI

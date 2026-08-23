@@ -40,4 +40,25 @@ public enum Shell {
         }
         return nil
     }
+
+    /// Unwraps osascript's wrapper error so the UI shows the real message.
+    /// `do shell script` failures surface as cryptic
+    /// `"1:92: execution error: <actual message> (-600)"` — strip the offset
+    /// prefix and trailing AppleScript error code, pass anything else through.
+    public static func humanReadableAppleScriptError(_ raw: String) -> String {
+        var message = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let range = message.range(
+            of: #"^(\d+:\d+:\s*)?execution error:\s*"#,
+            options: .regularExpression
+        ) {
+            message.removeSubrange(range)
+        }
+        if let range = message.range(
+            of: #"\s*\(-?\d+\)\s*$"#,
+            options: .regularExpression
+        ) {
+            message.removeSubrange(range)
+        }
+        return message.isEmpty ? "Unknown error" : message
+    }
 }

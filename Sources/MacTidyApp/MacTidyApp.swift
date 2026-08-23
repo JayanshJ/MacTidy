@@ -1,5 +1,6 @@
 import SwiftUI
 import CoreKit
+import UserNotifications
 
 @main
 struct MacTidyApp: App {
@@ -7,14 +8,23 @@ struct MacTidyApp: App {
     @State private var state = AppState()
 
     var body: some Scene {
-        WindowGroup("MacTidy") {
+        WindowGroup("MacTidy", id: "main") {
             RootView()
                 .environment(state)
                 .tint(Theme.accent)
                 .frame(minWidth: 940, minHeight: 600)
-                .onAppear { delegate.sizeMainWindow() }
+                .onAppear {
+                    delegate.sizeMainWindow()
+                    state.monitor.start()
+                }
         }
         .windowToolbarStyle(.unified(showsTitle: false))
+        // The resident menu bar presence: quick-check summary + open/scan.
+        MenuBarExtra("MacTidy", systemImage: "paintbrush") {
+            MenuBarPanel()
+                .environment(state)
+        }
+        .menuBarExtraStyle(.window)
         .commands {
             // Replace the default "New Window" command so the app stays
             // single-window — a cleaner utility-app presence.
@@ -27,17 +37,41 @@ struct MacTidyApp: App {
 }
 
 /// Run as a bare SwiftPM executable we still want a normal app presence:
-/// dock icon, key window, quit on close. Also sizes the main window to a
-/// sensible default and surfaces an About panel.
+/// dock icon, key window. Closing the window keeps the app resident in the
+/// menu bar (the SpaceMonitor keeps watching); reopening happens via the
+/// menu bar panel or a Dock click. Also sizes the main window to a sensible
+/// default and surfaces an About panel.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        UNUserNotificationCenter.current().delegate = notificationDelegate
         sizeMainWindow()
     }
 
+    /// Stay alive with the window closed — the menu bar icon and the space
+    /// monitor keep working. Quit is Cmd-Q or the panel's standard menus.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        true
+        false
+    }
+
+    /// Dock-click reopen: bring the main window back.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { showMainWindow() }
+        return true
+    }
+
+    private let notificationDelegate = NotificationDelegate()
+
+    /// Brings the main window to front. Closed SwiftUI windows stay alive
+    /// (hidden) in `NSApp.windows`, so a lookup by title + makeKeyAndOrderFront
+    /// reshows them; otherwise activating the app is all we can do.
+    func showMainWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+        if let window = NSApp.windows.first(where: { $0.title == "MacTidy" }) {
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            window.makeKeyAndOrderFront(nil)
+        }
     }
 
     /// Sizes the first (main) window to a comfortable default, centered on
@@ -100,5 +134,25 @@ private struct AboutPanelView: View {
                 .foregroundStyle(.tertiary)
         }
         .padding(20)
+    }
+}
+
+/// Shows pile-up alerts as banners even when MacTidy is frontmost, and opens
+/// the main window when one is clicked.
+final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification
+    ) async -> UNNotificationPresentationOptions {
+        [.banner, .sound]
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse
+    ) async {
+        await MainActor.run {
+            (NSApp.delegate as? AppDelegate)?.showMainWindow()
+        }
     }
 }

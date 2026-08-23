@@ -7,6 +7,11 @@ import CoreKit
 final class AppState {
     var fdaGranted = FullDiskAccess.isGranted
 
+    /// Background space watcher: quick checks on a fixed cadence + pile-up
+    /// notifications. Owned here so Settings can bind its toggles and the
+    /// menu bar panel can read its summary.
+    let monitor = SpaceMonitor()
+
     /// Dry-run is the app-wide default; every confirmation sheet shows the
     /// toggle. Persisted so it survives relaunches.
     var dryRun: Bool {
@@ -415,6 +420,22 @@ final class AppState {
         trashLog.remove(record.id)
         recentTrashed = trashLog.load()
         return destination
+    }
+
+    // MARK: - Memory maintenance
+
+    /// The most recent disk-cache purge outcome, surfaced inline on the
+    /// Memory card. Nil until the user runs one this session.
+    var lastPurgeResult: MemoryMaintenance.PurgeResult?
+
+    /// Runs `purge` (disk cache) via an admin prompt — the only memory action
+    /// beyond quitting idle apps. Non-throwing; result lands in
+    /// `lastPurgeResult` for the UI.
+    @discardableResult
+    func purgeDiskCache() -> MemoryMaintenance.PurgeResult {
+        let result = MemoryMaintenance.purgeDiskCache()
+        lastPurgeResult = result
+        return result
     }
 
     /// Dismisses a record from the Recently Trashed list without restoring

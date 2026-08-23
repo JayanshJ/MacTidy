@@ -213,7 +213,7 @@ struct DashboardView: View {
         HStack(spacing: Theme.Spacing.xs) {
             Image(systemName: state.flowPass == .dry ? "eye" : "checkmark.shield")
             Text(state.flowPass == .dry
-                 ? "Dry preview — nothing is trashed until you turn Dry Run off"
+                 ? "Preview mode — nothing is trashed until you run for real"
                  : "Real pass — items move to the Trash (undoable)")
                 .font(.caption.bold())
             Spacer()

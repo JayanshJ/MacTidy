@@ -33,6 +33,7 @@ struct ScanItemRow: View {
     @Binding var selection: Set<UUID>
     @State private var explanation: ItemExplanation?
     @State private var isExplaining = false
+    @State private var showSafetyNote = false
 
     var body: some View {
         HStack(spacing: Theme.Spacing.sm) {
@@ -79,6 +80,9 @@ struct ScanItemRow: View {
         }
         .contextMenu {
             Button("Show in Finder") { showInFinder(item.url) }
+            if item.category != nil {
+                Button("Why is this suggested?") { showSafetyNote = true }
+            }
             Button {
                 Task { await explain() }
             } label: {
@@ -88,6 +92,14 @@ struct ScanItemRow: View {
                     Label("Explain with AI", systemImage: "sparkles")
                 }
             }
+        }
+        .alert(
+            item.url.lastPathComponent,
+            isPresented: $showSafetyNote
+        ) {
+            Button("Got it", role: .cancel) {}
+        } message: {
+            Text(item.category?.explanation ?? "")
         }
     }
 
