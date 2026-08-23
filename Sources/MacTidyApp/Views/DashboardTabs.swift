@@ -11,6 +11,7 @@ struct DashboardUninstaller: View {
     @State private var sheetPlan: DeletionPlan?
     @State private var leftovers: [ScanItem] = []
     @State private var isLoadingLeftovers = false
+    @State private var actions: [UninstallAction] = []
 
     private var selectedApp: (app: InstalledApp, leftovers: [ScanItem])? {
         state.flowApps.first { $0.app.id == selectedAppID }
@@ -27,10 +28,13 @@ struct DashboardUninstaller: View {
         .onChange(of: selectedAppID) { Task { await loadLeftovers() } }
         .sheet(item: $sheetPlan) { plan in
             DeletionConfirmationSheet(title: "Uninstall \(selectedApp?.app.name ?? "app")?",
-                                      plan: plan, kind: .uninstall) { outcome in
+                                      plan: plan,
+                                      kind: .uninstall,
+                                      uninstallActions: actions) { outcome in
                 if !outcome.dryRun {
                     selectedAppID = nil
                     leftovers = []
+                    actions = []
                     Task { await state.startFlow() }
                 }
             }
@@ -81,33 +85,74 @@ struct DashboardUninstaller: View {
                     ProgressView("Searching for leftover data…")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    List {
-                        Section("Leftover data (\(leftovers.count))") {
-                            if leftovers.isEmpty {
-                                Text("No orphaned data found for this app.").foregroundStyle(.tertiary)
-                            }
-                            ForEach(leftovers) { item in
-                                ScanItemRow(item: item, selection: $leftoverSelection)
+                    VStack(spacing: 0) {
+                        HStack {
+                            Text("Leftover data (\(leftovers.count))")
+                                .font(.headline)
+                            Spacer()
+                            if !leftovers.isEmpty {
+                                Button {
+                                    let allSelected = leftovers.allSatisfy { leftoverSelection.contains($0.id) }
+                                    leftoverSelection.removeAll()
+                                    if !allSelected {
+                                        for item in leftovers { leftoverSelection.insert(item.id) }
+                                    }
+                                } label: {
+                                    let allSelected = leftovers.allSatisfy { leftoverSelection.contains($0.id) }
+                                    Label(allSelected ? "Deselect All" : "Select All",
+                                          systemImage: allSelected ? "circle" : "checkmark.circle")
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
                             }
                         }
-                    }
-                    SelectionFooter(
-                        selectedCount: leftoverSelection.count + 1,
-                        selectedBytes: entry.app.sizeBytes + selectedLeftovers.reduce(0) { $0 + $1.sizeBytes },
-                        buttonTitle: "Uninstall…",
-                        disabled: false
-                    ) {
-                        var items = selectedLeftovers
-                        items.insert(ScanItem(url: entry.app.url, sizeBytes: entry.app.sizeBytes,
-                                              isDirectory: true), at: 0)
-                        sheetPlan = DeletionPlan(items: items)
+                        .padding(.horizontal, Theme.Spacing.lg).padding(.vertical, Theme.Spacing.sm)
+                        Divider()
+                        List {
+                            Section {
+                                if leftovers.isEmpty {
+                                    Text("No orphaned data found for this app.").foregroundStyle(.tertiary)
+                                }
+                                ForEach(leftovers) { item in
+                                    ScanItemRow(item: item, selection: $leftoverSelection)
+                                }
+                            } footer: {
+                                if !actions.isEmpty {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("Also runs on uninstall:")
+                                            .font(.caption.bold())
+                                        ForEach(actions) { action in
+                                            HStack(spacing: 6) {
+                                                Image(systemName: action.kind.icon)
+                                                    .foregroundStyle(Theme.accent)
+                                                Text(action.kind.rawValue)
+                                            }
+                                            .font(.caption)
+                                        }
+                                        Text("These run automatically with the uninstall — privacy permissions are revoked and the app is unregistered from LaunchServices.")
+                                            .font(.caption2).foregroundStyle(.tertiary)
+                                    }
+                                }
+                            }
+                        }
+                        SelectionFooter(
+                            selectedCount: leftoverSelection.count + 1,
+                            selectedBytes: entry.app.sizeBytes + selectedLeftovers.reduce(0) { $0 + $1.sizeBytes },
+                            buttonTitle: "Uninstall…",
+                            disabled: false
+                        ) {
+                            var items = selectedLeftovers
+                            items.insert(ScanItem(url: entry.app.url, sizeBytes: entry.app.sizeBytes,
+                                                  isDirectory: true), at: 0)
+                            sheetPlan = DeletionPlan(items: items)
+                        }
                     }
                 }
             }
         } else {
             ContentUnavailableView("Pick an app",
                                    systemImage: "trash.slash",
-                                   description: Text("Select an app to see its bundle plus leftover data in ~/Library."))
+                                   description: Text("Select an app to see its bundle plus leftover data in ~/Library. Privacy permissions are revoked and LaunchServices registration dropped on uninstall."))
         }
     }
 
@@ -116,10 +161,11 @@ struct DashboardUninstaller: View {
     }
 
     private func loadLeftovers() async {
-        guard let entry = selectedApp else { leftovers = []; return }
+        guard let entry = selectedApp else { leftovers = []; actions = []; return }
         isLoadingLeftovers = true
         leftovers = await AppUninstaller.leftovers(for: entry.app)
         leftoverSelection = Set(leftovers.map(\.id))
+        actions = AppUninstaller.actions(for: entry.app)
         isLoadingLeftovers = false
     }
 }

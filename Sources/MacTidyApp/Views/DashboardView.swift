@@ -216,6 +216,21 @@ struct DashboardView: View {
                 .buttonStyle(.plain)
                 Text(category.displayName).font(.title3.bold())
                 Spacer()
+                if !items.isEmpty {
+                    Button {
+                        let allSelected = items.allSatisfy { selection.contains($0.id) }
+                        selection.removeAll()
+                        if !allSelected {
+                            for item in items { selection.insert(item.id) }
+                        }
+                    } label: {
+                        let allSelected = items.allSatisfy { selection.contains($0.id) }
+                        Label(allSelected ? "Deselect All" : "Select All",
+                              systemImage: allSelected ? "circle" : "checkmark.circle")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
                 Text("\(items.count) item\(items.count == 1 ? "" : "s") · \(result?.totalBytes.formattedBytes ?? "0")")
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             }

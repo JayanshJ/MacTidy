@@ -101,39 +101,65 @@ struct DuplicatesView: View {
                     : "Add folders and run a scan. Files are compared by content (SHA-256), not by name.")
             )
         } else {
-            HStack {
-                Text("\(sets.count) duplicate set\(sets.count == 1 ? "" : "s") · \(sets.reduce(0) { $0 + $1.wastedBytes }.formattedBytes) wasted")
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button {
-                    showDedupSheet = true
-                } label: {
-                    Label("Deduplicate — Keep All Files…", systemImage: "arrow.triangle.merge")
+            VStack(spacing: 0) {
+                HStack {
+                    Text("\(sets.count) duplicate set\(sets.count == 1 ? "" : "s") · \(sets.reduce(0) { $0 + $1.wastedBytes }.formattedBytes) wasted")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    if !sets.isEmpty {
+                        Button {
+                            let allItems = sets.flatMap(\.files)
+                            let allSelected = allItems.allSatisfy { selection.contains($0.id) }
+                            selection.removeAll()
+                            if !allSelected {
+                                // Select one copy per set, never all (would
+                                // delete the only remaining copy of content).
+                                for set in sets {
+                                    if let first = set.files.first {
+                                        selection.insert(first.id)
+                                    }
+                                }
+                            }
+                        } label: {
+                            let allSelected = sets.flatMap(\.files).allSatisfy { selection.contains($0.id) }
+                            Label(allSelected ? "Deselect All" : "Select Extras",
+                                  systemImage: allSelected ? "circle" : "checkmark.circle")
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .help("Select one extra copy from each set (always keeps one copy).")
+                    }
+                    Button {
+                        showDedupSheet = true
+                    } label: {
+                        Label("Deduplicate — Keep All Files…", systemImage: "arrow.triangle.merge")
+                    }
+                    .disabled(dedupableSets.isEmpty)
+                    .help("Replace extra copies with APFS clones: every path keeps working, the space comes back.")
                 }
-                .disabled(dedupableSets.isEmpty)
-                .help("Replace extra copies with APFS clones: every path keeps working, the space comes back.")
-            }
-            .padding(.horizontal)
-            .padding(.vertical, 6)
-            List {
-                ForEach(sets) { set in
-                    setSection(set)
+                .padding(.horizontal)
+                .padding(.vertical, 6)
+                List {
+                    ForEach(sets) { set in
+                        setSection(set)
+                    }
                 }
-            }
-            SelectionFooter(
-                selectedCount: selection.count,
-                selectedBytes: selectedItems.reduce(0) { $0 + $1.sizeBytes },
-                buttonTitle: "Trash Selected Copies…",
-                disabled: fullySelectedSetExists
-            ) {
-                sheetPlan = DeletionPlan(items: selectedItems)
-            }
-            .overlay(alignment: .top) {
-                if fullySelectedSetExists {
-                    Text("At least one copy of every set must be kept — deselect one.")
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                        .padding(4)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                SelectionFooter(
+                    selectedCount: selection.count,
+                    selectedBytes: selectedItems.reduce(0) { $0 + $1.sizeBytes },
+                    buttonTitle: "Trash Selected Copies…",
+                    disabled: fullySelectedSetExists
+                ) {
+                    sheetPlan = DeletionPlan(items: selectedItems)
+                }
+                .overlay(alignment: .top) {
+                    if fullySelectedSetExists {
+                        Text("At least one copy of every set must be kept — deselect one.")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .padding(4)
+                    }
                 }
             }
         }

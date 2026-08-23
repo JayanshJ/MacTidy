@@ -12,6 +12,58 @@ public struct InstalledApp: Identifiable, Hashable, Sendable {
     public var isApple: Bool { bundleID?.hasPrefix("com.apple.") == true }
 }
 
+/// A non-file step an uninstall should perform that can't be expressed as a
+/// path to trash — e.g. revoking TCC privacy permissions or unregistering
+/// the app from LaunchServices. These run alongside the file deletions and
+/// report their own success/failure, so a failed TCC reset never aborts the
+/// uninstall or rolls back trashed files.
+public struct UninstallAction: Identifiable, Hashable, Sendable {
+    public enum Kind: String, Sendable {
+        case tccReset = "Privacy permissions"
+        case lsregister = "LaunchServices registration"
+
+        public var icon: String {
+            switch self {
+            case .tccReset: "lock.shield"
+            case .lsregister: "doc.text.magnifyingglass"
+            }
+        }
+
+        /// What the action does, shown in the confirmation preview.
+        public var explanation: String {
+            switch self {
+            case .tccReset:
+                "Reset this app's TCC privacy grants (Full Disk Access, Camera, Microphone, etc.) via tccutil."
+            case .lsregister:
+                "Unregister the app's file types / UTIs / Spotlight & QuickLook handlers from LaunchServices."
+            }
+        }
+    }
+
+    public let id = UUID()
+    public let kind: Kind
+    /// Human-readable target, e.g. the bundle id or app path.
+    public let target: String
+
+    public init(kind: Kind, target: String) {
+        self.kind = kind
+        self.target = target
+    }
+}
+
+/// Result of running the non-file uninstall actions for one app.
+public struct UninstallActionOutcome: Sendable {
+    public struct StepResult: Identifiable, Sendable {
+        public let id = UUID()
+        public let action: UninstallAction
+        public let succeeded: Bool
+        public let message: String
+    }
+    public let results: [StepResult]
+    public var succeededCount: Int { results.filter(\.succeeded).count }
+    public var failedCount: Int { results.count - succeededCount }
+}
+
 /// Enumerates installed apps and finds the orphaned data an uninstall
 /// should sweep up. Read-only; deletion goes through DeletionPlan.
 public enum AppUninstaller {
@@ -62,8 +114,15 @@ public enum AppUninstaller {
     /// app name (exact directory name only — substring matching on names is
     /// how cleaners eat unrelated data).
     public static func leftovers(for app: InstalledApp) async -> [ScanItem] {
+        await leftovers(for: app, home: FileManager.default.homeDirectoryForCurrentUser)
+    }
+
+    /// Internal entry point that takes an explicit home directory so the
+    /// orphan-detection logic is unit-testable against a throwaway Library
+    /// tree without touching the real user home.
+    static func leftovers(for app: InstalledApp, home: URL) async -> [ScanItem] {
         let fm = FileManager.default
-        let library = fm.homeDirectoryForCurrentUser.appending(path: "Library")
+        let library = home.appending(path: "Library")
         var candidates: [URL] = []
 
         if let id = app.bundleID, !id.isEmpty {
@@ -78,10 +137,37 @@ public enum AppUninstaller {
                 library.appending(path: "HTTPStorages/\(id)"),
                 library.appending(path: "WebKit/\(id)"),
             ]
-            // Group containers are "<team-id>.<id>" or similar — match contains.
+            // ByHost preferences: ~/Library/Preferences/ByHost/<id>.<uuid>.plist.
+            // The host UUID suffix means we can't predict the exact name, so list
+            // the directory and match entries whose name *starts with* the bundle
+            // id followed by a "." — a prefix match, not a loose substring match,
+            // so an unrelated bundle id that merely shares a prefix word can't be
+            // swept up.
+            let byHost = library.appending(path: "Preferences/ByHost")
+            for entry in (try? fm.contentsOfDirectory(at: byHost, includingPropertiesForKeys: nil)) ?? []
+            where entry.lastPathComponent.hasPrefix("\(id).") {
+                candidates.append(entry)
+            }
+            // CrashReporter / DiagnosticReports: <id>-*.crash and <id>-*.ips.
+            let diag = library.appending(path: "Logs/DiagnosticReports")
+            for entry in (try? fm.contentsOfDirectory(at: diag, includingPropertiesForKeys: nil)) ?? []
+            where {
+                let name = entry.lastPathComponent
+                return name.hasPrefix("\(id)-") || name.hasPrefix("\(id).")
+            }() {
+                candidates.append(entry)
+            }
+            // Group containers are "<team-id>.<id>" (or occasionally "<id>").
+            // Match a directory whose name ends with ".<id>" or equals <id> —
+            // an anchored suffix/equal match rather than a loose contains, so a
+            // bundle id can't match an unrelated group container that merely
+            // embeds the id as a substring.
             let groups = library.appending(path: "Group Containers")
             for entry in (try? fm.contentsOfDirectory(at: groups, includingPropertiesForKeys: nil)) ?? []
-            where entry.lastPathComponent.localizedCaseInsensitiveContains(id) {
+            where {
+                let name = entry.lastPathComponent
+                return name == id || name.hasSuffix(".\(id)")
+            }() {
                 candidates.append(entry)
             }
         }
@@ -112,5 +198,92 @@ public enum AppUninstaller {
             for await item in group { items.append(item) }
             return items.sorted { $0.sizeBytes > $1.sizeBytes }
         }
+    }
+
+    /// The non-file steps an uninstall of this app should perform: TCC
+    /// privacy-permission reset and LaunchServices unregistration. These are
+    /// safe to run only for non-Apple apps with a known bundle id.
+    public static func actions(for app: InstalledApp) -> [UninstallAction] {
+        guard !app.isApple, let id = app.bundleID, !id.isEmpty else { return [] }
+        return [
+            UninstallAction(kind: .tccReset, target: id),
+            UninstallAction(kind: .lsregister, target: app.url.path),
+        ]
+    }
+
+    /// Runs the non-file uninstall actions (TCC reset, lsregister). Each runs
+    /// independently and reports its own result, so one failure never aborts
+    /// the others or rolls back trashed files. When `dryRun` is true, nothing
+    /// is actually run — the actions are reported as dry-run successes so the
+    /// preview shows what *would* happen.
+    @discardableResult
+    public static func performActions(
+        _ actions: [UninstallAction], dryRun: Bool
+    ) -> UninstallActionOutcome {
+        var results: [UninstallActionOutcome.StepResult] = []
+        for action in actions {
+            if dryRun {
+                NSLog("MacTidy dry-run: would perform %@ for %@", action.kind.rawValue, action.target)
+                results.append(.init(action: action, succeeded: true,
+                                     message: "Would run in a real pass."))
+                continue
+            }
+            switch action.kind {
+            case .tccReset:
+                // `tccutil reset All <bundleid>` revokes every TCC grant for
+                // the app. Works for the current user's own apps without admin
+                // rights. Degrades gracefully if tccutil is unavailable.
+                let out = Shell.run("/usr/bin/tccutil", ["reset", "All", action.target])
+                if let out {
+                    results.append(.init(
+                        action: action, succeeded: out.succeeded,
+                        message: out.succeeded ? "Privacy permissions reset." : out.stderr
+                    ))
+                } else {
+                    results.append(.init(action: action, succeeded: false,
+                                         message: "tccutil not found."))
+                }
+            case .lsregister:
+                // Unregister the bundle path so its file-type/UTI/Spotlight/
+                // QuickLook handler registrations are dropped. lsregister is
+                // found via Shell.find (it's in a non-standard location).
+                let path = action.target
+                if let lsregister = Shell.find("lsregister")
+                    ?? FileManager.default.lsregisterPath() {
+                    let out = Shell.run(lsregister, ["-u", path])
+                    if let out {
+                        results.append(.init(
+                            action: action, succeeded: out.succeeded,
+                            message: out.succeeded
+                                ? "Unregistered from LaunchServices."
+                                : (out.stderr.isEmpty ? out.stdout : out.stderr)
+                        ))
+                    } else {
+                        results.append(.init(action: action, succeeded: false,
+                                             message: "lsregister failed to launch."))
+                    }
+                } else {
+                    results.append(.init(action: action, succeeded: false,
+                                         message: "lsregister not found."))
+                }
+            }
+        }
+        return UninstallActionOutcome(results: results)
+    }
+}
+
+private extension FileManager {
+    /// Locates the LaunchServices `lsregister` binary inside CoreServices.
+    /// It's not on PATH and not in any standard bin dir, so `Shell.find`
+    /// can't reach it — resolve it from the framework bundle directly.
+    func lsregisterPath() -> String? {
+        // The FS framework moved to a versioned Frameworks path on modern macOS.
+        let candidates = [
+            "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister",
+            "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister",
+            "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Support/lsregister",
+        ]
+        for path in candidates where isExecutableFile(atPath: path) { return path }
+        return nil
     }
 }
