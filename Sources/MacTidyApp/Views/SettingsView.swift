@@ -9,6 +9,25 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            Section {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("MacTidy").font(.headline)
+                        Text("Version \(AppVersion.full)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if let icon = NSImage(named: "AppIcon") ?? bundledAppIcon {
+                        Image(nsImage: icon)
+                            .resizable()
+                            .interpolation(.high)
+                            .frame(width: 44, height: 44)
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                }
+            }
+
             Section("Safety") {
                 @Bindable var state = state
                 Toggle("Dry run by default", isOn: $state.dryRun)
@@ -78,5 +97,13 @@ struct SettingsView: View {
                 state.addExtraAllowedRoot(url)
             }
         }
+    }
+
+    private var bundledAppIcon: NSImage? {
+        let bundle = Bundle.main
+        let url = bundle.url(forResource: "AppIcon", withExtension: "icns")
+            ?? bundle.url(forResource: "AppIcon", withExtension: "png")
+        guard let url else { return nil }
+        return NSImage(contentsOf: url)
     }
 }
