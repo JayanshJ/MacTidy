@@ -16,6 +16,7 @@ struct DashboardView: View {
     @State private var selection = Set<UUID>()
     @State private var aiIntent = ""
     @State private var aiThinking = false
+    @State private var showNodeInspector = false
 
     enum DashboardTab: String, CaseIterable, Identifiable {
         case cleanup = "Cleanup"
@@ -59,6 +60,9 @@ struct DashboardView: View {
                     Task { await state.rescanCategories() }
                 }
             }
+        }
+        .sheet(isPresented: $showNodeInspector) {
+            NodePackagesInspector()
         }
     }
 
@@ -163,6 +167,14 @@ struct DashboardView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+                Button {
+                    showNodeInspector = true
+                } label: {
+                    Label("Node Packages", systemImage: "shippingbox")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Find orphaned and unused npm packages across your Node projects, and run npm prune safely.")
                 Button {
                     sheetPlanIsCleanAll = true
                     sheetPlan = DeletionPlan(items: allSafeItems)
