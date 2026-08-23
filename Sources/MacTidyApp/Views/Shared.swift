@@ -25,12 +25,14 @@ struct SizeBar: View {
         .frame(maxWidth: fillsWidth ? .infinity : 90)
     }
 }
-
 /// Standard row for a scanned item: checkbox, name, context, size,
 /// Show in Finder.
 struct ScanItemRow: View {
+    @Environment(AppState.self) private var state
     let item: ScanItem
     @Binding var selection: Set<UUID>
+    @State private var explanation: ItemExplanation?
+    @State private var isExplaining = false
 
     var body: some View {
         HStack(spacing: Theme.Spacing.sm) {
@@ -51,6 +53,17 @@ struct ScanItemRow: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
+                if let explanation {
+                    HStack(spacing: 4) {
+                        if let verdict = explanation.verdict {
+                            Image(systemName: verdict.icon)
+                                .foregroundStyle(verdictColor(verdict))
+                        }
+                        Text(explanation.summary)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
             Spacer()
             Text(item.sizeBytes.formattedBytes)
@@ -66,6 +79,30 @@ struct ScanItemRow: View {
         }
         .contextMenu {
             Button("Show in Finder") { showInFinder(item.url) }
+            Button {
+                Task { await explain() }
+            } label: {
+                if isExplaining {
+                    Text("Explaining…")
+                } else {
+                    Label("Explain with AI", systemImage: "sparkles")
+                }
+            }
+        }
+    }
+
+    private func explain() async {
+        isExplaining = true
+        let result = await state.explain(item: item)
+        explanation = result
+        isExplaining = false
+    }
+
+    private func verdictColor(_ v: ItemExplanation.Verdict) -> Color {
+        switch v {
+        case .safe: Theme.Status.good
+        case .review: .orange
+        case .keep: .red
         }
     }
 
