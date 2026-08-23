@@ -33,6 +33,17 @@ final class AppState {
         }
     }
 
+    /// AI advisor configuration (provider, model, base URL, privacy toggle).
+    /// Persisted in UserDefaults as JSON. The API key is NOT stored here — it
+    /// lives in the Keychain via `KeychainHelper`.
+    var aiConfig: AIConfig {
+        didSet { persistAIConfig() }
+    }
+    /// Whether the current pass's AI query is in flight (command bar spinner).
+    var isAIThinking = false
+    /// The most recent AI reasoning string, surfaced with the plan.
+    var lastAIReasoning: String?
+
     var categoryResults: [CategoryResult] = []
     var isScanningCategories = false
     var scanStatus: String = ""
@@ -101,6 +112,7 @@ final class AppState {
         self.extraAllowedRoots = Self.loadExtraAllowedRoots()
         self.autoScanOnLaunch = UserDefaults.standard.object(forKey: "MacTidy.autoScanOnLaunch") as? Bool ?? false
         self.logRetentionDays = UserDefaults.standard.object(forKey: "MacTidy.logRetentionDays") as? Int ?? 0
+        self.aiConfig = Self.loadAIConfig()
 
         // Restore persisted state so relaunch isn't a blank screen + full rescan.
         self.recentTrashed = trashLog.load()
@@ -316,6 +328,48 @@ final class AppState {
         return outcome
     }
 
+    /// Asks the configured AI advisor for a cleanup plan matching a
+    /// natural-language intent. Returns the advisor's reasoning + a
+    /// `DeletionPlan` built from real `ScanItem`s in the current scan. Falls
+    /// back to the deterministic `Recommendations` ranking when no provider is
+    /// configured, the key is missing, or the call fails/times out — so the
+    /// app works identically without AI. Never throws.
+    func aiPlan(for intent: String) async -> (plan: DeletionPlan, reasoning: String) {
+        // Deterministic fallback when AI is off or unavailable.
+        guard let advisor = advisor else {
+            let items = Recommendations.ranked(from: categoryResults, limit: 100).map(\.item)
+            return (DeletionPlan(items: items),
+                    "No AI provider configured — showing the ranked safe cleanup.")
+        }
+        isAIThinking = true
+        defer { isAIThinking = false }
+        do {
+            let advice = try await advisor.plan(
+                for: intent, categories: categoryResults, config: aiConfig
+            )
+            lastAIReasoning = advice.reasoning
+            return (DeletionPlan(items: advice.items), advice.reasoning)
+        } catch {
+            // Fall back to deterministic ranking on any failure/timeout.
+            let items = Recommendations.ranked(from: categoryResults, limit: 100).map(\.item)
+            let reason = "AI request failed (\(error.localizedDescription)) — showing the ranked safe cleanup."
+            return (DeletionPlan(items: items), reason)
+        }
+    }
+
+    /// Asks the advisor to explain a single item. Returns a short string on
+    /// failure so the UI always has something to show.
+    func explain(item: ScanItem) async -> ItemExplanation {
+        guard let advisor = advisor else {
+            return ItemExplanation(summary: "No AI provider configured.")
+        }
+        do {
+            return try await advisor.explain(item, config: aiConfig)
+        } catch {
+            return ItemExplanation(summary: "Couldn't get an explanation: \(error.localizedDescription)")
+        }
+    }
+
     /// Gateway for clone-based dedup — same policy and dry-run rules as
     /// deletion, but content-preserving (copies become APFS clones).
     @discardableResult
@@ -452,6 +506,27 @@ final class AppState {
         let paths = UserDefaults.standard.stringArray(forKey: extraRootsKey) ?? []
         return paths.map { URL(fileURLWithPath: $0) }
     }
+
+    // MARK: - AI config persistence
+
+    private static let aiConfigKey = "MacTidy.aiConfig"
+    private func persistAIConfig() {
+        if let data = try? JSONEncoder().encode(aiConfig) {
+            UserDefaults.standard.set(data, forKey: Self.aiConfigKey)
+        }
+    }
+    private static func loadAIConfig() -> AIConfig {
+        guard let data = UserDefaults.standard.data(forKey: aiConfigKey),
+              let config = try? JSONDecoder().decode(AIConfig.self, from: data) else {
+            return AIConfig()
+        }
+        return config
+    }
+
+    /// Resolves the current `aiConfig` to a concrete advisor, or nil when no
+    /// provider is configured / key missing — callers fall back to the
+    /// deterministic `Recommendations` ranking.
+    var advisor: CleanAdvisor? { CleanAdvisorFactory.make(config: aiConfig) }
 
     /// Applies the current retention window to both logs and refreshes the
     /// in-memory copies. Safe to call with `logRetentionDays == 0` (no-op).

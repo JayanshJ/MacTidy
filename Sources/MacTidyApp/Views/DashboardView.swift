@@ -109,19 +109,32 @@ struct DashboardView: View {
 
     /// Grid of category cards. Each shows the category name, total bytes, a
     /// proportion bar, item count, and a suggest-only badge where relevant.
-    /// Tapping drills into the category's items.
+    /// Tapping drills into the category's items. When there's nothing to
+    /// clean, a compact empty state replaces the header + grid so the tab
+    /// doesn't waste vertical space on disabled chrome.
     private var categoryGrid: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Theme.Spacing.md) {
-                header
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 240), spacing: Theme.Spacing.md)],
-                          spacing: Theme.Spacing.md) {
-                    ForEach(state.categoryResults) { result in
-                        categoryCard(result)
+        Group {
+            if state.categoryResults.allSatisfy({ $0.items.isEmpty }) {
+                ContentUnavailableView(
+                    "Nothing to clean",
+                    systemImage: "checkmark.seal",
+                    description: Text("MacTidy didn't find any reclaimable caches or build artifacts. Rescan after installing apps or building projects.")
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+                        header
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 240), spacing: Theme.Spacing.md)],
+                                  spacing: Theme.Spacing.md) {
+                            ForEach(state.categoryResults) { result in
+                                categoryCard(result)
+                            }
+                        }
                     }
+                    .padding(Theme.Spacing.xl)
                 }
             }
-            .padding(Theme.Spacing.xl)
         }
     }
 
