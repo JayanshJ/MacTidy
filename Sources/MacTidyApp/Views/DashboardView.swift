@@ -19,6 +19,7 @@ struct DashboardView: View {
 
     enum DashboardTab: String, CaseIterable, Identifiable {
         case cleanup = "Cleanup"
+        case byApp = "Storage by App"
         case uninstaller = "Uninstaller"
         case startup = "Startup"
         case duplicates = "Duplicates"
@@ -26,6 +27,7 @@ struct DashboardView: View {
         var icon: String {
             switch self {
             case .cleanup: "square.grid.2x2"
+            case .byApp: "person.crop.square"
             case .uninstaller: "trash.slash"
             case .startup: "power"
             case .duplicates: "doc.on.doc"
@@ -104,6 +106,7 @@ struct DashboardView: View {
             } else {
                 categoryGrid
             }
+        case .byApp: StorageByAppTab()
         case .uninstaller: DashboardUninstaller()
         case .startup: DashboardStartup()
         case .duplicates: DuplicatesView()
@@ -374,6 +377,7 @@ struct DashboardView: View {
         switch tab {
         case .cleanup:
             sheetPlanIsCleanAll ? "Clean all safe items?" : "Trash selected items?"
+        case .byApp: "Trash selected items?"
         case .uninstaller: "Uninstall \(state.flowApps.first?.app.name ?? "app")?"
         case .startup, .duplicates: "Trash selected items?"
         }
