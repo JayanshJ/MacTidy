@@ -11,6 +11,7 @@ struct DashboardView: View {
     @State private var tab: DashboardTab = .cleanup
     @State private var drilledCategory: CoreKit.Category?
     @State private var sheetPlan: DeletionPlan?
+    @State private var sheetPlanIsCleanAll = false
     @State private var selection = Set<UUID>()
 
     enum DashboardTab: String, CaseIterable, Identifiable {
@@ -124,7 +125,8 @@ struct DashboardView: View {
         }
     }
 
-    /// The dashboard header: total reclaimable + dry-pass banner.
+    /// The dashboard header: total reclaimable + dry-pass banner + the one-
+    /// click clean-all-safe action.
     private var header: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
             HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.md) {
@@ -138,9 +140,42 @@ struct DashboardView: View {
                 Button { Task { await state.rescanCategories() } } label: {
                     Label("Rescan", systemImage: "arrow.clockwise")
                 }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                Button {
+                    sheetPlanIsCleanAll = true
+                    sheetPlan = DeletionPlan(items: allSafeItems)
+                } label: {
+                    if allSafeItems.isEmpty {
+                        Label("Clean All Safe", systemImage: "trash.circle.fill")
+                    } else {
+                        Label("Clean All Safe · \(allSafeBytes.formattedBytes)",
+                              systemImage: "trash.circle.fill")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(allSafeItems.isEmpty)
+                .help("Trash every item in the safe categories (caches, build artifacts, old installers). Suggest-only categories like Downloads and large files are never included.")
             }
             passBanner
         }
+    }
+
+    /// Every item across the categories that are safe to bulk-trash — i.e.
+    /// `isPreselectable` categories. Suggest-only categories (Downloads,
+    /// large files, app support, device backups) are deliberately excluded
+    /// so one click never trashes something the user should review first.
+    /// The plan still flows through SafePathPolicy + Trasher, so per-item
+    /// safety is enforced on top of this.
+    private var allSafeItems: [ScanItem] {
+        state.categoryResults
+            .filter { $0.category.isPreselectable }
+            .flatMap(\.items)
+    }
+
+    private var allSafeBytes: Int64 {
+        allSafeItems.reduce(0) { $0 + $1.sizeBytes }
     }
 
     private var passBanner: some View {
@@ -255,6 +290,7 @@ struct DashboardView: View {
                 buttonTitle: "Trash Selected…",
                 disabled: false
             ) {
+                sheetPlanIsCleanAll = false
                 sheetPlan = DeletionPlan(items: selected)
             }
         }
@@ -264,7 +300,8 @@ struct DashboardView: View {
 
     private var sheetPlanTitle: String {
         switch tab {
-        case .cleanup: "Trash selected items?"
+        case .cleanup:
+            sheetPlanIsCleanAll ? "Clean all safe items?" : "Trash selected items?"
         case .uninstaller: "Uninstall \(state.flowApps.first?.app.name ?? "app")?"
         case .startup, .duplicates: "Trash selected items?"
         }
