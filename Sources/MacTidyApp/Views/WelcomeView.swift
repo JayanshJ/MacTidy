@@ -26,7 +26,7 @@ struct WelcomeView: View {
 
             // Feature highlights.
             HStack(spacing: Theme.Spacing.xl) {
-                feature(icon: "arrow.2.squarepath.circle",
+                feature(icon: "trash.circle",
                         title: "Move to Trash",
                         text: "Everything is reversible. Restore from Trash to undo.")
                 feature(icon: "shield.lefthalf.filled",
