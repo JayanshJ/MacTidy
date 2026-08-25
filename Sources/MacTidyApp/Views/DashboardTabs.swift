@@ -471,29 +471,12 @@ struct NodePackagesInspector: View {
                 Text("\(analysis.totalInstalledPackages) pkgs · \(analysis.nodeModulesBytes.formattedBytes)")
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             }
-            if analysis.orphaned.isEmpty && analysis.unused.isEmpty {
-                Text("Clean — no orphaned or unused packages detected.").font(.caption).foregroundStyle(.tertiary)
-            }
             if !analysis.orphaned.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Label("\(analysis.orphaned.count) orphaned packages — not in package.json", systemImage: "checkmark.seal")
                         .font(.caption.bold())
                     Text(analysis.orphaned.joined(separator: ", "))
                         .font(.caption.monospaced()).foregroundStyle(.secondary)
-                    HStack {
-                        Button {
-                            Task { await runPrune(in: analysis.projectDir) }
-                        } label: {
-                            Label("Run npm prune", systemImage: "hammer")
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        if let status = pruneStatus[analysis.projectDir.path] {
-                            Text(status).font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    Text("Safe — npm prune removes these; the project keeps working. Reversible via npm install.")
-                        .font(.caption2).foregroundStyle(.tertiary)
                 }
             }
             if !analysis.unused.isEmpty {
@@ -506,7 +489,23 @@ struct NodePackagesInspector: View {
                         .font(.caption2).foregroundStyle(.orange)
                 }
             }
+            // Always show both reclaim actions per project.
             HStack {
+                Button {
+                    Task { await runPrune(in: analysis.projectDir) }
+                } label: {
+                    Label("Run npm prune", systemImage: "hammer")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(analysis.orphaned.isEmpty)
+                .help(analysis.orphaned.isEmpty
+                      ? "No orphaned packages detected."
+                      : "Safe — removes orphaned packages; the project keeps working. Reversible via npm install.")
+                if let status = pruneStatus[analysis.projectDir.path] {
+                    Text(status).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
                 Button {
                     sheetPlan = DeletionPlan(items: [ScanItem(url: analysis.projectDir.appending(path: "node_modules"),
                                                                sizeBytes: analysis.nodeModulesBytes, isDirectory: true)])
@@ -515,6 +514,13 @@ struct NodePackagesInspector: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+            }
+            if analysis.orphaned.isEmpty && analysis.unused.isEmpty {
+                Text("Clean — no orphaned or unused packages detected. Trash the whole dir to reclaim all space, then `npm install` to restore.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            } else {
+                Text("Safe: npm prune keeps the tree working. Trash whole dir: reversible via Trash, `npm install` to restore.")
+                    .font(.caption2).foregroundStyle(.tertiary)
             }
         } header: {
             Text(analysis.projectDir.lastPathComponent).font(.headline)
