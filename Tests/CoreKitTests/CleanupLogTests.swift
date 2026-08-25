@@ -32,4 +32,13 @@ struct CleanupLogTests {
         }
         #expect(log.load().count == CleanupLog.maxEntries)
     }
+
+    @Test func dockerKindRoundTripsThroughCodable() throws {
+        let entry = CleanupEntry(kind: .docker, reclaimedBytes: 1_000_000, itemCount: 3)
+        let data = try JSONEncoder().encode(entry)
+        let decoded = try JSONDecoder().decode(CleanupEntry.self, from: data)
+        #expect(decoded.kind == .docker)
+        #expect(decoded.reclaimedBytes == 1_000_000)
+        #expect(decoded.itemCount == 3)
+    }
 }
