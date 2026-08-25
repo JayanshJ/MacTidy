@@ -13,7 +13,7 @@ nginx\tlatest\tsha256:ghi789\t50MB\t1 day ago
 """
 
     static let containersFixture = """
-sha256:c1\tmyapp-web-1\tmyapp_web:latest\tUp 2 hours
+sha256:c1\tmyapp-web-1\tpostgres:15\tUp 2 hours
 sha256:c2\tmyapp-db-1\tpostgres:15\tExited (0) 4 hours ago
 """
 

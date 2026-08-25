@@ -63,12 +63,12 @@ public struct DockerState: Sendable {
         let grouped = Dictionary(grouping: images.filter { !($0.composeProject?.isEmpty ?? true) },
                                  by: { $0.composeProject! })
         self.projects = grouped.map { name, imgs in
-            // A project is "running" (instantiated) if any container's image
-            // matches one of the project's images by repo:tag or image-id
-            // substring. The container itself need not be Up — an Exited
-            // container still indicates the project has been brought up.
+            // A project is "running" when a container in "Up" status references
+            // one of the project's images by repo:tag or image-id substring.
+            // Stopped/Exited containers do not count — a project with only
+            // stopped containers is not running.
             let running = containers.contains { c in
-                imgs.contains { img in
+                c.running && imgs.contains { img in
                     c.image == "\(img.repository):\(img.tag)" || c.image.contains(img.id)
                 }
             }
