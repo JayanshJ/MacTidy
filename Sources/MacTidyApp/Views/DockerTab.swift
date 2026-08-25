@@ -97,11 +97,21 @@ struct DashboardDocker: View {
                     }
                 }
             }
-            let stopped = ds.containers.filter { !$0.running }
-            if !stopped.isEmpty {
-                Section("Stopped containers (\(stopped.count))") {
-                    ForEach(stopped) { c in
-                        dockerContainerRow(c)
+            if !ds.containers.isEmpty {
+                let running = ds.containers.filter { $0.running }
+                let stopped = ds.containers.filter { !$0.running }
+                if !running.isEmpty {
+                    Section("Running containers (\(running.count))") {
+                        ForEach(running) { c in
+                            dockerContainerRow(c)
+                        }
+                    }
+                }
+                if !stopped.isEmpty {
+                    Section("Stopped containers (\(stopped.count))") {
+                        ForEach(stopped) { c in
+                            dockerContainerRow(c)
+                        }
                     }
                 }
             }
@@ -157,6 +167,8 @@ struct DashboardDocker: View {
                 Text("image \(c.image)").font(.caption.monospaced()).foregroundStyle(.secondary)
             }
             Spacer()
+            Badge(text: c.running ? "running" : "stopped",
+                  tint: c.running ? Theme.Status.good : Theme.Status.caution)
             Button {
                 pendingActions = [DockerContainerRemoveAction(container: c)]
                 showSheet = true
@@ -164,6 +176,7 @@ struct DashboardDocker: View {
                 Label("Remove", systemImage: "trash")
             }
             .buttonStyle(.bordered).controlSize(.small)
+            .help(c.running ? "Stops then removes the container (docker rm -f)." : "Removes the stopped container.")
         }
     }
 

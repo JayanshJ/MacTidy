@@ -49,13 +49,19 @@ public struct DockerComposeDownAction: ShellAction {
     }
 }
 
-/// Removes a stopped container by ID. `docker rm` refuses running containers
-/// (the UI only offers this for stopped ones). Reclaims ~0 disk.
+/// Removes a container by ID. For a running container, `docker rm -f` stops
+/// it first then removes it; for a stopped container, plain `docker rm`
+/// suffices. The literal command is shown in the confirmation sheet so the
+/// force-stop is never hidden. Reclaims ~0 disk (containers are tiny layers).
 public struct DockerContainerRemoveAction: ShellAction {
     public let id = UUID()
     public let container: DockerContainer
-    public var displayName: String { "stopped container \(container.name)" }
-    public var commandSummary: String { "docker rm \(container.id)" }
+    public var displayName: String {
+        "\(container.running ? "running" : "stopped") container \(container.name)"
+    }
+    public var commandSummary: String {
+        container.running ? "docker rm -f \(container.id)" : "docker rm \(container.id)"
+    }
     public var reversible: Bool { false }
     public var estimatedBytes: Int64 { 0 }
 
@@ -63,6 +69,10 @@ public struct DockerContainerRemoveAction: ShellAction {
 
     public func run() -> Shell.Output? {
         guard let docker = Shell.find("docker") else { return nil }
-        return Shell.run(docker, ["rm", container.id])
+        if container.running {
+            return Shell.run(docker, ["rm", "-f", container.id])
+        } else {
+            return Shell.run(docker, ["rm", container.id])
+        }
     }
 }

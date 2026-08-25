@@ -180,20 +180,30 @@ struct DashboardStartup: View {
     @State private var errorMessage: String?
 
     var body: some View {
-        List {
-            ForEach(LaunchItem.Domain.allCases, id: \.self) { domain in
-                section(for: domain)
+        VStack(spacing: 0) {
+            HStack {
+                Text("Startup Items").font(.title3.bold())
+                Spacer()
+                Button { reload() } label: {
+                    if isLoading { ProgressView().controlSize(.small) }
+                    else { Label("Rescan", systemImage: "arrow.clockwise") }
+                }
+                .buttonStyle(.bordered).controlSize(.small)
+                .disabled(isLoading)
             }
-            if !disabledItems.isEmpty {
-                Section("Disabled by MacTidy") {
-                    ForEach(disabledItems) { item in row(item, action: .restore) }
+            .padding(.horizontal, Theme.Spacing.lg).padding(.vertical, Theme.Spacing.sm)
+            Divider()
+            List {
+                ForEach(LaunchItem.Domain.allCases, id: \.self) { domain in
+                    section(for: domain)
+                }
+                if !disabledItems.isEmpty {
+                    Section("Disabled by MacTidy") {
+                        ForEach(disabledItems) { item in row(item, action: .restore) }
+                    }
                 }
             }
-        }
-        .overlay { if isLoading { ProgressView("Reading launchd plists…") } }
-        .toolbar {
-            Button { reload() } label: { Label("Rescan", systemImage: "arrow.clockwise") }
-                .disabled(isLoading)
+            .overlay { if isLoading { ProgressView("Reading launchd plists…") } }
         }
         .onAppear { if items.isEmpty { reload() } }
         .alert("Startup item change failed",

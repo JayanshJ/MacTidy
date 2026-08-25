@@ -12,6 +12,11 @@ final class AppState {
     /// menu bar panel can read its summary.
     let monitor = SpaceMonitor()
 
+    /// Self-update: checks GitHub Releases for a newer MacTidy and installs
+    /// it in place. Owned here so Settings can bind it and the launch check
+    /// can run from RootView.
+    let updates = UpdateManager()
+
     /// Dry-run is the app-wide default; every confirmation sheet shows the
     /// toggle. Persisted so it survives relaunches.
     var dryRun: Bool {

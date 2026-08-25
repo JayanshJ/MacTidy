@@ -22,7 +22,6 @@ struct DuplicatesView: View {
             Divider()
             content
         }
-        .navigationTitle("Duplicates")
         .sheet(item: $sheetPlan) { plan in
             DeletionConfirmationSheet(title: "Trash duplicate copies?",
                                       plan: plan,
@@ -100,6 +99,7 @@ struct DuplicatesView: View {
                     ? "Every file in the selected folders is unique by content."
                     : "Add folders and run a scan. Files are compared by content (SHA-256), not by name.")
             )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             VStack(spacing: 0) {
                 HStack {

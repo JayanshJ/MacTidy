@@ -5,6 +5,7 @@ import CoreKit
 /// and log retention. Everything here is persisted via `AppState`.
 struct SettingsView: View {
     @Environment(AppState.self) private var state
+    @Environment(\.dismiss) private var dismiss
     @State private var showRootPicker = false
     @State private var apiKeyInput = ""
     @State private var keyStatus: String?
@@ -14,7 +15,15 @@ struct SettingsView: View {
     @State private var connectionStatusGood = false
 
     var body: some View {
-        Form {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Settings").font(.headline)
+                Spacer()
+                Button("Done") { dismiss() }
+            }
+            .padding(.horizontal, Theme.Spacing.md).padding(.vertical, Theme.Spacing.sm)
+            Divider()
+            Form {
             Section {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
@@ -76,6 +85,8 @@ struct SettingsView: View {
                 Toggle("Scan automatically on launch", isOn: $state.autoScanOnLaunch)
                     .help("Run a category scan when the app opens, if nothing is cached.")
             }
+
+            UpdateSettingsSection()
 
             // MARK: - Menu bar & alerts
             Section {
@@ -192,7 +203,6 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .navigationTitle("Settings")
         .fileImporter(
             isPresented: $showRootPicker,
             allowedContentTypes: [.folder]
@@ -201,6 +211,8 @@ struct SettingsView: View {
                 state.addExtraAllowedRoot(url)
             }
         }
+        }
+        .frame(minWidth: 480, idealWidth: 560, minHeight: 520, idealHeight: 640)
     }
 
     private var bundledAppIcon: NSImage? {

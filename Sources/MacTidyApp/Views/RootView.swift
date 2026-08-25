@@ -20,6 +20,12 @@ struct RootView: View {
             if state.fdaGranted && state.autoScanOnLaunch && state.categoryResults.isEmpty {
                 await state.rescanCategories()
             }
+            // Self-update check on launch (gated by a persisted toggle so the
+            // user can turn off the network call in Settings). The check only
+            // resolves an "available" phase; it never auto-installs.
+            if state.updates.checkOnLaunch && state.updates.phase == .idle {
+                state.updates.check()
+            }
         }
     }
 }

@@ -23,7 +23,6 @@ struct DiskView: View {
             case .explorer: DirectoryExplorerView()
             }
         }
-        .navigationTitle("Disk")
     }
 }
 
@@ -55,7 +54,33 @@ struct CategoryCleanupView: View {
                     }
                     .disabled(state.isScanningCategories)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
+                HStack {
+                    Button("Select All Safe") {
+                        selection = Set(
+                            state.categoryResults
+                                .filter(\.category.isPreselectable)
+                                .flatMap(\.items)
+                                .map(\.id)
+                        )
+                    }
+                    .buttonStyle(.bordered).controlSize(.small)
+                    Spacer()
+                    Button {
+                        Task { await state.rescanCategories() }
+                    } label: {
+                        if state.isScanningCategories {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Label("Rescan", systemImage: "arrow.clockwise")
+                        }
+                    }
+                    .buttonStyle(.bordered).controlSize(.small)
+                    .disabled(state.isScanningCategories)
+                }
+                .padding(.horizontal, Theme.Spacing.lg).padding(.vertical, Theme.Spacing.sm)
+                Divider()
                 List {
                     ForEach(state.categoryResults) { result in
                         categorySection(result)
@@ -70,23 +95,6 @@ struct CategoryCleanupView: View {
                     sheetPlan = DeletionPlan(items: selectedItems)
                 }
             }
-        }
-        .toolbar {
-            Button("Select All Safe") {
-                selection = Set(
-                    state.categoryResults
-                        .filter(\.category.isPreselectable)
-                        .flatMap(\.items)
-                        .map(\.id)
-                )
-            }
-            .disabled(state.categoryResults.isEmpty)
-            Button {
-                Task { await state.rescanCategories() }
-            } label: {
-                Label("Rescan", systemImage: "arrow.clockwise")
-            }
-            .disabled(state.isScanningCategories)
         }
         .sheet(item: $sheetPlan) { plan in
             DeletionConfirmationSheet(title: "Trash selected items?", plan: plan) { outcome in

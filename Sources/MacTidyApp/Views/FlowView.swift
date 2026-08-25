@@ -41,12 +41,20 @@ struct FlowView: View {
 
 /// Sheet wrapper for Recently Trashed.
 struct TrashSheetView: View {
+    @Environment(AppState.self) private var state
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         VStack(spacing: 0) {
             HStack {
                 Text("Recently Trashed").font(.headline)
                 Spacer()
+                if !state.recentTrashed.isEmpty {
+                    Button("Clear List") {
+                        state.recentTrashed.forEach { state.dismissTrashed($0) }
+                    }
+                    .buttonStyle(.bordered).controlSize(.small)
+                    .help("Remove all entries from this list (items stay in the Trash).")
+                }
                 Button("Done") { dismiss() }
             }
             .padding(.horizontal, Theme.Spacing.md).padding(.vertical, Theme.Spacing.sm)
