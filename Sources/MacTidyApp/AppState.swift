@@ -344,7 +344,7 @@ final class AppState {
         kind: CleanupEntry.Kind
     ) -> ShellActionOutcome {
         let outcome = ShellActionExecutor.execute(actions, dryRun: dryRun)
-        if !outcome.dryRun, outcome.reclaimedBytes > 0 {
+        if !outcome.dryRun, !outcome.succeeded.isEmpty {
             cleanupLog.append(CleanupEntry(
                 kind: kind,
                 reclaimedBytes: outcome.reclaimedBytes,
