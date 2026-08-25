@@ -333,6 +333,28 @@ final class AppState {
         return outcome
     }
 
+    /// Gateway for shell-based destructive actions (Docker, future brew). Like
+    /// `execute`, it is non-throwing and per-item fail-closed: failures come
+    /// back in the outcome's `failed` list. Unlike trashing, these actions are
+    /// NOT Trash-undoable, so they are NOT recorded to `TrashLog` — only the
+    /// reclaim-over-time `CleanupLog` gets an entry on real passes.
+    @discardableResult
+    func executeShellActions(
+        _ actions: [any ShellAction],
+        kind: CleanupEntry.Kind
+    ) -> ShellActionOutcome {
+        let outcome = ShellActionExecutor.execute(actions, dryRun: dryRun)
+        if !outcome.dryRun, outcome.reclaimedBytes > 0 {
+            cleanupLog.append(CleanupEntry(
+                kind: kind,
+                reclaimedBytes: outcome.reclaimedBytes,
+                itemCount: outcome.succeeded.count
+            ))
+            cleanupHistory = cleanupLog.load()
+        }
+        return outcome
+    }
+
     /// Asks the configured AI advisor for a cleanup plan matching a
     /// natural-language intent. Returns the advisor's reasoning + a
     /// `DeletionPlan` built from real `ScanItem`s in the current scan. Falls
