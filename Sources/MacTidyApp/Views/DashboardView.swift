@@ -138,6 +138,9 @@ struct DashboardView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                         header
+                        if TrashUsage.totalBytes() >= TrashNudgeCard.threshold {
+                            TrashNudgeCard()
+                        }
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 240), spacing: Theme.Spacing.md)],
                                   spacing: Theme.Spacing.md) {
                             ForEach(state.categoryResults) { result in

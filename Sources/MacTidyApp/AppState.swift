@@ -70,6 +70,12 @@ final class AppState {
     /// The most recent real (non-dry-run) outcome, for the Undo toast.
     var lastUndoableOutcome: (records: [TrashRecord], label: String)?
 
+    /// The first-ever real cleanup milestone, for the one-time celebration
+    /// overlay. Nil until the user's first non-dry-run cleanup that actually
+    /// frees space, and only set once (persisted) — so it fires exactly once
+    /// ever, not on every cleanup.
+    var firstReclaimMilestone: Int64?
+
     /// Completed cleanups, newest first — the honest reclaim-over-time log.
     var cleanupHistory: [CleanupEntry] = []
 
@@ -128,6 +134,12 @@ final class AppState {
         self.recentTrashed = trashLog.load()
         self.cleanupHistory = cleanupLog.load()
         self.scanHistory = scanHistoryStore.load()
+        // The one-time first-reclaim milestone: nil until the first real
+        // cleanup that frees space, and only ever set once. Read from
+        // UserDefaults so a relaunch mid-celebration still shows it.
+        if let stored = UserDefaults.standard.object(forKey: "MacTidy.firstReclaimMilestone") as? Int64 {
+            self.firstReclaimMilestone = stored
+        }
         // Drop log entries older than the retention window before showing them.
         applyLogRetention()
         if let results = Self.loadLastScan(from: lastScanURL) {
@@ -521,6 +533,13 @@ final class AppState {
         ))
         cleanupHistory = cleanupLog.load()
         lastUndoableOutcome = (records, "Moved \(outcome.trashed.count) item\(outcome.trashed.count == 1 ? "" : "s") (\(outcome.reclaimedBytes.formattedBytes)) to Trash")
+        // One-time first-reclaim celebration: fire only on the user's first
+        // real cleanup that actually frees space. Persisted so it never fires
+        // again (a future relaunch sees the stored value and skips).
+        if firstReclaimMilestone == nil, outcome.reclaimedBytes > 0 {
+            firstReclaimMilestone = outcome.reclaimedBytes
+            UserDefaults.standard.set(outcome.reclaimedBytes, forKey: "MacTidy.firstReclaimMilestone")
+        }
     }
 
     private func recordDedupOutcome(

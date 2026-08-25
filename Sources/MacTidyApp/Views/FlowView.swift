@@ -25,7 +25,13 @@ struct FlowView: View {
         .sheet(isPresented: $showSettings) { SettingsView() }
         .sheet(isPresented: $showTrash) { TrashSheetView() }
         .sheet(isPresented: $showDisk) { DiskSheetView() }
-        .overlay(alignment: .bottom) { UndoToast() }
+        .overlay(alignment: .bottom) {
+            VStack(spacing: Theme.Spacing.sm) {
+                FirstReclaimCelebration()
+                UndoToast()
+            }
+            .padding(.bottom, Theme.Spacing.md)
+        }
     }
 
     @ViewBuilder
