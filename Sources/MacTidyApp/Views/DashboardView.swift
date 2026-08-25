@@ -285,6 +285,13 @@ struct DashboardView: View {
                 .buttonStyle(.plain)
                 Text(category.displayName).font(.title3.bold())
                 Spacer()
+                if category == .nodeModules {
+                    Button { showNodeInspector = true } label: {
+                        Label("Analyze packages", systemImage: "shippingbox")
+                    }
+                    .buttonStyle(.bordered).controlSize(.small)
+                    .help("Find orphaned and unused npm packages and run npm prune safely.")
+                }
                 if !items.isEmpty {
                     Button {
                         let allSelected = items.allSatisfy { selection.contains($0.id) }
@@ -297,26 +304,17 @@ struct DashboardView: View {
                         Label(allSelected ? "Deselect All" : "Select All",
                               systemImage: allSelected ? "circle" : "checkmark.circle")
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    .buttonStyle(.bordered).controlSize(.small)
                 }
                 Text("\(items.count) item\(items.count == 1 ? "" : "s") · \(result?.totalBytes.formattedBytes ?? "0")")
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             }
             .padding(.horizontal, Theme.Spacing.lg).padding(.vertical, Theme.Spacing.sm)
             Divider()
-            List {
-                Section {
-                    if items.isEmpty {
-                        Text("Nothing found").foregroundStyle(.tertiary)
-                    }
-                    ForEach(items) { item in
-                        ScanItemRow(item: item, selection: $selection)
-                    }
-                } footer: {
-                    Text(category.explanation)
-                        .font(.caption).foregroundStyle(.tertiary)
-                }
+            if category == .nodeModules {
+                nodeModulesList(items: items)
+            } else {
+                flatList(items: items, category: category)
             }
             SelectionFooter(
                 selectedCount: selection.count,
@@ -326,6 +324,66 @@ struct DashboardView: View {
             ) {
                 sheetPlanIsCleanAll = false
                 sheetPlan = DeletionPlan(items: selected)
+            }
+        }
+    }
+
+    /// node_modules grouped by parent project so the user isn't scrolling one
+    /// flat list across every Node project. Each section is one project, with
+    /// per-section select-all (grab a whole project at once) and the project's
+    /// total node_modules bytes in the header.
+    @ViewBuilder
+    private func nodeModulesList(items: [ScanItem]) -> some View {
+        let groups = Dictionary(grouping: items, by: { $0.detail ?? "Other" })
+            .sorted { (lhs, rhs) in lhs.value.reduce(0) { $0 + $1.sizeBytes } > rhs.value.reduce(0) { $0 + $1.sizeBytes } }
+        List {
+            if items.isEmpty {
+                Text("Nothing found").foregroundStyle(.tertiary)
+            }
+            ForEach(groups, id: \.key) { projectName, groupItems in
+                Section {
+                    ForEach(groupItems.sorted { $0.sizeBytes > $1.sizeBytes }) { item in
+                        ScanItemRow(item: item, selection: $selection)
+                    }
+                } header: {
+                    HStack {
+                        Text(projectName).font(.headline)
+                        Spacer()
+                        Text("≈ \(groupItems.reduce(0) { $0 + $1.sizeBytes }.formattedBytes)")
+                            .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        Button {
+                            let allSelected = groupItems.allSatisfy { selection.contains($0.id) }
+                            if allSelected {
+                                for item in groupItems { selection.remove(item.id) }
+                            } else {
+                                for item in groupItems { selection.insert(item.id) }
+                            }
+                        } label: {
+                            let allSelected = groupItems.allSatisfy { selection.contains($0.id) }
+                            Image(systemName: allSelected ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(allSelected ? Theme.accent : .secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+        .listStyle(.inset)
+    }
+
+    @ViewBuilder
+    private func flatList(items: [ScanItem], category: CoreKit.Category) -> some View {
+        List {
+            Section {
+                if items.isEmpty {
+                    Text("Nothing found").foregroundStyle(.tertiary)
+                }
+                ForEach(items) { item in
+                    ScanItemRow(item: item, selection: $selection)
+                }
+            } footer: {
+                Text(category.explanation)
+                    .font(.caption).foregroundStyle(.tertiary)
             }
         }
     }
