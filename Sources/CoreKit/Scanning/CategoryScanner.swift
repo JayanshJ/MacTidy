@@ -168,6 +168,17 @@ public struct CategoryScanner: Sendable {
             (".m2/repository", "Maven repository"),
             (".yarn/cache", "Yarn cache"),
             (".terraform.d/plugin-cache", "Terraform plugin cache"),
+            // Bun package cache (home-rooted; not under ~/Library/Caches so
+            // no overlap with the userCaches category).
+            (".bun/install/cache", "Bun cache"),
+            // XDG cache dir — pip, mypy, pytest, pre-commit, httpie, etc. all
+            // live under here. Counted once at the root so we don't double-
+            // count its children individually.
+            (".cache", "XDG cache (~/.cache)"),
+            // Deno's cache directory (home-rooted variant; the
+            // ~/Library/Caches/deno location, if present, is covered by
+            // userCaches).
+            (".deno", "Deno cache"),
         ]
         let home = self.home
         return await withTaskGroup(of: ScanItem?.self) { group in
