@@ -138,22 +138,38 @@ final class UpdateManager {
     }
 
     /// Downloads `url` to a temp file, reporting progress into `phase`.
+    ///
+    /// The bytes are buffered and progress is reported only in a few coarse
+    /// steps (≈32 updates across the whole download), **not** once per byte.
+    /// The earlier per-byte `phase = .downloading` loop set an `@Observable`
+    /// property on the main actor ~2M times for a typical asset, saturating
+    /// SwiftUI's coalescing so the progress bar never advanced — the download
+    /// appeared "stuck" even though bytes were still arriving.
     private func download(from url: URL, expectedSize: Int64) async throws -> URL {
         let (asyncBytes, response) = try await URLSession.shared.bytes(for: URLRequest(url: url))
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw UpdateError.badResponse
         }
-        let total = expectedSize > 0 ? expectedSize : (http.expectedContentLength)
+        let total = expectedSize > 0 ? expectedSize : http.expectedContentLength
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("MacTidy-update-\(UUID().uuidString).zip")
         var data = Data()
+        if total > 0 { data.reserveCapacity(Int(total)) }
+
+        phase = .downloading(progress: 0)
+        // Report at most every ~3% of the file (or 64 KB when the size is
+        // unknown), so a ~2 MB download yields ~32 progress updates total.
+        let step: Int64 = total > 0 ? max(Int64(1), total / 32) : 64 * 1024
+        var nextThreshold: Int64 = step
         for try await byte in asyncBytes {
             data.append(byte)
-            if total > 0 {
+            if total > 0, Int64(data.count) >= nextThreshold {
                 let p = Double(data.count) / Double(total)
                 phase = .downloading(progress: min(1, max(0, p)))
+                nextThreshold = Int64(data.count) + step
             }
         }
+        phase = .downloading(progress: 1)
         try data.write(to: tmp)
         return tmp
     }

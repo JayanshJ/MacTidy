@@ -19,11 +19,22 @@ public enum AIProvider: String, CaseIterable, Sendable, Identifiable, Codable {
     }
 
     /// Whether this provider needs an API key. Ollama runs locally and needs
-    /// none — just a base URL.
+    /// none — just a base URL. Cloud providers (OpenAI, Anthropic) require one.
     public var requiresAPIKey: Bool {
         switch self {
         case .none, .ollama: false
         case .openai, .anthropic: true
+        }
+    }
+
+    /// Whether the user *can* enter a key for this provider. Every provider
+    /// except `.none` offers a key field: for OpenAI/Anthropic it's required
+    /// (`requiresAPIKey`), for Ollama it's optional — handy when Ollama sits
+    /// behind an auth proxy that expects a `Bearer` token.
+    public var offersAPIKey: Bool {
+        switch self {
+        case .none: false
+        case .ollama, .openai, .anthropic: true
         }
     }
 

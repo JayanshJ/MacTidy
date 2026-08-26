@@ -133,7 +133,7 @@ struct SettingsView: View {
                         .autocorrectionDisabled()
                         .onChange(of: state.aiConfig.ollamaBaseURL) { _, _ in refreshOllamaModels() }
                 }
-                if state.aiConfig.provider.requiresAPIKey {
+                if state.aiConfig.provider.offersAPIKey {
                     // Stored-key status line — makes it obvious whether a key
                     // is already on file for this provider, so the user doesn't
                     // have to infer it from whether the Remove button is live.
@@ -200,7 +200,7 @@ struct SettingsView: View {
             } header: {
                 Text("AI assistant")
             } footer: {
-                Text("BYO key — stored in the macOS Keychain, never sent anywhere except the provider you choose. Ollama runs locally; cloud providers (OpenAI, Anthropic) need your own API key.")
+                Text("BYO key — stored in the macOS Keychain, never sent anywhere except the provider you choose. Ollama runs locally and needs no key (one is optional, for Ollama behind an auth proxy); cloud providers (OpenAI, Anthropic) need your own API key.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
