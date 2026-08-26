@@ -116,6 +116,7 @@ public enum DiskScanner {
             let skipDirs: Set<String> = [
                 ".git", "node_modules", "target", "build", ".build",
                 ".venv", "DerivedData", "__pycache__", "Pods",
+                ".next", ".nuxt", ".svelte-kit", ".turbo", ".output",
             ]
             var seen = 0
             while let url = enumerator.nextObject() as? URL {

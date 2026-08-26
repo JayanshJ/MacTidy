@@ -60,12 +60,14 @@ public enum Recommendations {
     private static func reason(for item: ScanItem, in category: Category) -> Recommendation.Reason? {
         switch category {
         case .xcodeDerivedData, .xcodeDeviceSupport, .simulatorCaches,
-             .simulatorRuntimes, .userCaches, .homebrewCache, .devCaches:
+             .simulatorRuntimes, .userCaches, .homebrewCache, .devCaches,
+             .jsBuildDirs, .containerCaches, .mailDownloads:
             .safeCache
         case .oldInstallers: .staleInstaller
         case .iosBackups: .staleBackup
         case .nodeModules, .rustTargets: .staleBuildDir
         case .podDirs, .swiftBuildDirs, .gradleBuildDirs, .pythonCaches: .staleBuildDir
+        case .xcodeArchives: nil   // symbols for past uploads — never auto-recommended, only listed
         case .appSupport: nil   // real app state — never recommended, only listed
         case .bigFiles: .bigFile
         }

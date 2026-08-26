@@ -87,6 +87,14 @@ public struct CategoryScanner: Sendable {
             items = buildDirs(named: "build", siblingMarkers: ["build.gradle", "build.gradle.kts"], category: .gradleBuildDirs)
         case .pythonCaches:
             items = pythonCaches()
+        case .jsBuildDirs:
+            items = jsBuildDirs()
+        case .containerCaches:
+            items = await containerCaches()
+        case .xcodeArchives:
+            items = await xcodeArchives()
+        case .mailDownloads:
+            items = await mailDownloads()
         case .oldInstallers:
             items = oldInstallers()
         case .iosBackups:
@@ -352,5 +360,97 @@ public struct CategoryScanner: Sendable {
             }
         }
         return results.sorted { $0.sizeBytes > $1.sizeBytes }
+    }
+
+    /// JS framework build output dirs under the dev roots: `.next`, `.nuxt`,
+    /// `.svelte-kit`, `.turbo`, `.output` — each with a sibling `package.json`
+    /// so a coincidentally-named folder isn't suggested. Regenerable via the
+    /// framework's build command. Concatenates `buildDirs` results across
+    /// the dir names; all items are labeled `.jsBuildDirs`.
+    private func jsBuildDirs() -> [ScanItem] {
+        let names = [".next", ".nuxt", ".svelte-kit", ".turbo", ".output"]
+        var items: [ScanItem] = []
+        for name in names {
+            items.append(contentsOf: buildDirs(
+                named: name, siblingMarkers: ["package.json"], category: .jsBuildDirs))
+        }
+        return items.sorted { $0.sizeBytes > $1.sizeBytes }
+    }
+
+    /// Per-app caches inside sandboxed app containers:
+    /// `~/Library/Containers/<bundle-id>/Data/Library/Caches/<child>`. Surfaced
+    /// per child (per-app granularity, mirroring how `userCaches` surfaces
+    /// children of `~/Library/Caches`). Skips the Mail container — its cache
+    /// is covered by `mailDownloads` — and skips the app's own container.
+    private func containerCaches() async -> [ScanItem] {
+        let root = home.appending(path: "Library/Containers")
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: root.path) else { return [] }
+        var results: [ScanItem] = []
+        guard let containers = try? fm.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: nil) else { return [] }
+        for container in containers {
+            let cachesDir = container
+                .appending(path: "Data/Library/Caches")
+            let containerID = container.lastPathComponent
+            // Mail's attachment cache is surfaced by `mailDownloads` instead.
+            if containerID == "com.apple.Mail" { continue }
+            let items = await DiskScanner.topLevelScan(root: cachesDir, category: .containerCaches)
+            // Tag each with the owning container id for detail so the grid
+            // reads "com.example.app / Cache.db" rather than a bare name.
+            for item in items {
+                results.append(ScanItem(
+                    url: item.url,
+                    sizeBytes: item.sizeBytes,
+                    isDirectory: item.isDirectory,
+                    category: .containerCaches,
+                    detail: containerID,
+                    lastModified: item.lastModified
+                ))
+            }
+        }
+        return results.sorted { $0.sizeBytes > $1.sizeBytes }
+    }
+
+    /// Mail attachment cache: children of
+    /// `~/Library/Containers/com.apple.Mail/Data/Library/Mail Downloads`.
+    /// Mail re-downloads from the server, so trashing is safe.
+    private func mailDownloads() async -> [ScanItem] {
+        let dir = home.appending(path: "Library/Containers/com.apple.Mail/Data/Library/Mail Downloads")
+        guard FileManager.default.fileExists(atPath: dir.path) else { return [] }
+        return await DiskScanner.topLevelScan(root: dir, category: .mailDownloads)
+    }
+
+    /// Xcode archives. Xcode nests these under a date folder
+    /// (`Archives/2026-08-26/MyApp.xcarchive`), so this descends one level:
+    /// any `.xcarchive` at the Archives root OR inside a date-named subdir is
+    /// surfaced. Suggest-only — these hold symbols for past uploads.
+    private func xcodeArchives() async -> [ScanItem] {
+        let root = home.appending(path: "Library/Developer/Xcode/Archives")
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: root.path) else { return [] }
+        var found: [ScanItem] = []
+        guard let entries = try? fm.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: [.isDirectoryKey]) else { return [] }
+        for entry in entries {
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: entry.path, isDirectory: &isDir), isDir.boolValue {
+                if entry.lastPathComponent.hasSuffix(".xcarchive") {
+                    // Archive at the root.
+                    let size = await Task.detached { DiskScanner.allocatedSize(of: entry) }.value
+                    if size > 0 {
+                        found.append(ScanItem(url: entry, sizeBytes: size, isDirectory: true,
+                                             category: .xcodeArchives))
+                    }
+                } else {
+                    // Date-named subdir — descend one level for .xcarchive bundles.
+                    let sub = await DiskScanner.topLevelScan(root: entry, category: .xcodeArchives)
+                    for item in sub where item.url.lastPathComponent.hasSuffix(".xcarchive") {
+                        found.append(item)
+                    }
+                }
+            }
+        }
+        return found.sorted { $0.sizeBytes > $1.sizeBytes }
     }
 }
