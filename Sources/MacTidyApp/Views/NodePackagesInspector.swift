@@ -1,10 +1,10 @@
 import SwiftUI
 import CoreKit
 
-/// Inspector for Node projects: finds projects under the dev roots, runs the
-/// orphaned/unused package analysis, and offers `npm prune` (safe, keeps the
-/// project working) or whole-dir trash. Never trashes individual packages out
-/// of a live node_modules — npm expects that tree to be coherent.
+/// Inspector for Node projects: finds projects under the dev roots and offers
+/// one reclaim action per project — `npm prune` when there are orphaned
+/// packages (safe, keeps the tree working), or trashing the whole
+/// `node_modules` dir when it's already clean. One row per project.
 struct NodePackagesInspector: View {
     @Environment(AppState.self) private var state
     @Environment(\.dismiss) private var dismiss
@@ -41,7 +41,7 @@ struct NodePackagesInspector: View {
             } else {
                 List {
                     ForEach(analyses) { analysis in
-                        projectSection(analysis)
+                        projectRow(analysis)
                     }
                 }
             }
@@ -56,73 +56,59 @@ struct NodePackagesInspector: View {
     }
 
     @ViewBuilder
-    private func projectSection(_ analysis: NodeProjectAnalysis) -> some View {
-        Section {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(analysis.projectDir.lastPathComponent).fontWeight(.medium)
-                    Text(analysis.projectDir.path)
-                        .font(.caption.monospaced()).foregroundStyle(.tertiary)
-                        .lineLimit(1).truncationMode(.head)
+    private func projectRow(_ analysis: NodeProjectAnalysis) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(analysis.projectDir.lastPathComponent).fontWeight(.medium)
+                HStack(spacing: 6) {
+                    Text(analysis.nodeModulesBytes.formattedBytes)
+                    Text("·")
+                    if analysis.orphaned.isEmpty {
+                        Text("clean").foregroundStyle(.secondary)
+                    } else {
+                        Text("\(analysis.orphaned.count) orphaned")
+                            .foregroundStyle(Theme.accent)
+                    }
+                    if !analysis.orphaned.isEmpty {
+                        Text(analysis.orphaned.joined(separator: ", "))
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1).truncationMode(.head)
+                    }
                 }
-                Spacer()
-                Text("\(analysis.totalInstalledPackages) pkgs · \(analysis.nodeModulesBytes.formattedBytes)")
-                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-            }
-            if !analysis.orphaned.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    Label("\(analysis.orphaned.count) orphaned packages — not in package.json", systemImage: "checkmark.seal")
-                        .font(.caption.bold())
-                    Text(analysis.orphaned.joined(separator: ", "))
-                        .font(.caption.monospaced()).foregroundStyle(.secondary)
-                }
-            }
-            if !analysis.unused.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    Label("\(analysis.unused.count) possibly unused — in package.json but not imported", systemImage: "exclamationmark.triangle")
-                        .font(.caption.bold())
-                    Text(analysis.unused.joined(separator: ", "))
-                        .font(.caption.monospaced()).foregroundStyle(.secondary)
-                    Text("Heuristic — verify before removing. Dynamic imports, polyfill-only deps, and build plugins can cause false positives.")
-                        .font(.caption2).foregroundStyle(.orange)
+                .font(.caption.monospacedDigit())
+                Text(analysis.projectDir.path)
+                    .font(.caption2.monospaced()).foregroundStyle(.tertiary)
+                    .lineLimit(1).truncationMode(.head)
+                if let status = pruneStatus[analysis.projectDir.path] {
+                    Text(status).font(.caption2).foregroundStyle(.secondary)
                 }
             }
-            // Always show both reclaim actions per project.
-            HStack {
+            Spacer()
+            if analysis.orphaned.isEmpty {
+                // Nothing to prune — offer to reclaim the whole dir.
+                Button {
+                    sheetPlan = DeletionPlan(items: [ScanItem(
+                        url: analysis.projectDir.appending(path: "node_modules"),
+                        sizeBytes: analysis.nodeModulesBytes, isDirectory: true)])
+                } label: {
+                    Text("Trash").frame(minWidth: 56)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Move the whole node_modules to Trash. Restore with `npm install`.")
+            } else {
                 Button {
                     Task { await runPrune(in: analysis.projectDir) }
                 } label: {
-                    Label("Run npm prune", systemImage: "hammer")
+                    Text("Clean").frame(minWidth: 56)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.borderedProminent)
                 .controlSize(.small)
-                .disabled(analysis.orphaned.isEmpty)
-                .help(analysis.orphaned.isEmpty
-                      ? "No orphaned packages detected."
-                      : "Safe — removes orphaned packages; the project keeps working. Reversible via npm install.")
-                if let status = pruneStatus[analysis.projectDir.path] {
-                    Text(status).font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button {
-                    sheetPlan = DeletionPlan(items: [ScanItem(url: analysis.projectDir.appending(path: "node_modules"),
-                                                               sizeBytes: analysis.nodeModulesBytes, isDirectory: true)])
-                } label: {
-                    Label("Trash whole node_modules", systemImage: "trash")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                .help("Safe — removes the \(analysis.orphaned.count) orphaned package(s); the project keeps working. Reversible via npm install.")
             }
-            if analysis.orphaned.isEmpty && analysis.unused.isEmpty {
-                Text("Clean — no orphaned or unused packages detected. Trash the whole dir to reclaim all space, then `npm install` to restore.")
-                    .font(.caption2).foregroundStyle(.tertiary)
-            } else {
-                Text("Safe: npm prune keeps the tree working. Trash whole dir: reversible via Trash, `npm install` to restore.")
-                    .font(.caption2).foregroundStyle(.tertiary)
-            }
-        } header: {
-            Text(analysis.projectDir.lastPathComponent).font(.headline)
         }
+        .padding(.vertical, 2)
     }
 
     private func scan() async {
@@ -153,6 +139,11 @@ struct NodePackagesInspector: View {
             pruneStatus[key] = out?.succeeded == true
                 ? "Done — orphaned packages removed."
                 : "npm prune failed: \(out?.stderr ?? "unknown")"
+        }
+        // Refresh this project's row so the button flips Clean → Trash.
+        if let updated = NodePackageAnalyzer.analyze(dir),
+           let idx = analyses.firstIndex(where: { $0.id == updated.id }) {
+            await MainActor.run { analyses[idx] = updated }
         }
     }
 }
