@@ -44,6 +44,10 @@ final class SpaceMonitor {
     private(set) var isChecking = false
 
     private var hasStarted = false
+    /// The periodic loop task, kept so `cancel()` can stop it on app
+    /// termination — otherwise the long `Task.sleep` keeps the process
+    /// from settling and `NSApp.terminate` hangs for tens of seconds.
+    private var loopTask: Task<Void, Never>?
 
     init() {
         self.notificationsEnabled = UserDefaults.standard.object(forKey: "MacTidy.monitor.enabled") as? Bool ?? true
@@ -55,7 +59,17 @@ final class SpaceMonitor {
     func start() {
         guard !hasStarted else { return }
         hasStarted = true
-        Task { await loop() }
+        loopTask = Task { await loop() }
+    }
+
+    /// Cancels the periodic loop so the app can terminate promptly. Called
+    /// from `AppDelegate.applicationWillTerminate`. A sleeping `Task.sleep`
+    /// doesn't block `NSApp.terminate` on its own, but an unstructured Task
+    /// keeps the cooperative run loop alive until it settles; cancelling
+    /// here lets termination return in seconds instead of tens of seconds.
+    func cancel() {
+        loopTask?.cancel()
+        loopTask = nil
     }
 
     private func loop() async {

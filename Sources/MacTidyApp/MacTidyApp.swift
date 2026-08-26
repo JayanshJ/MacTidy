@@ -14,6 +14,7 @@ struct MacTidyApp: App {
                 .tint(Theme.accent)
                 .frame(minWidth: 940, minHeight: 600)
                 .onAppear {
+                    delegate.appState = state
                     delegate.sizeMainWindow()
                     state.monitor.start()
                 }
@@ -42,6 +43,12 @@ struct MacTidyApp: App {
 /// menu bar panel or a Dock click. Also sizes the main window to a sensible
 /// default and surfaces an About panel.
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Set from the App's `onAppear` so the delegate can reach the AppState
+    /// during termination — cancelling the space monitor's background loop
+    /// so `NSApp.terminate` returns promptly (the self-update swap helper
+    /// waits for this process to exit before swapping the bundle).
+    weak var appState: AppState?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Headless scheduled-cleanup launch path: launchd relaunches MacTidy
         // with `--run-scheduled` at the job's fire time. Run any due jobs
@@ -78,6 +85,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// monitor keep working. Quit is Cmd-Q or the panel's standard menus.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
+    }
+
+    /// Cancels background work so `NSApp.terminate` returns promptly. Without
+    /// this, the space monitor's long `Task.sleep` and any in-flight category
+    /// scan keep the cooperative run loop alive, and termination hangs for
+    /// tens of seconds — which blocks the self-update swap helper (it waits
+    /// for this process to exit before swapping the bundle) and makes "Quit
+    /// & Relaunch" feel dead. Return `.terminateNowCaseAccepted` (the modern
+    /// equivalent of `.terminate`) — we have nothing to save.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        appState?.prepareForTermination()
+        return .terminateNow
     }
 
     /// Dock-click reopen: bring the main window back.

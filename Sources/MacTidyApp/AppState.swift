@@ -202,6 +202,17 @@ final class AppState {
         scanTask?.cancel()
     }
 
+    /// Cancels background work so the app can terminate promptly — called
+    /// from `AppDelegate.applicationShouldTerminate`. Without this the space
+    /// monitor's long `Task.sleep` and any in-flight scan keep the run loop
+    /// alive, so `NSApp.terminate` (and thus the self-update "Quit &
+    /// Relaunch" path) hangs for tens of seconds.
+    func prepareForTermination() {
+        monitor.cancel()
+        scanTask?.cancel()
+        updates.cancelInFlight()
+    }
+
     // MARK: - Guided flow control
 
     /// Start the wizard: kick off a scan, then land on the dashboard where
