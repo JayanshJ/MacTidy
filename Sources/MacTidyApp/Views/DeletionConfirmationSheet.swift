@@ -88,6 +88,7 @@ struct DeletionConfirmationSheet: View {
             }
         }
         .listStyle(.bordered)
+        .frame(maxHeight: .infinity)
 
         HStack {
             Spacer()
@@ -144,6 +145,7 @@ struct DeletionConfirmationSheet: View {
             }
         }
         .listStyle(.bordered)
+        .frame(maxHeight: .infinity)
 
         HStack {
             Spacer()

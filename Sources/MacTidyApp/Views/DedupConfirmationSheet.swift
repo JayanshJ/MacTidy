@@ -68,6 +68,7 @@ struct DedupConfirmationSheet: View {
             }
         }
         .listStyle(.bordered)
+        .frame(maxHeight: .infinity)
 
         HStack {
             Spacer()
@@ -121,6 +122,7 @@ struct DedupConfirmationSheet: View {
             }
         }
         .listStyle(.bordered)
+        .frame(maxHeight: .infinity)
 
         HStack {
             Spacer()

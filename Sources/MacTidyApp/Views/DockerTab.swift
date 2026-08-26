@@ -245,6 +245,7 @@ struct DockerActionConfirmationSheet: View {
             }
         }
         .listStyle(.bordered)
+        .frame(maxHeight: .infinity)
 
         HStack {
             Spacer()
@@ -299,6 +300,7 @@ struct DockerActionConfirmationSheet: View {
             }
         }
         .listStyle(.bordered)
+        .frame(maxHeight: .infinity)
         HStack {
             Spacer()
             Button("Done") { onCompleted(); dismiss() }.keyboardShortcut(.defaultAction)
