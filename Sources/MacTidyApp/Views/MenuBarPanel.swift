@@ -1,9 +1,17 @@
 import SwiftUI
 import CoreKit
 
-/// The menu bar popover: an at-a-glance quick-check summary plus one-click
-/// access to the app. Lives in a MenuBarExtra so MacTidy stays present even
+/// The menu bar popover: an at-a-glance reclaimable summary plus one-click
+/// access to the app. Lives in a `MenuBarExtra` so MacTidy stays present even
 /// with the main window closed.
+///
+/// Branding matches the main app: the real `AppIcon` from the bundle, the
+/// teal `Theme.accent`, and a card surface — the same treatment the Welcome
+/// hero and Dashboard header use. The headline number is the **full scan**
+/// total (`state.totalReclaimable`, every category) when a real scan has run,
+/// so the panel agrees with the dashboard; when there's no full scan yet it
+/// falls back to the space monitor's quick-check total (the 5 fast
+/// categories), clearly labeled "quick check" so it never overstates.
 struct MenuBarPanel: View {
     @Environment(AppState.self) private var state
     @Environment(\.openWindow) private var openWindow
@@ -13,63 +21,140 @@ struct MenuBarPanel: View {
             header
             Divider()
             summary
-            if !state.monitor.latestResults.isEmpty {
+            if !topCategories.isEmpty {
                 Divider()
-                ForEach(state.monitor.latestResults.prefix(4)) { result in
-                    HStack {
-                        Image(systemName: "tray.full")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text(result.category.displayName)
-                            .font(.callout)
-                            .lineLimit(1)
-                        Spacer()
-                        Text(result.totalBytes.formattedBytes)
-                            .font(.callout.monospacedDigit())
-                            .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                    ForEach(topCategories) { result in
+                        categoryRow(result)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             Divider()
             actions
         }
         .padding(Theme.Spacing.md)
-        .frame(width: 280)
+        .frame(width: 300)
         .task { state.monitor.start() }
     }
 
+    // MARK: - Header
+
     private var header: some View {
-        HStack {
-            Text("MacTidy")
-                .font(.headline)
-            Spacer()
-            if let lastCheckedText {
-                Text(lastCheckedText)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+        HStack(spacing: Theme.Spacing.sm) {
+            appIcon
+            VStack(alignment: .leading, spacing: 1) {
+                Text("MacTidy").font(.headline)
+                if let subtitle = headerSubtitle {
+                    Text(subtitle)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
             }
+            Spacer()
         }
     }
 
-    private var lastCheckedText: String? {
-        guard let checked = state.monitor.lastChecked else { return nil }
-        let style = Date.RelativeFormatStyle(presentation: .named, capitalizationContext: .beginningOfSentence)
+    /// The real app icon, rendered from the bundle's `AppIcon` asset so the
+    /// menu bar panel matches the dock icon and the Welcome hero exactly.
+    /// Falls back to a teal disk glyph when running as a bare SwiftPM binary
+    /// without a bundle (the same fallback the Welcome view uses).
+    private var appIcon: some View {
+        Group {
+            if let nsImage = NSImage(named: "AppIcon") ?? bundledAppIcon {
+                Image(nsImage: nsImage)
+                    .resizable()
+                    .interpolation(.high)
+            } else {
+                Image(systemName: "circle.dashed")
+                    .font(.system(size: 22, weight: .light))
+                    .foregroundStyle(Theme.accent)
+            }
+        }
+        .frame(width: 28, height: 28)
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+    }
+
+    private var bundledAppIcon: NSImage? {
+        let bundle = Bundle.main
+        let url = bundle.url(forResource: "AppIcon", withExtension: "icns")
+            ?? bundle.url(forResource: "AppIcon", withExtension: "png")
+        guard let url else { return nil }
+        return NSImage(contentsOf: url)
+    }
+
+    /// Shows the quick-check recency (the monitor's own "last checked" time)
+    /// so the user can tell how stale the quick-check number is. Hidden when
+    /// we're showing a full-scan total instead.
+    private var headerSubtitle: String? {
+        guard !hasFullScan else { return nil }
+        guard let checked = state.monitor.lastChecked else {
+            return state.monitor.isChecking ? "checking…" : nil
+        }
+        let style = Date.RelativeFormatStyle(
+            presentation: .named,
+            capitalizationContext: .beginningOfSentence
+        )
         return checked.formatted(style) + (state.monitor.isChecking ? " · checking…" : "")
+    }
+
+    // MARK: - Summary
+
+    /// True when a real full scan has run (in this session or restored from a
+    /// previous one). When this is true the headline shows `totalReclaimable`
+    /// — the same number the Dashboard header shows — so the panel and the
+    /// app agree. Otherwise the panel shows the quick-check total.
+    private var hasFullScan: Bool { !state.categoryResults.isEmpty }
+
+    /// The headline reclaimable number: the full-scan total when available,
+    /// else the quick-check total.
+    private var headlineBytes: Int64 {
+        hasFullScan ? state.totalReclaimable : state.monitor.reclaimableBytes
     }
 
     private var summary: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(state.monitor.reclaimableBytes.formattedBytes)
+            Text(headlineBytes.formattedBytes)
                 .font(.system(size: 26, weight: .bold, design: .rounded))
                 .monospacedDigit()
-                .foregroundStyle(state.monitor.reclaimableBytes > 0 ? Theme.accent : .secondary)
-            Text("reclaimable (quick check)")
+                .foregroundStyle(headlineBytes > 0 ? Theme.accent : .secondary)
+            Text(hasFullScan ? "reclaimable" : "reclaimable (quick check)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
+
+    // MARK: - Category breakdown
+
+    /// Top reclaimable categories to list under the headline. Mirrors the
+    /// dashboard: full-scan categories when a scan has run, otherwise the
+    /// monitor's quick-check results. Sorted by size, capped at 4.
+    private var topCategories: [CategoryResult] {
+        let source = hasFullScan ? state.categoryResults : state.monitor.latestResults
+        return source
+            .filter { $0.totalBytes > 0 }
+            .sorted { $0.totalBytes > $1.totalBytes }
+            .prefix(4)
+            .map { $0 }
+    }
+
+    private func categoryRow(_ result: CategoryResult) -> some View {
+        HStack {
+            Image(systemName: "tray.full")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text(result.category.displayName)
+                .font(.callout)
+                .lineLimit(1)
+            Spacer()
+            Text(result.totalBytes.formattedBytes)
+                .font(.callout.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - Actions
 
     private var actions: some View {
         VStack(spacing: Theme.Spacing.xs) {
