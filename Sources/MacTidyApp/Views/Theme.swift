@@ -37,6 +37,15 @@ enum Theme {
 /// Reusable card surface. Replaces the copy-pasted
 /// `.background(.quaternary.opacity(0.5), in: RoundedRectangle)` pattern with
 /// a consistent rounded surface plus a hairline border for definition.
+///
+/// The fill is a semantic background that has real contrast in **both** light
+/// and dark mode. The earlier `.quaternary.opacity(0.45)` was nearly invisible
+/// in light mode (quaternary resolves to a pale gray, and 0.45 opacity over
+/// white leaves almost nothing) — so cards "washed out" for users in Light
+/// appearance. `Color(nsColor: .underPageBackgroundColor)` is AppKit's standard
+/// inset-content fill: visibly off-white in light mode, a dark panel in dark
+/// mode. The border stays a hairline `.separator` so cards keep their edge in
+/// either appearance.
 struct Card: ViewModifier {
     var padded: Bool = true
 
@@ -45,11 +54,11 @@ struct Card: ViewModifier {
             .padding(padded ? Theme.Spacing.md : 0)
             .background(
                 RoundedRectangle(cornerRadius: Theme.cardRadius)
-                    .fill(.quaternary.opacity(0.45))
+                    .fill(Color(nsColor: .underPageBackgroundColor))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: Theme.cardRadius)
-                    .strokeBorder(.separator.opacity(0.5), lineWidth: 0.5)
+                    .strokeBorder(.separator.opacity(0.6), lineWidth: 0.5)
             )
     }
 }

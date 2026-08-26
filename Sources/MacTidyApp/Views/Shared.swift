@@ -15,7 +15,9 @@ struct SizeBar: View {
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
-                Capsule().fill(.quaternary)
+                // Use a separator-level fill so the track is visible in both
+                // light and dark mode (.quaternary washes out in light mode).
+                Capsule().fill(.separator.opacity(0.5))
                 Capsule()
                     .fill(.tint)
                     .frame(width: max(2, proxy.size.width * min(1, fraction)))
