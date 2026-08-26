@@ -108,6 +108,13 @@ final class AppState {
     private let scanHistoryStore: ScanHistory
     private let lastScanURL: URL
 
+    /// Persisted scheduled-cleanup jobs. Loaded once at init; the Settings UI
+    /// edits this in place and rewrites the launchd plist via
+    /// `LaunchAgentWriter` whenever a job changes. The headless `--run-scheduled`
+    /// launch path runs `runScheduledIfDue()` against this list.
+    private(set) var schedules: [ScheduledJob] = []
+    private let scheduleStore = ScheduleStore()
+
     init(
         trashLog: TrashLog = .shared,
         cleanupLog: CleanupLog = .shared,
@@ -120,6 +127,7 @@ final class AppState {
             .appending(path: "Library/Application Support/MacTidy")
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         self.lastScanURL = support.appending(path: "last-scan.json")
+        self.schedules = scheduleStore.load()
         self.extraAllowedRoots = Self.loadExtraAllowedRoots()
         self.autoScanOnLaunch = UserDefaults.standard.object(forKey: "MacTidy.autoScanOnLaunch") as? Bool ?? false
         self.logRetentionDays = UserDefaults.standard.object(forKey: "MacTidy.logRetentionDays") as? Int ?? 0
@@ -350,6 +358,67 @@ final class AppState {
             cleanupHistory = cleanupLog.load()
         }
         return outcome
+    }
+
+    // MARK: - Scheduled cleanup
+
+    /// Replaces the persisted job list and rewrites the launchd plist. Called
+    /// by the Settings UI whenever a job is added/edited/toggled/deleted. The
+    /// plist is the *trigger* (when to wake the app); the job list is the
+    /// source of truth for *what* to run, kept here in `schedules`.
+    func saveSchedules(_ jobs: [ScheduledJob]) {
+        schedules = jobs
+        scheduleStore.save(jobs)
+        _ = try? LaunchAgentWriter.write(for: jobs)
+    }
+
+    /// Runs every due scheduled job headlessly, through the same destructive
+    /// path as a manual cleanup: scan the job's safe categories, build a
+    /// `DeletionPlan`, run `DeletionExecutor` + `SafePathPolicy`, and record to
+    /// `TrashLog`/`CleanupLog` via `recordOutcome`. Then stamps `lastRun` /
+    /// `nextRun` and persists. Safe by construction — `ScheduledJob` only
+    /// holds `isPreselectable` categories, and `SafePathPolicy` still vets
+    /// every item on top of that. Returns nil when nothing is due.
+    @discardableResult
+    func runScheduledIfDue(now: Date = Date()) async -> ScheduledRunResult? {
+        // Re-read from disk in case a Settings edit landed since init.
+        let jobs = scheduleStore.load()
+        guard !jobs.isEmpty else { return nil }
+        let scanner = CategoryScanner()
+        let executor = DeletionExecutor(
+            policy: SafePathPolicy(extraAllowedRoots: extraAllowedRoots)
+        )
+        let result = await ScheduledRunner.run(
+            jobs: jobs,
+            now: now,
+            scan: { categories in
+                // Scan only the requested categories (one per category in the
+                // union of due jobs) — cheaper than a full scanAll when the
+                // schedule touches just a few categories.
+                var results: [CategoryResult] = []
+                for category in Category.allCases where categories.contains(category) {
+                    if Task.isCancelled { break }
+                    results.append(await scanner.scan(category))
+                }
+                return results
+            },
+            executor: executor
+        )
+        guard let result else { return nil }
+        // Record via the same path as a manual run so TrashLog/CleanupLog stay
+        // single-sourced. `recordOutcome` ignores empty-trash outcomes, so a
+        // scheduled run that found nothing trashes nothing and logs nothing.
+        recordOutcome(result.outcome, plan: result.plan, kind: .deletion)
+        // Stamp lastRun/nextRun for the jobs that fired, then persist + rewrite
+        // the plist so launchd's next fire reflects the updated schedule.
+        var updated = jobs
+        let fired = Set(result.firedJobs)
+        for i in updated.indices where fired.contains(updated[i].id) {
+            updated[i].lastRun = now
+            updated[i].nextRun = SchedulePlanner.nextRun(for: updated[i], after: now)
+        }
+        saveSchedules(updated)
+        return result
     }
 
     /// Asks the configured AI advisor for a cleanup plan matching a

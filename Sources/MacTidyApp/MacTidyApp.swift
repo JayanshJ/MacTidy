@@ -43,10 +43,35 @@ struct MacTidyApp: App {
 /// default and surfaces an About panel.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Headless scheduled-cleanup launch path: launchd relaunches MacTidy
+        // with `--run-scheduled` at the job's fire time. Run any due jobs
+        // through the same destructive path as a manual cleanup, then quit
+        // — no UI. The app records to TrashLog/CleanupLog like a normal run.
+        if CommandLine.arguments.contains(LaunchAgentWriter.runScheduledFlag) {
+            runScheduledAndExit()
+            return
+        }
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         UNUserNotificationCenter.current().delegate = notificationDelegate
         sizeMainWindow()
+    }
+
+    /// Runs due scheduled jobs headlessly and quits. Runs as a background
+    /// (accessory) app so no dock icon or window appears for the fire. Uses
+    /// its own `AppState` — the headless path doesn't touch UI state, it just
+    /// scans + trashes through the same destructive path and records to the
+    /// shared TrashLog/CleanupLog (which are singletons).
+    private func runScheduledAndExit() {
+        NSApp.setActivationPolicy(.accessory)
+        Task { @MainActor in
+            let headlessState = AppState()
+            await headlessState.runScheduledIfDue()
+            // Quit once the run completes. A nil result (nothing due) still
+            // quits — the agent fired, found nothing, and should exit cleanly
+            // rather than lingering.
+            NSApp.terminate(nil)
+        }
     }
 
     /// Stay alive with the window closed — the menu bar icon and the space

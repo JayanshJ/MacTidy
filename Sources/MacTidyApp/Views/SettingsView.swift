@@ -18,6 +18,10 @@ struct SettingsView: View {
     @State private var connectionStatusGood = false
     @State private var ollamaDetection: OllamaDetector.Detection?
     @State private var isDetectingOllama = false
+    /// The job being added/edited in the schedule editor sheet; nil when the
+    /// sheet is closed.
+    @State private var editingSchedule: ScheduledJob?
+    @State private var isNewSchedule = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -260,6 +264,8 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            schedulesSection
         }
         .formStyle(.grouped)
         .fileImporter(
@@ -290,6 +296,104 @@ struct SettingsView: View {
             ?? bundle.url(forResource: "AppIcon", withExtension: "png")
         guard let url else { return nil }
         return NSImage(contentsOf: url)
+    }
+
+    // MARK: - Scheduled cleanup
+
+    /// The scheduled-cleanup section: one row per job (toggle, cadence,
+    /// time, categories) plus an Add button. Edits open a sheet with the
+    /// full editor (`ScheduleEditor`). Jobs are restricted to safe
+    /// (`isPreselectable`) categories — automated runs never touch
+    /// suggest-only categories, Docker, or uninstall.
+    @ViewBuilder
+    private var schedulesSection: some View {
+        Section {
+            @Bindable var state = state
+            if state.schedules.isEmpty {
+                Text("No scheduled cleanups. Add one to run automatically.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            ForEach(state.schedules) { job in
+                scheduleRow(job)
+            }
+            Button {
+                editingSchedule = ScheduledJob()
+                isNewSchedule = true
+            } label: {
+                Label("Add schedule", systemImage: "plus")
+            }
+        } header: {
+            Text("Scheduled cleanup")
+        } footer: {
+            Text("Runs automatically via launchd — even when MacTidy is closed. Only safe categories (caches, build artifacts, old installers) are auto-trashed; suggest-only categories like node_modules and iOS backups are never touched automatically. Every item still passes the same safety check as a manual cleanup.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .sheet(item: $editingSchedule) { job in
+            ScheduleEditor(job: job, isNew: isNewSchedule) { saved in
+                var jobs = state.schedules
+                if let idx = jobs.firstIndex(where: { $0.id == saved.id }) {
+                    jobs[idx] = saved
+                } else {
+                    jobs.append(saved)
+                }
+                state.saveSchedules(jobs)
+            } onDelete: {
+                state.saveSchedules(state.schedules.filter { $0.id != job.id })
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func scheduleRow(_ job: ScheduledJob) -> some View {
+        @Bindable var state = state
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Toggle(isOn: Binding(
+                    get: { job.enabled },
+                    set: { newValue in
+                        var updated = job
+                        updated.enabled = newValue
+                        var jobs = state.schedules
+                        if let idx = jobs.firstIndex(where: { $0.id == job.id }) {
+                            jobs[idx] = updated
+                        }
+                        state.saveSchedules(jobs)
+                    }
+                )) {
+                    Text(scheduleSummary(job)).fontWeight(.medium)
+                }
+                Spacer()
+                Button {
+                    editingSchedule = job
+                    isNewSchedule = false
+                } label: {
+                    Image(systemName: "pencil")
+                }
+                .buttonStyle(.borderless)
+                .help("Edit this schedule")
+            }
+            Text(job.categories.sorted(by: { $0.displayName < $1.displayName })
+                    .map(\.displayName).joined(separator: " · "))
+                .font(.caption).foregroundStyle(.secondary)
+            if let next = job.nextRun {
+                Text("Next: \(next.formatted(date: .abbreviated, time: .shortened))")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    private func scheduleSummary(_ job: ScheduledJob) -> String {
+        let time = String(format: "%02d:00", job.hour)
+        switch job.cadence {
+        case .daily: return "Daily at \(time)"
+        case .weekly:
+            let symbols = Calendar.current.shortWeekdaySymbols
+            let name = (job.weekday - 1 < symbols.count) ? symbols[job.weekday - 1] : "\(job.weekday)"
+            return "Weekly \(name) at \(time)"
+        case .monthly:
+            return "Monthly on day \(job.dayOfMonth) at \(time)"
+        }
     }
 
     // MARK: - AI key + connection helpers
