@@ -174,6 +174,24 @@ struct DashboardDocker: View {
                     .font(.caption.monospaced()).foregroundStyle(.secondary)
             }
             Spacer()
+            // Heuristic attribution for non-compose images: "likely <project>"
+            // when a container's working dir / bind mounts resolved to a name,
+            // "in use" when a running container references it, and "orphaned"
+            // when no container references it at all (safe to prune). The
+            // guess is honest about being a guess.
+            if let attr = dockerState?.attribution(for: img) {
+                if let project = attr.projectGuess {
+                    Badge(text: "likely \(project)", tint: Theme.Status.caution)
+                        .help("A container referencing this image appears to belong to \(project) — inferred from its working directory or bind mounts. Not a certainty.")
+                }
+                if attr.inUse {
+                    Badge(text: "in use", tint: Theme.Status.good)
+                        .help("A running container references this image.")
+                }
+            } else if dockerState != nil {
+                Badge(text: "orphaned", tint: .secondary)
+                    .help("No container references this image. Safe to remove unless you're about to run it.")
+            }
             Button {
                 pendingActions = [DockerImageRemoveAction(image: img)]
                 showSheet = true

@@ -37,6 +37,25 @@ public struct DockerContainer: Identifiable, Sendable, Hashable {
     }
 }
 
+/// A heuristic attribution for an image without a compose project label —
+/// i.e. a plain `docker run` image that's really part of some project's
+/// workflow but doesn't carry the label. Derived from the container's
+/// working directory and bind mounts, so it only resolves when a container
+/// references the image. Always a *guess*: the UI labels it "likely".
+public struct DockerImageAttribution: Sendable, Equatable {
+    /// Best-guess project name (a directory name or container/image name),
+    /// or nil when nothing could be inferred.
+    public let projectGuess: String?
+    /// True when a running container references the image — the strongest
+    /// "do not prune" signal, independent of the project guess.
+    public let inUse: Bool
+
+    public init(projectGuess: String?, inUse: Bool) {
+        self.projectGuess = projectGuess
+        self.inUse = inUse
+    }
+}
+
 public struct DockerComposeProject: Identifiable, Sendable, Hashable {
     public let name: String
     public let images: [DockerImage]
@@ -55,6 +74,11 @@ public struct DockerState: Sendable {
     public let images: [DockerImage]
     public let containers: [DockerContainer]
     public let projects: [DockerComposeProject]
+    /// Heuristic attributions for standalone (non-compose) images, keyed by
+    /// image id. Images with no container and no resolvable project get no
+    /// entry (they're truly "orphaned"); the UI treats a missing key as
+    /// orphaned. See `DockerScanner.parseAttributions`.
+    public let attributions: [String: DockerImageAttribution]
 
     public init(images: [DockerImage], containers: [DockerContainer]) {
         self.images = images
@@ -75,11 +99,43 @@ public struct DockerState: Sendable {
             return DockerComposeProject(name: name, images: imgs, running: running)
         }
         .sorted { $0.totalBytes > $1.totalBytes }
+        // Standalone-image attributions are derived in `scan()` (they need
+        // container inspect data) and injected via the dedicated initializer
+        // below; the plain initializer leaves them empty.
+        self.attributions = [:]
+    }
+
+    /// Designated initializer that carries pre-computed standalone-image
+    /// attributions (from `DockerScanner.parseAttributions`). Kept internal
+    /// to the scan path; the plain initializer above is for tests/empty state.
+    public init(images: [DockerImage], containers: [DockerContainer],
+                attributions: [String: DockerImageAttribution]) {
+        self.images = images
+        self.containers = containers
+        let grouped = Dictionary(grouping: images.filter { !($0.composeProject?.isEmpty ?? true) },
+                                 by: { $0.composeProject! })
+        self.projects = grouped.map { name, imgs in
+            let running = containers.contains { c in
+                c.running && imgs.contains { img in
+                    c.image == "\(img.repository):\(img.tag)" || c.image.contains(img.id)
+                }
+            }
+            return DockerComposeProject(name: name, images: imgs, running: running)
+        }
+        .sorted { $0.totalBytes > $1.totalBytes }
+        self.attributions = attributions
     }
 
     public var standaloneImages: [DockerImage] {
         images.filter { $0.composeProject?.isEmpty ?? true }
             .sorted { $0.sizeBytes > $1.sizeBytes }
+    }
+
+    /// Convenience: the attribution for a standalone image, or nil when the
+    /// image has no resolvable project and no referencing container — i.e.
+    /// it's orphaned.
+    public func attribution(for image: DockerImage) -> DockerImageAttribution? {
+        attributions[image.id]
     }
 }
 
@@ -109,7 +165,17 @@ public enum DockerScanner {
             return inspect.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         let containers = parseContainers(containersRaw?.stdout ?? "")
-        return DockerState(images: images, containers: containers)
+        // Container inspect gives working dir + bind mounts for the
+        // non-compose attribution heuristic. One `docker inspect` per
+        // container (cheap; containers are few). Read-only.
+        let attributions = parseAttributions(images: images, containers: containers) { containerID in
+            guard let inspect = Shell.run(docker, ["inspect", "--type", "container",
+                    containerID, "--format",
+                    "{{.Config.WorkingDir}}|{{range .Mounts}}{{if eq .Type \"bind\"}}{{.Source}},{{end}}{{end}}"]),
+                  inspect.succeeded else { return "" }
+            return inspect.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return DockerState(images: images, containers: containers, attributions: attributions)
     }
 
     /// Raw `docker system df` table for the secondary detail view. Delegates
@@ -151,6 +217,91 @@ public enum DockerScanner {
                 running: cols[3].hasPrefix("Up")
             )
         }
+    }
+
+    /// Builds heuristic attributions for standalone (non-compose) images.
+    /// `containerInspect` returns, for a container id, a single string of the
+    /// form `workingDir|bindSrc1,bindSrc2,` — matching the `--format` template
+    /// used in `scan()` (empty string when inspect fails).
+    ///
+    /// An image gets an attribution entry only when at least one container
+    /// references it (by repo:tag or image-id substring). `inUse` is true
+    /// when any referencing container is running. `projectGuess` is inferred
+    /// from the working dir or a bind mount's source path — the deepest
+    /// directory name that isn't a root/home/tmp trivial — falling back to
+    /// the container name and finally the image repo. Images with no
+    /// referencing container get no entry (truly orphaned).
+    public static func parseAttributions(
+        images: [DockerImage],
+        containers: [DockerContainer],
+        containerInspect: (String) -> String
+    ) -> [String: DockerImageAttribution] {
+        let standalone = images.filter { $0.composeProject?.isEmpty ?? true }
+        var out: [String: DockerImageAttribution] = [:]
+        for img in standalone {
+            // Containers referencing this image (repo:tag or id substring).
+            let refs = containers.filter { c in
+                c.image == "\(img.repository):\(img.tag)" || c.image.contains(img.id)
+            }
+            guard !refs.isEmpty else { continue }
+            let inUse = refs.contains { $0.running }
+            // First referencing container whose inspect resolves to a guess.
+            var guess: String? = nil
+            for ref in refs {
+                if let g = inferProject(from: containerInspect(ref.id), container: ref, image: img) {
+                    guess = g
+                    break
+                }
+            }
+            out[img.id] = DockerImageAttribution(projectGuess: guess, inUse: inUse)
+        }
+        return out
+    }
+
+    /// Picks a project name from a container's `workingDir|bindSources` string.
+    /// Prefers a bind mount source (project dirs are usually bind-mounted in),
+    /// then the working dir, then falls back to the container name and image
+    /// repo. Trivial paths (`/`, `$HOME`, `/tmp`, `/app`, `/data`, …) are
+    /// rejected so we don't surface "app" or "tmp" as a project.
+    private static func inferProject(from inspect: String, container: DockerContainer, image: DockerImage) -> String? {
+        let parts = inspect.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+        let workingDir = parts.first.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) } ?? ""
+        let bindSources = parts.count > 1
+            ? parts[1].split(separator: ",").map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            : []
+        // Prefer the deepest non-trivial directory name from any bind mount,
+        // then the working dir. Bind mounts pointing at a project root are the
+        // strongest signal that the image belongs to that project.
+        for src in bindSources {
+            if let name = meaningfulDirName(src) { return name }
+        }
+        if let name = meaningfulDirName(workingDir) { return name }
+        // Fall back to the container name (strip a trailing `-1`/`_1` replica
+        // suffix that compose-style naming leaves even for plain `docker run`).
+        let trimmedName = container.name.replacingOccurrences(of: #"[-_]\d+$"#, with: "", options: .regularExpression)
+        if !trimmedName.isEmpty { return trimmedName }
+        // Last resort: the image repo, when it's not "<none>".
+        if !image.dangling && !image.repository.isEmpty { return image.repository }
+        return nil
+    }
+
+    /// The last path component of `path` when it's a meaningful project-ish
+    /// directory — rejecting trivial roots that would produce useless guesses
+    /// like "app", "tmp", or the home dir name.
+    private static func meaningfulDirName(_ path: String) -> String? {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let last = (trimmed as NSString).lastPathComponent
+        guard !last.isEmpty else { return nil }
+        let trivial: Set<String> = [
+            "/", "app", "apps", "src", "code", "workspace", "workspaces",
+            "data", "tmp", "temp", "var", "opt", "home", "root", "Users",
+            "mnt", "host", "project", "projects", "repo",
+        ]
+        if trivial.contains(last) { return nil }
+        // Reject a bare home dir (`/Users/jayansh`) — not a project name.
+        if trimmed.hasPrefix("/Users/") && trimmed.split(separator: "/").count == 3 { return nil }
+        return last
     }
 
     /// Parses a human docker size ("100MB", "1.2GB", "5.43kB") to bytes.
