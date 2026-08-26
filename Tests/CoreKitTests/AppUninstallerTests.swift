@@ -107,4 +107,99 @@ struct AppUninstallerTests {
         )
         #expect(AppUninstaller.actions(for: app).isEmpty)
     }
+
+    // MARK: - Last-used label
+
+    @Test func lastUsedLabelNeverForNil() {
+        #expect(AppUninstaller.lastUsedLabel(for: nil, now: Date()) == "Never")
+    }
+
+    @Test func lastUsedLabelJustNow() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let date = now.addingTimeInterval(-30)   // 30s ago
+        #expect(AppUninstaller.lastUsedLabel(for: date, now: now) == "Just now")
+    }
+
+    @Test func lastUsedLabelMinutes() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let date = now.addingTimeInterval(-5 * 60)  // 5 min ago
+        #expect(AppUninstaller.lastUsedLabel(for: date, now: now) == "5 min ago")
+    }
+
+    @Test func lastUsedLabelHours() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let date = now.addingTimeInterval(-3 * 3600)  // 3 hr ago
+        #expect(AppUninstaller.lastUsedLabel(for: date, now: now) == "3 hr ago")
+    }
+
+    @Test func lastUsedLabelDays() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let date = now.addingTimeInterval(-12 * 86400)  // 12 days ago
+        #expect(AppUninstaller.lastUsedLabel(for: date, now: now) == "12 days ago")
+    }
+
+    @Test func lastUsedLabelMonthsAndYears() {
+        // Build dates by calendar so month/year arithmetic is deterministic
+        // regardless of the test machine's timezone or DST.
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = cal.date(from: DateComponents(year: 2026, month: 8, day: 26))!
+
+        let eightMonthsAgo = cal.date(from: DateComponents(year: 2026, month: 1, day: 1))!
+        #expect(AppUninstaller.lastUsedLabel(for: eightMonthsAgo, now: now) == "7 months ago")
+
+        let twoYearsAgo = cal.date(from: DateComponents(year: 2024, month: 1, day: 1))!
+        #expect(AppUninstaller.lastUsedLabel(for: twoYearsAgo, now: now) == "2 years ago")
+    }
+
+    @Test func lastUsedLabelClockSkewTreatedAsNever() {
+        // A future date (clock skew) should not produce a negative label.
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let future = now.addingTimeInterval(60)
+        #expect(AppUninstaller.lastUsedLabel(for: future, now: now) == "Never")
+    }
+
+    // MARK: - By-last-opened ranking
+
+    @Test func neverOpenedSortsFirst() {
+        let never = InstalledApp(url: URL(fileURLWithPath: "/A"),
+                                  name: "A", bundleID: nil, sizeBytes: 100, lastUsedDate: nil)
+        let used = InstalledApp(url: URL(fileURLWithPath: "/B"),
+                                 name: "B", bundleID: nil, sizeBytes: 500,
+                                 lastUsedDate: Date(timeIntervalSince1970: 1_000_000))
+        // never before used, regardless of size.
+        #expect(AppUninstaller.byLastOpened(never, used) == true)
+        #expect(AppUninstaller.byLastOpened(used, never) == false)
+    }
+
+    @Test func oldestFirstAmongUsed() {
+        let older = InstalledApp(url: URL(fileURLWithPath: "/A"),
+                                  name: "A", bundleID: nil, sizeBytes: 100,
+                                  lastUsedDate: Date(timeIntervalSince1970: 1_000_000))
+        let newer = InstalledApp(url: URL(fileURLWithPath: "/B"),
+                                  name: "B", bundleID: nil, sizeBytes: 500,
+                                  lastUsedDate: Date(timeIntervalSince1970: 2_000_000))
+        #expect(AppUninstaller.byLastOpened(older, newer) == true)
+        #expect(AppUninstaller.byLastOpened(newer, older) == false)
+    }
+
+    @Test func sizeTiebreaksEqualLastUsed() {
+        let date = Date(timeIntervalSince1970: 1_000_000)
+        let small = InstalledApp(url: URL(fileURLWithPath: "/A"),
+                                  name: "A", bundleID: nil, sizeBytes: 100, lastUsedDate: date)
+        let big = InstalledApp(url: URL(fileURLWithPath: "/B"),
+                                name: "B", bundleID: nil, sizeBytes: 500, lastUsedDate: date)
+        // Same date → bigger sorts first (tiebreak).
+        #expect(AppUninstaller.byLastOpened(big, small) == true)
+        #expect(AppUninstaller.byLastOpened(small, big) == false)
+    }
+
+    @Test func sizeTiebreaksBothNeverOpened() {
+        let small = InstalledApp(url: URL(fileURLWithPath: "/A"),
+                                  name: "A", bundleID: nil, sizeBytes: 100, lastUsedDate: nil)
+        let big = InstalledApp(url: URL(fileURLWithPath: "/B"),
+                               name: "B", bundleID: nil, sizeBytes: 500, lastUsedDate: nil)
+        #expect(AppUninstaller.byLastOpened(big, small) == true)
+        #expect(AppUninstaller.byLastOpened(small, big) == false)
+    }
 }
