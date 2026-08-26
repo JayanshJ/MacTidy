@@ -10,6 +10,9 @@ struct SettingsView: View {
     @State private var apiKeyInput = ""
     @State private var keyStatus: String?
     @State private var keyStatusGood = false
+    @State private var isVerifyingKey = false
+    @State private var revealKey = false
+    @State private var storedKeyExists = false
     @State private var isTestingConnection = false
     @State private var connectionStatus: String?
     @State private var connectionStatusGood = false
@@ -131,17 +134,65 @@ struct SettingsView: View {
                         .onChange(of: state.aiConfig.ollamaBaseURL) { _, _ in refreshOllamaModels() }
                 }
                 if state.aiConfig.provider.requiresAPIKey {
-                    SecureField("API key", text: $apiKeyInput)
-                        .autocorrectionDisabled()
-                    if let keyStatus {
-                        Text(keyStatus)
+                    // Stored-key status line — makes it obvious whether a key
+                    // is already on file for this provider, so the user doesn't
+                    // have to infer it from whether the Remove button is live.
+                    HStack(spacing: 6) {
+                        Image(systemName: storedKeyExists
+                            ? "checkmark.seal.fill"
+                            : "key.slash")
+                            .foregroundStyle(storedKeyExists ? Theme.Status.good : Color.secondary)
+                        Text(storedKeyExists
+                            ? "A key is stored in the Keychain for \(state.aiConfig.provider.displayName)."
+                            : "No key stored for \(state.aiConfig.provider.displayName).")
                             .font(.caption)
-                            .foregroundStyle(keyStatusGood ? Color.secondary : Color.orange)
+                            .foregroundStyle(.secondary)
                     }
-                    Button("Save key to Keychain") { saveKey() }
-                        .disabled(apiKeyInput.isEmpty)
-                    Button("Remove stored key", role: .destructive) { removeKey() }
-                        .disabled(KeychainHelper.load(for: state.aiConfig.provider) == nil)
+                    Group {
+                        if revealKey {
+                            TextField("API key", text: $apiKeyInput)
+                                .autocorrectionDisabled()
+                                .textContentType(.password)
+                        } else {
+                            SecureField("API key", text: $apiKeyInput)
+                                .autocorrectionDisabled()
+                        }
+                    }
+                    HStack {
+                        Toggle("Reveal", isOn: $revealKey)
+                            .toggleStyle(.checkbox)
+                            .font(.caption)
+                            .help("Show the key as you type it.")
+                        if storedKeyExists {
+                            Button("Fill from Keychain") { fillFromKeychain() }
+                                .buttonStyle(.borderless)
+                                .font(.caption)
+                                .help("Load the stored key into the field to view or re-save it.")
+                        }
+                    }
+                    if let keyStatus {
+                        HStack(spacing: 6) {
+                            if isVerifyingKey { ProgressView().controlSize(.small) }
+                            Text(keyStatus)
+                                .font(.caption)
+                                .foregroundStyle(keyStatusGood ? Color.secondary : Color.orange)
+                        }
+                    }
+                    Button {
+                        Task { await saveAndVerifyKey() }
+                    } label: {
+                        if isVerifyingKey {
+                            HStack { ProgressView().controlSize(.small); Text("Verifying…") }
+                        } else {
+                            Text("Save & Verify")
+                        }
+                    }
+                    .disabled(apiKeyInput.isEmpty || isVerifyingKey)
+                    .help("Save the key to the Keychain and verify it with a cheap call to the provider.")
+                    if storedKeyExists {
+                        Button("Remove stored key", role: .destructive) { removeKey() }
+                            .disabled(isVerifyingKey)
+                    }
                 }
                 if state.aiConfig.provider == .none {
                     ollamaOneClick
@@ -215,7 +266,16 @@ struct SettingsView: View {
         }
         }
         .frame(minWidth: 480, idealWidth: 560, minHeight: 520, idealHeight: 640)
-        .onAppear { if ollamaDetection == nil { refreshOllamaModels() } }
+        .onAppear {
+            if ollamaDetection == nil { refreshOllamaModels() }
+            refreshStoredKeyStatus()
+        }
+        .onChange(of: state.aiConfig.provider) { _, _ in
+            apiKeyInput = ""
+            keyStatus = nil
+            revealKey = false
+            refreshStoredKeyStatus()
+        }
     }
 
     private var bundledAppIcon: NSImage? {
@@ -228,15 +288,52 @@ struct SettingsView: View {
 
     // MARK: - AI key + connection helpers
 
-    private func saveKey() {
+    /// Refresh `storedKeyExists` for the currently-selected provider.
+    private func refreshStoredKeyStatus() {
+        storedKeyExists = KeychainHelper.load(for: state.aiConfig.provider) != nil
+    }
+
+    /// Loads the stored key into the input field so the user can view or
+    /// re-save it. The field stays masked unless Reveal is on.
+    private func fillFromKeychain() {
+        if let key = KeychainHelper.load(for: state.aiConfig.provider) {
+            apiKeyInput = key
+            keyStatus = nil
+        }
+    }
+
+    /// Saves the entered key to the Keychain, then verifies it with a cheap
+    /// `testConnection` call against the provider. The advisor is a computed
+    /// property that re-reads the Keychain, so the just-saved key is used.
+    private func saveAndVerifyKey() async {
         let provider = state.aiConfig.provider
         do {
             try KeychainHelper.save(apiKeyInput, for: provider)
-            keyStatus = "Key saved to Keychain."
-            keyStatusGood = true
-            apiKeyInput = ""
         } catch {
             keyStatus = "Failed to save key: \(error.localizedDescription)"
+            keyStatusGood = false
+            refreshStoredKeyStatus()
+            return
+        }
+        refreshStoredKeyStatus()
+        isVerifyingKey = true
+        keyStatus = "Key saved — verifying with \(provider.displayName)…"
+        keyStatusGood = true
+        guard let advisor = state.advisor else {
+            isVerifyingKey = false
+            keyStatus = "Key saved, but no advisor is configured to verify it."
+            keyStatusGood = false
+            apiKeyInput = ""
+            return
+        }
+        let result = await advisor.testConnection(config: state.aiConfig)
+        isVerifyingKey = false
+        apiKeyInput = ""
+        if result.hasPrefix("Connected") {
+            keyStatus = "Key saved and verified ✓ \(result)"
+            keyStatusGood = true
+        } else {
+            keyStatus = "Key saved, but verification failed: \(result)"
             keyStatusGood = false
         }
     }
@@ -247,10 +344,12 @@ struct SettingsView: View {
             try KeychainHelper.delete(for: provider)
             keyStatus = "Stored key removed."
             keyStatusGood = true
+            apiKeyInput = ""
         } catch {
             keyStatus = "Failed to remove key: \(error.localizedDescription)"
             keyStatusGood = false
         }
+        refreshStoredKeyStatus()
     }
 
     private func testConnection() async {
