@@ -126,9 +126,11 @@ struct DashboardView: View {
 
     /// Grid of category cards. Each shows the category name, total bytes, a
     /// proportion bar, item count, and a suggest-only badge where relevant.
-    /// Tapping drills into the category's items. When there's nothing to
-    /// clean, a compact empty state replaces the header + grid so the tab
-    /// doesn't waste vertical space on disabled chrome.
+    /// Tapping drills into the category's items. Zero-byte categories are
+    /// filtered out so the grid doesn't waste space on cards with nothing to
+    /// reclaim; when every category is empty, a compact empty state replaces
+    /// the header + grid so the tab doesn't waste vertical space on disabled
+    /// chrome.
     private var categoryGrid: some View {
         Group {
             if state.categoryResults.allSatisfy({ $0.items.isEmpty }) {
@@ -147,7 +149,7 @@ struct DashboardView: View {
                         }
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 240), spacing: Theme.Spacing.md)],
                                   spacing: Theme.Spacing.md) {
-                            ForEach(state.categoryResults) { result in
+                            ForEach(state.categoryResults.filter { $0.totalBytes > 0 }) { result in
                                 categoryCard(result)
                             }
                         }
