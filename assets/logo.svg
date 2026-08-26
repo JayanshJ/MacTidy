@@ -6,15 +6,20 @@
     </linearGradient>
   </defs>
 
-  <!-- squircle plate, app teal accent -->
-  <rect width="512" height="512" rx="114" fill="#1FA0A0"/>
-  <rect width="512" height="512" rx="114" fill="url(#sheen)"/>
+  <!-- squircle plate, app teal accent.
+       Inset ~18pt per side so the icon matches the visual weight of Apple's
+       app-icon template (which carries internal padding) instead of reading
+       "weirdly bigger" than neighboring dock icons. The corner radius scales
+       to the smaller plate. -->
+  <rect x="18" y="18" width="476" height="476" rx="108" fill="#1FA0A0"/>
+  <rect x="18" y="18" width="476" height="476" rx="108" fill="url(#sheen)"/>
 
   <!-- a single disk, mostly empty = space reclaimed.
+       Proportionally smaller so the glyph keeps its margin inside the plate.
        fill + fill-opacity (and stroke + stroke-opacity) are set per element
        on purpose — inheriting from a parent <g> makes macOS's NSImage SVG
        parser drop opacity, flattening the icon when generating AppIcon.icns. -->
-  <circle cx="256" cy="256" r="124" fill="none" stroke="#FFFFFF" stroke-width="44"/>
-  <path d="M256 132 A124 124 0 0 1 380 256" fill="none"
-        stroke="#FFFFFF" stroke-width="44" stroke-opacity="0.38" stroke-linecap="round"/>
+  <circle cx="256" cy="256" r="116" fill="none" stroke="#FFFFFF" stroke-width="42"/>
+  <path d="M256 140 A116 116 0 0 1 372 256" fill="none"
+        stroke="#FFFFFF" stroke-width="42" stroke-opacity="0.38" stroke-linecap="round"/>
 </svg>

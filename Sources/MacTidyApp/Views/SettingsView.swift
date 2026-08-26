@@ -39,11 +39,17 @@ struct SettingsView: View {
                     }
                     Spacer()
                     if let icon = NSImage(named: "AppIcon") ?? bundledAppIcon {
+                        // The app icon asset is full-bleed (the squircle plate
+                        // fills its frame), so at the same nominal size it reads
+                        // visually larger than the SF Symbols around it. Inset
+                        // it slightly so it sits in the row like the other icons.
                         Image(nsImage: icon)
                             .resizable()
                             .interpolation(.high)
-                            .frame(width: 44, height: 44)
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .scaledToFit()
+                            .frame(width: 36, height: 36)
+                            .padding(4)
+                            .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                     }
                 }
             }
