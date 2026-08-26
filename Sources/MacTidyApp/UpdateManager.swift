@@ -118,6 +118,14 @@ final class UpdateManager {
         NSApplication.shared.terminate(nil)
     }
 
+    /// Cancels any in-flight check/download so nothing keeps the run loop
+    /// alive during termination. Called from `AppState.prepareForTermination`.
+    /// The swap helper is already detached by this point, so cancelling the
+    /// download task does not affect a pending swap.
+    func cancelInFlight() {
+        task?.cancel()
+    }
+
     /// Convenience for the UI: open the release page when there's no zip asset.
     func openReleasePage() {
         let url: URL
@@ -258,8 +266,8 @@ final class UpdateManager {
 
     /// Writes a detached shell helper to /tmp and launches it with
     /// `Process.disown`. The helper:
-    ///   1. waits up to 60s for the current MacTidy process to exit,
-    ///   2. trashes the old /Applications/MacTidy.app (fallback rm -rf),
+    ///   1. waits up to 60s for the current MacTidy process to exit (300 × 0.2s),
+    ///   2. rm -rf the old /Applications/MacTidy.app,
     ///   3. moves the new bundle into place,
     ///   4. strips the quarantine attribute (updates aren't notarized),
     ///   5. relaunches the new app,

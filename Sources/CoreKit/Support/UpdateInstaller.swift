@@ -99,7 +99,7 @@ public enum UpdateInstaller {
         log "=== swap helper started (old pid \(currentPID)) ==="
 
         i=0
-        while [ $i -lt 150 ]; do
+        while [ $i -lt 300 ]; do
             if ! kill -0 \(currentPID) 2>/dev/null; then break; fi
             sleep 0.2
             i=$((i + 1))
