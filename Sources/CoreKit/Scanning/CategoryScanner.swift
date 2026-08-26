@@ -76,9 +76,17 @@ public struct CategoryScanner: Sendable {
         case .homebrewCache:
             items = homebrewCache()
         case .nodeModules:
-            items = buildDirs(named: "node_modules", siblingMarker: "package.json")
+            items = buildDirs(named: "node_modules", siblingMarkers: ["package.json"], category: .nodeModules)
         case .rustTargets:
-            items = buildDirs(named: "target", siblingMarker: "Cargo.toml")
+            items = buildDirs(named: "target", siblingMarkers: ["Cargo.toml"], category: .rustTargets)
+        case .podDirs:
+            items = buildDirs(named: "Pods", siblingMarkers: ["Podfile"], category: .podDirs)
+        case .swiftBuildDirs:
+            items = buildDirs(named: ".build", siblingMarkers: ["Package.swift"], category: .swiftBuildDirs)
+        case .gradleBuildDirs:
+            items = buildDirs(named: "build", siblingMarkers: ["build.gradle", "build.gradle.kts"], category: .gradleBuildDirs)
+        case .pythonCaches:
+            items = pythonCaches()
         case .oldInstallers:
             items = oldInstallers()
         case .iosBackups:
@@ -223,12 +231,17 @@ public struct CategoryScanner: Sendable {
         }.value
     }
 
-    /// Finds build directories (node_modules, Rust target/) under the dev
-    /// roots. A sibling marker file (package.json, Cargo.toml) must exist so
-    /// a random folder that happens to share the name isn't suggested.
-    /// These are suggest-only: `detail` carries the owning project name and
-    /// `lastModified` the last build time, so the user can judge activity.
-    private func buildDirs(named name: String, siblingMarker: String) -> [ScanItem] {
+    /// Finds build directories (node_modules, Rust target/, Pods/, .build/,
+    /// Gradle build/) under the dev roots. One or more sibling marker files
+    /// (package.json, Cargo.toml, Podfile, …) must exist so a random folder
+    /// that happens to share the name isn't suggested. `category` labels the
+    /// resulting items; `detail` carries the owning project name and
+    /// `lastModified` the last build time so the user can judge activity.
+    private func buildDirs(
+        named name: String,
+        siblingMarkers: [String],
+        category: Category
+    ) -> [ScanItem] {
         let fm = FileManager.default
         var results: [ScanItem] = []
         for root in devRoots {
@@ -256,20 +269,85 @@ public struct CategoryScanner: Sendable {
                 guard dirName == name else { continue }
 
                 let parent = url.deletingLastPathComponent()
-                let hasMarker = fm.fileExists(atPath: parent.appending(path: siblingMarker).path)
+                let hasMarker = siblingMarkers.contains { fm.fileExists(atPath: parent.appending(path: $0).path) }
                 if hasMarker {
                     enumerator.skipDescendants()
                     results.append(ScanItem(
                         url: url,
                         sizeBytes: DiskScanner.allocatedSize(of: url),
                         isDirectory: true,
-                        category: name == "node_modules" ? .nodeModules : .rustTargets,
+                        category: category,
                         detail: parent.lastPathComponent,
                         lastModified: values.contentModificationDate
                     ))
                 } else if name == "node_modules" {
                     // Not a real npm install dir, but still never worth walking.
                     enumerator.skipDescendants()
+                }
+            }
+        }
+        return results.sorted { $0.sizeBytes > $1.sizeBytes }
+    }
+
+    /// Python bytecode caches and virtualenvs under the dev roots.
+    /// `__pycache__` is always included (regenerable, always safe). `.venv` is
+    /// included only when a sibling project marker (`pyproject.toml`,
+    /// `requirements.txt`, or `setup.py`) confirms it's a project virtualenv —
+    /// a random `.venv` without one is left alone. Skips `.git`, `node_modules`,
+    /// `target`, `build`, `.build`, `DerivedData` so it never re-walks trees
+    /// other categories already surface.
+    private func pythonCaches() -> [ScanItem] {
+        let fm = FileManager.default
+        let venvMarkers = ["pyproject.toml", "requirements.txt", "setup.py"]
+        let skipDirs: Set<String> = [".git", "node_modules", "target", "build", ".build", "DerivedData"]
+        var results: [ScanItem] = []
+        for root in devRoots {
+            guard let enumerator = fm.enumerator(
+                at: root,
+                includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .contentModificationDateKey],
+                options: [.skipsPackageDescendants],
+                errorHandler: { _, _ in true }
+            ) else { continue }
+
+            while let url = enumerator.nextObject() as? URL {
+                guard let values = try? url.resourceValues(
+                    forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .contentModificationDateKey]
+                ) else { continue }
+                if values.isSymbolicLink == true {
+                    enumerator.skipDescendants()
+                    continue
+                }
+                guard values.isDirectory == true else { continue }
+                let dirName = url.lastPathComponent
+                if skipDirs.contains(dirName) || enumerator.level > 12 {
+                    enumerator.skipDescendants()
+                    continue
+                }
+
+                if dirName == "__pycache__" {
+                    results.append(ScanItem(
+                        url: url,
+                        sizeBytes: DiskScanner.allocatedSize(of: url),
+                        isDirectory: true,
+                        category: .pythonCaches,
+                        detail: url.deletingLastPathComponent().lastPathComponent,
+                        lastModified: values.contentModificationDate
+                    ))
+                    enumerator.skipDescendants()
+                } else if dirName == ".venv" {
+                    let parent = url.deletingLastPathComponent()
+                    let hasMarker = venvMarkers.contains { fm.fileExists(atPath: parent.appending(path: $0).path) }
+                    if hasMarker {
+                        enumerator.skipDescendants()
+                        results.append(ScanItem(
+                            url: url,
+                            sizeBytes: DiskScanner.allocatedSize(of: url),
+                            isDirectory: true,
+                            category: .pythonCaches,
+                            detail: parent.lastPathComponent,
+                            lastModified: values.contentModificationDate
+                        ))
+                    }
                 }
             }
         }
