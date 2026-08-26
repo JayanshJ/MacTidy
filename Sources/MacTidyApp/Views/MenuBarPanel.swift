@@ -15,12 +15,14 @@ import CoreKit
 struct MenuBarPanel: View {
     @Environment(AppState.self) private var state
     @Environment(\.openWindow) private var openWindow
+    @State private var diskPressure: DiskPressure?
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
             header
             Divider()
             summary
+            freeSpaceRow
             if !topCategories.isEmpty {
                 Divider()
                 VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
@@ -34,7 +36,23 @@ struct MenuBarPanel: View {
         }
         .padding(Theme.Spacing.md)
         .frame(width: 300)
-        .task { state.monitor.start() }
+        // Card surface so the popover reads as the same product as the
+        // dashboard — the underPageBackgroundColor fill + hairline border
+        // the rest of the app uses, instead of default SwiftUI on the
+        // system popover background.
+        .background(
+            RoundedRectangle(cornerRadius: Theme.cardRadius)
+                .fill(Color(nsColor: .underPageBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: Theme.cardRadius)
+                .strokeBorder(.separator.opacity(0.6), lineWidth: 0.5)
+        )
+        .tint(Theme.accent)
+        .task {
+            state.monitor.start()
+            diskPressure = await Task.detached { DiskPressure.current() }.value
+        }
     }
 
     // MARK: - Header
@@ -65,8 +83,8 @@ struct MenuBarPanel: View {
                     .resizable()
                     .interpolation(.high)
             } else {
-                Image(systemName: "circle.dashed")
-                    .font(.system(size: 22, weight: .light))
+                Image(systemName: "internaldrive")
+                    .font(.system(size: 18, weight: .regular))
                     .foregroundStyle(Theme.accent)
             }
         }
@@ -124,6 +142,27 @@ struct MenuBarPanel: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// A live free-space ticker from `DiskPressure.current()` — the actual
+    /// free bytes on the boot volume, so the panel shows both "what you could
+    /// reclaim" and "what's free now" in the same branded surface.
+    @ViewBuilder
+    private var freeSpaceRow: some View {
+        if let pressure = diskPressure, pressure.isAvailable {
+            HStack(spacing: 6) {
+                Image(systemName: "internaldrive")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("\(pressure.freeBytes.formattedBytes) free")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text("\(Int(pressure.usedFraction * 100))% used")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
     // MARK: - Category breakdown
 
     /// Top reclaimable categories to list under the headline. Mirrors the
@@ -142,7 +181,7 @@ struct MenuBarPanel: View {
         HStack {
             Image(systemName: "tray.full")
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(Theme.accent.opacity(0.8))
             Text(result.category.displayName)
                 .font(.callout)
                 .lineLimit(1)

@@ -21,7 +21,9 @@ struct MacTidyApp: App {
         }
         .windowToolbarStyle(.unified(showsTitle: false))
         // The resident menu bar presence: quick-check summary + open/scan.
-        MenuBarExtra("MacTidy", systemImage: "paintbrush") {
+        // `internaldrive` (a disk glyph) echoes the app icon's "mostly-empty
+        // disk = space reclaimed" mark and reads as storage cleanup at 16px.
+        MenuBarExtra("MacTidy", systemImage: "internaldrive") {
             MenuBarPanel()
                 .environment(state)
         }
