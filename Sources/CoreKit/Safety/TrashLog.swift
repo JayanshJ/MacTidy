@@ -111,6 +111,31 @@ public final class TrashLog: @unchecked Sendable {
         queue.sync { try? FileManager.default.removeItem(at: fileURL) }
     }
 
+    /// Reconciles the log against the actual Trash: drops records whose
+    /// `trashLocation` no longer exists on disk (the user emptied the Trash
+    /// in Finder, or restored+deleted the item elsewhere). Records with no
+    /// recorded location are dropped too — there's nothing to undo. Read-only
+    /// except for the log file itself; never touches the Trash. Returns the
+    /// number of records pruned.
+    @discardableResult
+    public func pruneMissing() -> Int {
+        let fm = FileManager.default
+        return queue.sync {
+            guard let data = try? Data(contentsOf: fileURL),
+                  var entries = try? JSONDecoder().decode([TrashRecord].self, from: data)
+            else { return 0 }
+            let before = entries.count
+            entries.removeAll { record in
+                guard let trash = record.trashLocation else { return true }
+                return !fm.fileExists(atPath: trash.path)
+            }
+            let pruned = before - entries.count
+            guard pruned > 0 else { return 0 }
+            try? JSONEncoder().encode(entries).write(to: fileURL, options: .atomic)
+            return pruned
+        }
+    }
+
     /// Removes records older than the given number of days. No-op when `days`
     /// is zero or negative. The items themselves stay in the Trash — only the
     /// undo log entries are dropped.

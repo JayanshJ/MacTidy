@@ -58,6 +58,43 @@ struct TrashLogTests {
         #expect(log.load().isEmpty)
     }
 
+    @Test func pruneMissingDropsRecordsNoLongerInTrash() throws {
+        let fm = FileManager.default
+        let sandbox = fm.temporaryDirectory.appending(path: "mactidy-trash-\(UUID().uuidString)")
+        try fm.createDirectory(at: sandbox, withIntermediateDirectories: true)
+        let storage = fm.temporaryDirectory.appending(path: "trash-log-\(UUID().uuidString).json")
+        let log = TrashLog(storageURL: storage)
+        defer {
+            try? fm.removeItem(at: sandbox)
+            try? fm.removeItem(at: storage)
+        }
+
+        // A real trashed file (its Trash location exists)…
+        let liveFile = sandbox.appending(path: "live.txt")
+        try Data("live".utf8).write(to: liveFile)
+        let liveTrash = try Trasher.trash(liveFile)
+
+        // …and a record pointing at a Trash location that's gone (the user
+        // emptied the Trash in Finder between sessions).
+        let ghost = TrashRecord(
+            original: URL(fileURLWithPath: "/tmp/ghost.txt"),
+            trashLocation: URL(fileURLWithPath: "/Users/ Deleted/.Trash/ghost.txt"),
+            date: Date(), bytes: 123, kind: .deletion)
+
+        log.append([TrashRecord(
+            original: liveFile, trashLocation: liveTrash,
+            date: Date(), bytes: 4, kind: .deletion), ghost])
+        #expect(log.load().count == 2)
+
+        let pruned = log.pruneMissing()
+        #expect(pruned == 1)
+        let remaining = log.load()
+        #expect(remaining.count == 1)
+        #expect(remaining.first?.original.lastPathComponent == "live.txt")
+
+        try? fm.removeItem(at: liveTrash)
+    }
+
     @Test func restoreSurvivesCollisionAtOriginalPath() throws {
         let fm = FileManager.default
         let sandbox = fm.temporaryDirectory.appending(path: "mactidy-trash-\(UUID().uuidString)")

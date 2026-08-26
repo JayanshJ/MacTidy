@@ -61,6 +61,10 @@ final class AppState {
     /// Everything MacTidy has trashed, newest first. Drives the "Recently
     /// Trashed" view and the post-cleanup Undo toast.
     var recentTrashed: [TrashRecord] = []
+    /// Current size of `~/.Trash` in bytes. Observable so the Trash nudge card
+    /// and its dashboard gate update live after a trash (and after the user
+    /// empties the Trash in Finder) instead of only on first appear.
+    var trashBytes: Int64 = 0
     /// The most recent outcome, for the Undo toast.
     var lastUndoableOutcome: (records: [TrashRecord], label: String)?
 
@@ -124,6 +128,7 @@ final class AppState {
         // Restore persisted state so relaunch isn't a blank screen + full rescan.
         self.recentTrashed = trashLog.load()
         self.cleanupHistory = cleanupLog.load()
+        self.trashBytes = TrashUsage.totalBytes()
         self.scanHistory = scanHistoryStore.load()
         // The one-time first-reclaim milestone: nil until the first real
         // cleanup that frees space, and only ever set once. Read from
@@ -452,6 +457,8 @@ final class AppState {
         let destination = try Restorer.restore(record)
         trashLog.remove(record.id)
         recentTrashed = trashLog.load()
+        // The item just left the Trash — republish so the nudge card updates.
+        refreshTrashBytes()
         return destination
     }
 
@@ -484,8 +491,21 @@ final class AppState {
     }
 
     func refreshLogs() {
+        // Reconcile the Recently Trashed list with the actual Trash: drop
+        // entries whose Trash location no longer exists (the user emptied the
+        // Trash in Finder between sessions) before showing the list.
+        trashLog.pruneMissing()
         recentTrashed = trashLog.load()
         cleanupHistory = cleanupLog.load()
+        refreshTrashBytes()
+    }
+
+    /// Re-sizes `~/.Trash` and republishes `trashBytes` so the nudge card and
+    /// its dashboard gate reflect the current Trash — call after a trash and
+    /// when the app becomes active (the user may have emptied the Trash in
+    /// Finder). Read-only.
+    func refreshTrashBytes() {
+        trashBytes = TrashUsage.totalBytes()
     }
 
     // MARK: - Recording
@@ -534,6 +554,9 @@ final class AppState {
             firstReclaimMilestone = outcome.reclaimedBytes
             UserDefaults.standard.set(outcome.reclaimedBytes, forKey: "MacTidy.firstReclaimMilestone")
         }
+        // Republish the Trash size so the nudge card updates live (we just
+        // added bytes to the Trash).
+        refreshTrashBytes()
     }
 
     private func recordDedupOutcome(
@@ -559,6 +582,7 @@ final class AppState {
         ))
         cleanupHistory = cleanupLog.load()
         lastUndoableOutcome = (records, "Deduplicated \(outcome.deduplicated.count) cop\(outcome.deduplicated.count == 1 ? "y" : "ies") (\(outcome.reclaimedBytes.formattedBytes))")
+        refreshTrashBytes()
     }
 
     // MARK: - Scan persistence

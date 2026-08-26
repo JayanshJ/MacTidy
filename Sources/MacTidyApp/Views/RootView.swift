@@ -15,6 +15,10 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(
             for: NSApplication.didBecomeActiveNotification)) { _ in
             state.refreshFDA()
+            // The user may have emptied the Trash in Finder while we were
+            // inactive — reconcile the Recently Trashed list and the Trash
+            // size nudge with the actual Trash.
+            state.refreshLogs()
         }
         .task {
             if state.fdaGranted && state.autoScanOnLaunch && state.categoryResults.isEmpty {

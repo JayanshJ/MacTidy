@@ -11,7 +11,7 @@ struct TrashNudgeCard: View {
     /// Trash isn't meaningfully holding reclaimable space.
     static let threshold: Int64 = 1_073_741_824
 
-    @State private var bytes: Int64 = 0
+    @Environment(AppState.self) private var state
 
     var body: some View {
         HStack(spacing: Theme.Spacing.md) {
@@ -19,7 +19,7 @@ struct TrashNudgeCard: View {
                 .font(.title2)
                 .foregroundStyle(Theme.Status.caution)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Your Trash holds \(bytes.formattedBytes)")
+                Text("Your Trash holds \(state.trashBytes.formattedBytes)")
                     .font(.callout.bold())
                 Text("Empty it in Finder to reclaim that space for real. MacTidy never empties the Trash itself.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -42,7 +42,6 @@ struct TrashNudgeCard: View {
             RoundedRectangle(cornerRadius: Theme.cardRadius)
                 .strokeBorder(Theme.Status.caution.opacity(0.25), lineWidth: 0.5)
         )
-        .task { bytes = TrashUsage.totalBytes() }
     }
 
     /// Opens the Trash in Finder via AppleScript (the reliable way to focus
