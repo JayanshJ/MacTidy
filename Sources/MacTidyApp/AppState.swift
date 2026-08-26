@@ -594,32 +594,26 @@ final class AppState {
         kind: TrashRecord.Kind
     ) {
         guard !outcome.trashed.isEmpty else { return }
-        // Build persisted trash records carrying per-item sizes from the plan.
-        let sizeByPath = Dictionary(plan.candidates.map { ($0.url.path, $0.sizeBytes) },
-                                    uniquingKeysWith: { a, _ in a })
-        let records = outcome.trashed.compactMap { record -> TrashRecord? in
-            guard record.trashLocation != nil else { return nil }
-            return TrashRecord(
-                original: record.original,
-                trashLocation: record.trashLocation,
-                date: Date(),
-                bytes: sizeByPath[record.original.path] ?? 0,
-                kind: kind
-            )
-        }
+        // Delegate the pure record-building to `OutcomeRecorder` so it's
+        // unit-tested; `AppState` owns only the side-effects (log writes,
+        // milestone persistence, Trash-size refresh).
+        let records = OutcomeRecorder.trashRecords(for: outcome, plan: plan, kind: kind)
         trashLog.append(records)
         recentTrashed = trashLog.load()
-        cleanupLog.append(CleanupEntry(
-            kind: cleanupKind(for: kind),
-            reclaimedBytes: outcome.reclaimedBytes,
-            itemCount: outcome.trashed.count
-        ))
+        if let entry = OutcomeRecorder.cleanupEntry(for: outcome, cleanupKind: cleanupKind(for: kind)) {
+            cleanupLog.append(entry)
+        }
         cleanupHistory = cleanupLog.load()
-        lastUndoableOutcome = (records, "Moved \(outcome.trashed.count) item\(outcome.trashed.count == 1 ? "" : "s") (\(outcome.reclaimedBytes.formattedBytes)) to Trash")
+        if let label = OutcomeRecorder.undoLabel(for: outcome) {
+            lastUndoableOutcome = (records, label)
+        }
         // One-time first-reclaim celebration: fire only on the user's first
         // real cleanup that actually frees space. Persisted so it never fires
         // again (a future relaunch sees the stored value and skips).
-        if firstReclaimMilestone == nil, outcome.reclaimedBytes > 0 {
+        if OutcomeRecorder.shouldFireFirstReclaimMilestone(
+            existingMilestone: firstReclaimMilestone,
+            reclaimedBytes: outcome.reclaimedBytes
+        ) {
             firstReclaimMilestone = outcome.reclaimedBytes
             UserDefaults.standard.set(outcome.reclaimedBytes, forKey: "MacTidy.firstReclaimMilestone")
         }

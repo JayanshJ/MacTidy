@@ -2,50 +2,80 @@ import Foundation
 import Testing
 @testable import CoreKit
 
+/// `ShellActionExecutor` is pure logic over the `ShellAction` protocol — per-item
+/// fail-closed execution, where a failure is reported and never aborts the batch.
+/// These tests pin that contract with a stub action that succeeds/fails on
+/// command, without shelling out to anything.
 @Suite("ShellActionExecutor")
 struct ShellActionExecutorTests {
-    /// A test action wrapping an arbitrary command. `shouldFail` makes it run
-    /// `/bin/false` so exitCode != 0.
-    struct TestAction: ShellAction {
+    /// A deterministic `ShellAction` whose `run()` returns a configured result,
+    /// so we can exercise success, non-zero exit, and launch-failure paths.
+    private struct StubAction: ShellAction {
         let id = UUID()
         let displayName: String
         let commandSummary: String
-        let reversible = false
+        let reversible: Bool = false
         let estimatedBytes: Int64
-        let shouldFail: Bool
-        var commandPath: String { shouldFail ? "/usr/bin/false" : "/usr/bin/true" }
-        func run() -> Shell.Output? { Shell.run(commandPath, []) }
+        let result: Shell.Output?
+
+        func run() -> Shell.Output? { result }
     }
 
-    @Test func successfulActionSucceedsAndCountsBytes() {
-        let action = TestAction(displayName: "t", commandSummary: "docker rmi abc",
-                                estimatedBytes: 500, shouldFail: false)
-        let outcome = ShellActionExecutor.execute([action])
-        #expect(outcome.succeeded.count == 1)
-        #expect(outcome.failed.isEmpty)
-        #expect(outcome.reclaimedBytes == 500)
-    }
-
-    @Test func failingActionDoesNotAbortTheRest() {
-        let good = TestAction(displayName: "good", commandSummary: "docker rmi good",
-                              estimatedBytes: 300, shouldFail: false)
-        let bad = TestAction(displayName: "bad", commandSummary: "docker rmi bad",
-                             estimatedBytes: 700, shouldFail: true)
-        let outcome = ShellActionExecutor.execute([bad, good])
-        #expect(outcome.succeeded.count == 1)
-        #expect(outcome.succeeded.first?.displayName == "good")
-        #expect(outcome.failed.count == 1)
-        #expect(outcome.failed.first?.action.displayName == "bad")
-        // Reclaimed bytes only counts succeeded actions.
-        #expect(outcome.reclaimedBytes == 300)
-        // Failure carries a non-empty message (stderr or fallback).
-        #expect((outcome.failed.first?.message.isEmpty ?? true) == false)
-    }
-
-    @Test func emptyBatchIsHarmless() {
+    @Test func emptyBatchReturnsEmptyOutcome() {
         let outcome = ShellActionExecutor.execute([])
         #expect(outcome.succeeded.isEmpty)
         #expect(outcome.failed.isEmpty)
         #expect(outcome.reclaimedBytes == 0)
+    }
+
+    @Test func allSucceedAreRecordedWithReclaimedBytes() {
+        let a = StubAction(displayName: "A", commandSummary: "rm a", estimatedBytes: 100,
+                           result: Shell.Output(stdout: "", stderr: "", exitCode: 0))
+        let b = StubAction(displayName: "B", commandSummary: "rm b", estimatedBytes: 250,
+                           result: Shell.Output(stdout: "", stderr: "", exitCode: 0))
+        let outcome = ShellActionExecutor.execute([a, b])
+        #expect(outcome.succeeded.count == 2)
+        #expect(outcome.failed.isEmpty)
+        // reclaimedBytes sums the *succeeded* actions' estimates.
+        #expect(outcome.reclaimedBytes == 350)
+    }
+
+    @Test func nonZeroExitIsFailureButDoesNotAbortBatch() {
+        // The middle action fails (exit 1); the ones before and after still run.
+        let a = StubAction(displayName: "A", commandSummary: "rm a", estimatedBytes: 100,
+                           result: Shell.Output(stdout: "", stderr: "", exitCode: 0))
+        let bad = StubAction(displayName: "bad", commandSummary: "rm bad", estimatedBytes: 999,
+                             result: Shell.Output(stdout: "", stderr: "no such container", exitCode: 1))
+        let c = StubAction(displayName: "C", commandSummary: "rm c", estimatedBytes: 50,
+                           result: Shell.Output(stdout: "", stderr: "", exitCode: 0))
+        let outcome = ShellActionExecutor.execute([a, bad, c])
+        #expect(outcome.succeeded.count == 2)          // a and c
+        #expect(outcome.failed.count == 1)            // bad
+        // Failed action's bytes are NOT counted toward reclaim.
+        #expect(outcome.reclaimedBytes == 150)
+        let failure = outcome.failed.first
+        #expect(failure?.action.displayName == "bad")
+        #expect(failure?.message == "no such container")
+    }
+
+    @Test func nilOutputIsLaunchFailureWithHelpfulMessage() {
+        // `run()` returning nil means the process couldn't be launched at all.
+        let dead = StubAction(displayName: "dead", commandSummary: "docker rm x",
+                              estimatedBytes: 10, result: nil)
+        let outcome = ShellActionExecutor.execute([dead])
+        #expect(outcome.succeeded.isEmpty)
+        #expect(outcome.failed.count == 1)
+        #expect(outcome.failed.first?.message == "Failed to launch command.")
+    }
+
+    @Test func emptyStderrFallsBackToExitCodeMessage() {
+        let silent = StubAction(displayName: "silent", commandSummary: "rm x",
+                                estimatedBytes: 5,
+                                result: Shell.Output(stdout: "", stderr: "   ", exitCode: 2))
+        let outcome = ShellActionExecutor.execute([silent])
+        #expect(outcome.failed.count == 1)
+        // Whitespace-only stderr → a synthesized "exited with code N" message
+        // rather than an empty, unhelpful one.
+        #expect(outcome.failed.first?.message == "Command exited with code 2.")
     }
 }
