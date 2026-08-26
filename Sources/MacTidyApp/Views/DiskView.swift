@@ -23,6 +23,7 @@ struct DiskView: View {
             case .explorer: DirectoryExplorerView()
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -104,6 +105,7 @@ struct CategoryCleanupView: View {
                         categorySection(result)
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 SelectionFooter(
                     selectedCount: selection.count,
                     selectedBytes: selectedItems.reduce(0) { $0 + $1.sizeBytes },
@@ -188,8 +190,10 @@ struct DirectoryExplorerView: View {
                 }
                 .padding(.horizontal, 8)
                 .padding(.bottom, 8)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 list
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .onAppear { if items.isEmpty { rescan() } }

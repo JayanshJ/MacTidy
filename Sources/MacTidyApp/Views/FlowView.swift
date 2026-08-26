@@ -66,7 +66,9 @@ struct TrashSheetView: View {
             .padding(.horizontal, Theme.Spacing.md).padding(.vertical, Theme.Spacing.sm)
             Divider()
             TrashView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .frame(minWidth: 560, idealWidth: 640, minHeight: 440, idealHeight: 560)
     }
 }
 
@@ -83,7 +85,9 @@ struct DiskSheetView: View {
             .padding(.horizontal, Theme.Spacing.md).padding(.vertical, Theme.Spacing.sm)
             Divider()
             DiskView()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .frame(minWidth: 720, idealWidth: 880, minHeight: 560, idealHeight: 640)
     }
 }
 
@@ -151,13 +155,15 @@ struct FlowToolbar: View {
     @Binding var showDisk: Bool
 
     var body: some View {
-        HStack(spacing: Theme.Spacing.md) {
+        HStack(spacing: Theme.Spacing.sm) {
             if state.flowPhase != .welcome {
                 Button {
                     withAnimation(.snappy) { state.resetFlow() }
                 } label: {
                     Label("Home", systemImage: "chevron.left")
                 }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
                 .disabled(state.flowPhase == .scanning)
                 .help("Back to welcome")
             }
@@ -165,15 +171,25 @@ struct FlowToolbar: View {
             Button { showDisk = true } label: {
                 Label("Browse disk", systemImage: "internaldrive")
             }
+            .buttonStyle(.bordered)
+            .controlSize(.regular)
+            .imageScale(.medium)
             .help("Explore your disk manually")
             Button { showTrash = true } label: {
                 Label("Recently trashed", systemImage: "trash")
             }
+            .buttonStyle(.bordered)
+            .controlSize(.regular)
+            .imageScale(.medium)
             .badge(state.recentTrashed.count)
             .help("View and restore trashed items")
             Button { showSettings = true } label: {
                 Label("Settings", systemImage: "gearshape")
             }
+            .buttonStyle(.bordered)
+            .controlSize(.regular)
+            .imageScale(.medium)
+            .help("App settings")
         }
         .padding(.horizontal, Theme.Spacing.lg)
         .padding(.vertical, Theme.Spacing.sm)

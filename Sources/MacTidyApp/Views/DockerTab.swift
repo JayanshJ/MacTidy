@@ -15,6 +15,13 @@ struct DashboardDocker: View {
     @State private var pendingActions: [any ShellAction] = []
     @State private var showSheet = false
     @State private var removeVolumes = false
+    /// Set while we're waiting for Docker Desktop's daemon to come up after
+    /// the user clicked "Open Docker". Drives the "Waiting for Docker…"
+    /// state and re-runs `scan()` the moment `availability()` flips to
+    /// `.available`, so the tab refreshes itself instead of staying stuck
+    /// on the "Open Docker" button.
+    @State private var waitingForDocker = false
+    @State private var waitTask: Task<Void, Never>?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -30,6 +37,15 @@ struct DashboardDocker: View {
             )
         }
         .task { if availability == nil { await scan() } }
+        // Catch the case where Docker was started from Spotlight/Finder
+        // while the app was in the background: re-check availability when
+        // the user returns to the app, and refresh the list if it's now up.
+        .onReceive(NotificationCenter.default.publisher(
+            for: NSApplication.didBecomeActiveNotification)) { _ in
+            guard !waitingForDocker, availability != .available else { return }
+            Task { await scan() }
+        }
+        .onDisappear { waitTask?.cancel() }
     }
 
     private var header: some View {
@@ -56,11 +72,20 @@ struct DashboardDocker: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if availability == .notRunning {
             VStack(spacing: Theme.Spacing.md) {
-                ContentUnavailableView("Docker is not running",
-                    systemImage: "power.circle",
-                    description: Text("Start Docker Desktop, then rescan."))
-                Button("Open Docker") { openDocker() }
-                    .buttonStyle(.borderedProminent)
+                if waitingForDocker {
+                    ProgressView("Waiting for Docker to start…")
+                        .controlSize(.large)
+                    Text("Docker Desktop's daemon can take a while to be ready. This will refresh automatically.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                } else {
+                    ContentUnavailableView("Docker is not running",
+                        systemImage: "power.circle",
+                        description: Text("Start Docker Desktop, then rescan."))
+                    Button("Open Docker") { openDocker() }
+                        .buttonStyle(.borderedProminent)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let ds = dockerState {
@@ -196,6 +221,25 @@ struct DashboardDocker: View {
     private func openDocker() {
         NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: "/Applications/Docker.app"),
                                            configuration: NSWorkspace.OpenConfiguration())
+        // Launching the app isn't enough — Docker Desktop's daemon takes
+        // tens of seconds to accept commands. Poll `availability()` until
+        // it's ready (or we time out), then run a real scan so the tab
+        // transitions to the image/container list without a manual Rescan.
+        waitTask?.cancel()
+        waitingForDocker = true
+        waitTask = Task {
+            let deadline = 90_000_000_000  // 90s — Docker Desktop is slow.
+            let start = DispatchTime.now().uptimeNanoseconds
+            while !Task.isCancelled {
+                if DockerScanner.availability() == .available {
+                    await scan()
+                    break
+                }
+                if DispatchTime.now().uptimeNanoseconds - start > deadline { break }
+                try? await Task.sleep(for: .seconds(2))
+            }
+            await MainActor.run { waitingForDocker = false }
+        }
     }
 }
 
