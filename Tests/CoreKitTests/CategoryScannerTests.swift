@@ -243,4 +243,159 @@ struct CategoryScannerTests {
         // Python caches is suggest-only (because of .venv).
         #expect(!Category.pythonCaches.isPreselectable)
     }
+
+    // MARK: - 1.8 scopes: JS build dirs, container caches, Xcode Archives, Mail
+
+    @Test func jsBuildDirsFindsNextAndNuxt() async throws {
+        let fm = FileManager.default
+        let (home, devRoot) = try makeFakeHomeWithDevRoot()
+        defer { try? fm.removeItem(at: home) }
+
+        let next = devRoot.appending(path: "NextApp")
+        try seed(next.appending(path: ".next/static"))
+        try Data("x".utf8).write(to: next.appending(path: "package.json"))
+        let nuxt = devRoot.appending(path: "NuxtApp")
+        try seed(nuxt.appending(path: ".nuxt/dist"))
+        try Data("x".utf8).write(to: nuxt.appending(path: "package.json"))
+        // A .next dir with no sibling package.json → not listed.
+        let decoy = devRoot.appending(path: "Decoy")
+        try seed(decoy.appending(path: ".next/static"))
+
+        let result = await CategoryScanner(home: home, devRoots: [devRoot]).scan(.jsBuildDirs)
+        #expect(result.items.count == 2)
+        let names = Set(result.items.compactMap(\.detail))
+        #expect(names == ["NextApp", "NuxtApp"])
+        #expect(Category.jsBuildDirs.isPreselectable)
+    }
+
+    @Test func containerCachesFindsAppCaches() async throws {
+        let fm = FileManager.default
+        let home = try makeFakeHome()
+        defer { try? fm.removeItem(at: home) }
+
+        let caches = home.appending(path: "Library/Containers/com.example.app/Data/Library/Caches")
+        try seed(caches.appending(path: "BlobCache"))
+        // Mail's container caches must be skipped (mailDownloads covers it).
+        let mailCaches = home.appending(path: "Library/Containers/com.apple.Mail/Data/Library/Caches")
+        try seed(mailCaches.appending(path: "Attachments"))
+
+        let result = await CategoryScanner(home: home).scan(.containerCaches)
+        #expect(result.items.count == 1)
+        #expect(result.items.first?.detail == "com.example.app")
+        #expect(Category.containerCaches.isPreselectable)
+    }
+
+    @Test func xcodeArchivesListed() async throws {
+        let fm = FileManager.default
+        let home = try makeFakeHome()
+        defer { try? fm.removeItem(at: home) }
+
+        // Real Xcode layout: Archives/<date>/<App>.xcarchive. The scan
+        // descends the date folder and surfaces each .xcarchive bundle.
+        let archive = home.appending(path: "Library/Developer/Xcode/Archives/2026-08-26/MyApp.xcarchive")
+        try seed(archive.appending(path: "dSYMs"))
+        // Must be suggest-only — symbols for past uploads.
+        #expect(!Category.xcodeArchives.isPreselectable)
+
+        let result = await CategoryScanner(home: home).scan(.xcodeArchives)
+        #expect(result.items.count == 1)
+        #expect(result.items.first?.url.lastPathComponent == "MyApp.xcarchive")
+    }
+
+    @Test func mailDownloadsListed() async throws {
+        let fm = FileManager.default
+        let home = try makeFakeHome()
+        defer { try? fm.removeItem(at: home) }
+
+        let downloads = home.appending(path: "Library/Containers/com.apple.Mail/Data/Library/Mail Downloads")
+        try seed(downloads.appending(path: "attachment.pdf"))
+
+        let result = await CategoryScanner(home: home).scan(.mailDownloads)
+        #expect(result.items.count == 1)
+        #expect(Category.mailDownloads.isPreselectable)
+    }
+}
+
+/// Time Machine snapshot parsing — `tmutil listlocalsnapshots` output comes
+/// in two line shapes depending on macOS version; both must parse.
+@Suite("TimeMachineScanner")
+struct TimeMachineScannerTests {
+    @Test func parsesSnapshotDateForm() {
+        let stdout = """
+        Snapshot Date: 2026-08-26-002000
+        Snapshot Date: 2026-08-25-120000
+        """
+        let snaps = TimeMachineScanner.parse(stdout)
+        #expect(snaps.count == 2)
+        #expect(snaps[0].date == "2026-08-26-002000")
+        #expect(snaps[0].name == "com.apple.TimeMachine.2026-08-26-002000")
+    }
+
+    @Test func parsesComApplePrefixForm() {
+        let stdout = """
+        com.apple.TimeMachine.2026-08-26-002000
+        com.apple.TimeMachine.2026-08-25-120000
+        """
+        let snaps = TimeMachineScanner.parse(stdout)
+        #expect(snaps.count == 2)
+        #expect(snaps[1].date == "2026-08-25-120000")
+        #expect(snaps[1].name == "com.apple.TimeMachine.2026-08-25-120000")
+    }
+
+    @Test func parseIgnoresBlankAndJunkLines() {
+        let stdout = """
+
+        tmutil: scanning...
+        Snapshot Date: 2026-08-26-002000
+
+        """
+        let snaps = TimeMachineScanner.parse(stdout)
+        #expect(snaps.count == 1)
+    }
+
+    @Test func deleteSnapshotActionCommandsUseDeletelocalsnapshots() {
+        let snap = TMSnapshot(name: "com.apple.TimeMachine.2026-08-26-002000",
+                              date: "2026-08-26-002000")
+        let action = DeleteSnapshotAction(snapshot: snap)
+        #expect(action.commandSummary == "tmutil deletelocalsnapshots 2026-08-26-002000")
+        #expect(action.reversible == false)
+        // We don't know per-snapshot size → honest zero.
+        #expect(action.estimatedBytes == 0)
+    }
+}
+
+/// Docker builder cache parsing — `docker builder df` reclaimable size.
+@Suite("DockerBuilderCache")
+struct DockerBuilderCacheTests {
+    @Test func parsesBuildCacheReclaimable() {
+        let stdout = """
+        TYPE            TOTAL   ACTIVE  SIZE        RECLAIMABLE
+        Images          10      5       2.3GB      800MB
+        Containers      3       1       100MB      50MB
+        Build Cache     120     10      1.5GB      1.2GB
+        Local Volumes    0      0       0B         0B
+        """
+        let bytes = DockerBuilderCache.parseReclaimableBytes(stdout)
+        // RECLAIMABLE column (1.2GB) = 1.2 billion bytes.
+        #expect(bytes == 1_200_000_000)
+    }
+
+    @Test func fallsBackToSizeColumnWhenNoReclaimable() {
+        // If RECLAIMABLE can't be parsed, fall back to SIZE (column 4).
+        let stdout = "Build Cache     120     10      1.5GB      ???"
+        let bytes = DockerBuilderCache.parseReclaimableBytes(stdout)
+        #expect(bytes == 1_500_000_000)
+    }
+
+    @Test func returnsNilWhenNoBuildCacheRow() {
+        #expect(DockerBuilderCache.parseReclaimableBytes("Images  10  5  2.3GB  800MB") == nil)
+        #expect(DockerBuilderCache.parseReclaimableBytes("") == nil)
+    }
+
+    @Test func pruneActionCommandIsBuilderPruneF() {
+        let action = DockerBuilderPruneAction(estimatedBytes: 1_200_000_000)
+        #expect(action.commandSummary == "docker builder prune -f")
+        #expect(action.reversible == false)
+        #expect(action.estimatedBytes == 1_200_000_000)
+    }
 }

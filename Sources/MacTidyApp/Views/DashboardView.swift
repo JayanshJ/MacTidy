@@ -28,6 +28,7 @@ struct DashboardView: View {
         case startup = "Startup"
         case docker = "Docker"
         case duplicates = "Duplicates"
+        case system = "System"
         var id: String { rawValue }
         var icon: String {
             switch self {
@@ -38,6 +39,7 @@ struct DashboardView: View {
             case .startup: "power"
             case .docker: "cylinder.split.1x2"
             case .duplicates: "doc.on.doc"
+            case .system: "internaldrive"
             }
         }
     }
@@ -119,6 +121,7 @@ struct DashboardView: View {
         case .startup: DashboardStartup()
         case .docker: DashboardDocker()
         case .duplicates: DuplicatesView()
+        case .system: SystemTab()
         }
     }
 
@@ -404,7 +407,7 @@ struct DashboardView: View {
             sheetPlanIsCleanAll ? "Clean all safe items?" : "Trash selected items?"
         case .byApp: "Trash selected items?"
         case .uninstaller: "Uninstall \(state.flowApps.first?.app.name ?? "app")?"
-        case .startup, .docker, .duplicates: "Trash selected items?"
+        case .startup, .docker, .duplicates, .system: "Trash selected items?"
         }
     }
 

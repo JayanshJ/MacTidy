@@ -16,6 +16,10 @@ public enum Category: String, CaseIterable, Codable, Sendable, Identifiable {
     case swiftBuildDirs
     case gradleBuildDirs
     case pythonCaches
+    case jsBuildDirs
+    case containerCaches
+    case xcodeArchives
+    case mailDownloads
     case oldInstallers
     case iosBackups
     case devCaches
@@ -38,6 +42,10 @@ public enum Category: String, CaseIterable, Codable, Sendable, Identifiable {
         case .swiftBuildDirs: "SwiftPM .build/"
         case .gradleBuildDirs: "Gradle build/"
         case .pythonCaches: "Python caches"
+        case .jsBuildDirs: "JS build dirs"
+        case .containerCaches: "Sandboxed app caches"
+        case .xcodeArchives: "Xcode Archives"
+        case .mailDownloads: "Mail Downloads"
         case .oldInstallers: "Old installers"
         case .iosBackups: "iOS device backups"
         case .devCaches: "Developer tool caches"
@@ -72,6 +80,14 @@ public enum Category: String, CaseIterable, Codable, Sendable, Identifiable {
             "Gradle project build output (a build folder with a sibling build.gradle[.kts]). Regenerable — restore with `./gradlew assemble`."
         case .pythonCaches:
             "Python bytecode caches (__pycache__) and virtualenvs (.venv with a sibling pyproject.toml/requirements.txt). Suggest-only: virtualenvs are regenerable but often worth keeping — check before trashing."
+        case .jsBuildDirs:
+            "JS framework build output (.next, .nuxt, .svelte-kit, .turbo, .output dirs with a sibling package.json). Regenerable — restore with the framework's build command."
+        case .containerCaches:
+            "Per-app caches inside sandboxed app containers (~/Library/Containers/*/Data/Library/Caches). Apps rebuild these; some may launch slower once."
+        case .xcodeArchives:
+            "Xcode archive bundles in ~/Library/Developer/Xcode/Archives. Suggest-only: these hold symbols for past uploads — keep them until you're sure you won't need to symbolicate an old crash."
+        case .mailDownloads:
+            "Mail attachment cache (~/Library/Containers/com.apple.Mail/…/Mail Downloads). Mail re-downloads from the server when you open the message."
         case .oldInstallers:
             "Disk images and installer packages in ~/Downloads you probably already installed."
         case .iosBackups:
@@ -91,7 +107,7 @@ public enum Category: String, CaseIterable, Codable, Sendable, Identifiable {
     public var isPreselectable: Bool {
         switch self {
         case .nodeModules, .rustTargets, .iosBackups, .simulatorRuntimes,
-             .appSupport, .bigFiles, .pythonCaches:
+             .appSupport, .bigFiles, .pythonCaches, .xcodeArchives:
             false
         default:
             true

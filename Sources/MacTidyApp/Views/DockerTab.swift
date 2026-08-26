@@ -27,6 +27,11 @@ struct DashboardDocker: View {
     /// Selected. Keyed by container id (stable across rescans).
     @State private var selectingContainers = false
     @State private var selectedContainerIDs: Set<String> = []
+    /// Best-effort reclaimable bytes in the Docker BuildKit cache, from
+    /// `docker builder df`. Drives the "Prune builder cache" card. Nil until
+    /// the first scan reads it (or if Docker is unavailable).
+    @State private var builderCacheBytes: Int64?
+    @State private var showBuilderPruneSheet = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -44,6 +49,15 @@ struct DashboardDocker: View {
                     selectingContainers = false
                     Task { await scan() }
                 }
+            )
+        }
+        .sheet(isPresented: $showBuilderPruneSheet) {
+            ShellActionConfirmationSheet(
+                title: "Prune the Docker builder cache?",
+                actions: [DockerBuilderPruneAction(estimatedBytes: builderCacheBytes ?? 0)],
+                kind: .dockerBuilderCache,
+                note: "This clears BuildKit's layer/build cache with `docker builder prune -f`. It does not remove images or containers, and the cache rebuilds on demand. This cannot be undone.",
+                onCompleted: { Task { await scan() } }
             )
         }
         .task { if availability == nil { await scan() } }
@@ -136,6 +150,7 @@ struct DashboardDocker: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            builderCacheRow
             if !ds.projects.isEmpty {
                 Section("Compose projects (\(ds.projects.count))") {
                     ForEach(ds.projects) { project in
@@ -171,6 +186,39 @@ struct DashboardDocker: View {
         }
         }
         .listStyle(.inset)
+    }
+
+    /// The BuildKit (builder) cache reclaim card. `docker builder prune -f`
+    /// clears layer/build cache that rebuilds on demand — distinct from
+    /// images/containers (handled above) and from `docker system prune`
+    /// (which MacTidy never runs). Manual-only; the sheet shows the literal
+    /// command and the "cannot be undone" warning.
+    @ViewBuilder
+    private var builderCacheRow: some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            Image(systemName: "hammer.drill")
+                .foregroundStyle(Theme.accent)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Builder cache (BuildKit)").font(.callout.weight(.medium))
+                Text(builderCacheLabel)
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Prune") {
+                showBuilderPruneSheet = true
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("Clear Docker's build cache. It rebuilds on demand. This does not remove images or containers.")
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var builderCacheLabel: String {
+        if let bytes = builderCacheBytes, bytes > 0 {
+            return "~\(bytes.formattedBytes) reclaimable — rebuilds on demand."
+        }
+        return "Reclaimable size unknown — the cache rebuilds on demand."
     }
 
     /// The multi-select action bar: Select All / None + a Remove Selected
@@ -327,6 +375,7 @@ struct DashboardDocker: View {
         if avail == .available {
             dockerState = DockerScanner.scan()
             dfTable = DockerScanner.systemDFTable()
+            builderCacheBytes = DockerBuilderCache.reclaimableBytes()
             // Drop selections for containers that no longer exist after the
             // rescan (e.g. removed out-of-band or by a prior cleanup).
             if let ds = dockerState {
