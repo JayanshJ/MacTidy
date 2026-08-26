@@ -45,6 +45,34 @@ struct OpenAICompatibleAdvisor: CleanAdvisor {
         return try parseExplanation(from: resp)
     }
 
+    /// One batched call that verdicts every item, instead of N round-trips.
+    /// Falls back to the default loop implementation if the model doesn't
+    /// return a `verdict_items` tool call.
+    func explainBatch(_ items: [ScanItem], config: AIConfig) async throws -> [BatchVerdict] {
+        guard !items.isEmpty else { return [] }
+        let body: [String: Any] = [
+            "model": model,
+            "messages": [
+                ["role": "system", "content": AdvisorPrompts.explainBatchSystem],
+                ["role": "user", "content": AdvisorPrompts.explainBatchUser(items: items, sendFilePaths: config.sendFilePaths)],
+            ],
+            "tools": [verdictItemsTool],
+            "tool_choice": ["type": "function", "function": ["name": "verdict_items"]],
+            "temperature": 0.2,
+        ]
+        let resp = try await HTTPClient.post(url: endpoint, headers: authHeaders(), body: body)
+        if let parsed = parseBatchVerdicts(from: resp, items: items), !parsed.isEmpty {
+            return parsed
+        }
+        // No usable tool call — fall back to the per-item loop.
+        var out: [BatchVerdict] = []
+        for item in items {
+            let explanation = try await explain(item, config: config)
+            out.append(BatchVerdict(id: item.id, verdict: explanation.verdict, summary: explanation.summary))
+        }
+        return out
+    }
+
     func insights(for snapshot: SystemSnapshot, config: AIConfig) async throws -> [Insight] {
         let payload = try InsightPrompts.userPayload(snapshot: snapshot, sendFilePaths: config.sendFilePaths)
         let body: [String: Any] = [
@@ -112,6 +140,34 @@ struct OpenAICompatibleAdvisor: CleanAdvisor {
         ]
     }
 
+    private var verdictItemsTool: [String: Any] {
+        [
+            "type": "function",
+            "function": [
+                "name": "verdict_items",
+                "description": "Return a safe/review/keep verdict for each scanned item.",
+                "parameters": [
+                    "type": "object",
+                    "properties": [
+                        "verdicts": [
+                            "type": "array",
+                            "items": [
+                                "type": "object",
+                                "properties": [
+                                    "index": ["type": "integer"],
+                                    "verdict": ["type": "string", "enum": ["safe", "review", "keep"]],
+                                    "note": ["type": "string"],
+                                ],
+                                "required": ["index", "verdict"],
+                            ],
+                        ],
+                    ],
+                    "required": ["verdicts"],
+                ],
+            ],
+        ]
+    }
+
     // MARK: - Response parsing
 
     /// Extracts the `select_items` tool call from an OpenAI-format response
@@ -164,6 +220,42 @@ struct OpenAICompatibleAdvisor: CleanAdvisor {
             return nil
         }()
         return ItemExplanation(summary: content, verdict: verdict)
+    }
+
+    /// Parse the `verdict_items` tool call into per-item verdicts, keyed by
+    /// the original `ScanItem.id` via the stable index sent in the prompt.
+    /// Returns nil if no usable tool call is present so the caller falls back
+    /// to the per-item loop.
+    private func parseBatchVerdicts(from resp: HTTPClient.Response, items: [ScanItem]) -> [BatchVerdict]? {
+        guard let json = resp.json as? [String: Any],
+              let choices = json["choices"] as? [[String: Any]],
+              let choice = choices.first,
+              let message = choice["message"] as? [String: Any],
+              let toolCalls = message["tool_calls"] as? [[String: Any]],
+              let call = toolCalls.first,
+              let function = call["function"] as? [String: Any],
+              let argsString = function["arguments"] as? String,
+              let argsData = argsString.data(using: .utf8),
+              let args = try? JSONSerialization.jsonObject(with: argsData) as? [String: Any],
+              let raw = args["verdicts"] as? [Any] else { return nil }
+        var out: [BatchVerdict] = []
+        for entry in raw {
+            guard let dict = entry as? [String: Any] else { continue }
+            let index = dict["index"] as? Int ?? (dict["index"] as? Double).map(Int.init) ?? -1
+            guard index >= 0, index < items.count else { continue }
+            let verdictStr = dict["verdict"] as? String ?? ""
+            let verdict: ItemExplanation.Verdict? = {
+                switch verdictStr.lowercased() {
+                case "safe": return .safe
+                case "review": return .review
+                case "keep": return .keep
+                default: return nil
+                }
+            }()
+            let note = dict["note"] as? String ?? ""
+            out.append(BatchVerdict(id: items[index].id, verdict: verdict, summary: note))
+        }
+        return out
     }
 
     private func parseInsights(from resp: HTTPClient.Response, snapshot: SystemSnapshot) throws -> [Insight] {

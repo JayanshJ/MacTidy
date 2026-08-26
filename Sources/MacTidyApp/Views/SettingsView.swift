@@ -13,6 +13,8 @@ struct SettingsView: View {
     @State private var isTestingConnection = false
     @State private var connectionStatus: String?
     @State private var connectionStatusGood = false
+    @State private var ollamaDetection: OllamaDetector.Detection?
+    @State private var isDetectingOllama = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -124,12 +126,12 @@ struct SettingsView: View {
                     }
                 }
                 if state.aiConfig.provider != .none {
-                    TextField("Model", text: $state.aiConfig.model, prompt: Text(state.aiConfig.provider.defaultModel))
-                        .autocorrectionDisabled()
+                    modelField
                 }
                 if state.aiConfig.provider == .ollama {
                     TextField("Ollama base URL", text: $state.aiConfig.ollamaBaseURL, prompt: Text(AIConfig.defaultOllamaURL))
                         .autocorrectionDisabled()
+                        .onChange(of: state.aiConfig.ollamaBaseURL) { _, _ in refreshOllamaModels() }
                 }
                 if state.aiConfig.provider.requiresAPIKey {
                     SecureField("API key", text: $apiKeyInput)
@@ -143,6 +145,9 @@ struct SettingsView: View {
                         .disabled(apiKeyInput.isEmpty)
                     Button("Remove stored key", role: .destructive) { removeKey() }
                         .disabled(KeychainHelper.load(for: state.aiConfig.provider) == nil)
+                }
+                if state.aiConfig.provider == .none {
+                    ollamaOneClick
                 }
             } header: {
                 Text("AI assistant")
@@ -213,6 +218,7 @@ struct SettingsView: View {
         }
         }
         .frame(minWidth: 480, idealWidth: 560, minHeight: 520, idealHeight: 640)
+        .onAppear { if ollamaDetection == nil { refreshOllamaModels() } }
     }
 
     private var bundledAppIcon: NSImage? {
@@ -261,5 +267,64 @@ struct SettingsView: View {
         let result = await advisor.testConnection(config: state.aiConfig)
         connectionStatus = result
         connectionStatusGood = result.hasPrefix("Connected")
+    }
+
+    // MARK: - Model field (Ollama picker when models are detected)
+
+    @ViewBuilder
+    private var modelField: some View {
+        @Bindable var state = state
+        let detected = ollamaDetection?.models ?? []
+        if state.aiConfig.provider == .ollama, !detected.isEmpty {
+            Picker("Model", selection: $state.aiConfig.model) {
+                if state.aiConfig.model.isEmpty || !detected.contains(where: { $0.name == state.aiConfig.model }) {
+                    Text(state.aiConfig.model.isEmpty ? "Pick a model" : state.aiConfig.model).tag(state.aiConfig.model)
+                }
+                ForEach(detected, id: \.name) { m in
+                    Text(m.name).tag(m.name)
+                }
+            }
+        } else {
+            TextField("Model", text: $state.aiConfig.model, prompt: Text(state.aiConfig.provider.defaultModel))
+                .autocorrectionDisabled()
+        }
+    }
+
+    // MARK: - Ollama one-click (only when no provider is configured)
+
+    @ViewBuilder
+    private var ollamaOneClick: some View {
+        if isDetectingOllama {
+            HStack { ProgressView().controlSize(.small); Text("Looking for Ollama…") }
+        } else if let detection = ollamaDetection, detection.isReachable, !detection.models.isEmpty {
+            Button {
+                state.aiConfig.provider = .ollama
+                state.aiConfig.ollamaBaseURL = detection.baseURL
+                state.aiConfig.model = detection.models.first?.name ?? ""
+            } label: {
+                Label("Use Ollama (local) — \(detection.models.count) model\(detection.models.count == 1 ? "" : "s") available", systemImage: "cpu")
+            }
+        } else if let detection = ollamaDetection, detection.didRespond, detection.models.isEmpty {
+            Text("Ollama is running but has no models. Run `ollama pull llama3.2` in Terminal, then return here.")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        } else if ollamaDetection != nil {
+            Text("Ollama not detected. Start it (`ollama serve` or the Ollama app) to use local AI.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func refreshOllamaModels() {
+        guard state.aiConfig.provider == .ollama || state.aiConfig.provider == .none else { return }
+        isDetectingOllama = true
+        let base = state.aiConfig.provider == .ollama ? state.aiConfig.ollamaBaseURL : nil
+        Task {
+            let detection = await OllamaDetector.detect(baseURL: base)
+            await MainActor.run {
+                ollamaDetection = detection
+                isDetectingOllama = false
+            }
+        }
     }
 }

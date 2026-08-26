@@ -64,4 +64,45 @@ enum AdvisorPrompts {
         }
         return parts.joined(separator: "\n")
     }
+
+    static let explainBatchSystem = """
+    You are MacTidy's disk-cleanup assistant. You receive a JSON list of scanned
+    items (each with an `index`, size, and when allowed a name/context) and
+    you return a verdict for EVERY item: "safe", "review", or "keep".
+
+    - "safe": routine cache/build artifact, deleting it only costs a rebuild.
+    - "review": plausibly deletable but could be wanted (downloads, project
+      files, device backups) — the user should check first.
+    - "keep": support/data that an active app or the OS needs; deleting it
+      breaks something.
+
+    Also return a one-line `note` per item explaining the concrete consequence
+    of deleting it. Be specific and honest. Return results via the
+    `verdict_items` tool call, one entry per input item, matching `index`.
+    """
+
+    /// Build the per-item JSON for a batch. Indexes are stable and returned
+    /// back so we can map verdicts to the original `ScanItem.id`.
+    static func explainBatchUser(items: [ScanItem], sendFilePaths: Bool) -> String {
+        var entries: [[String: Any]] = []
+        for (i, item) in items.enumerated() {
+            var entry: [String: Any] = [
+                "index": i,
+                "type": item.isDirectory ? "folder" : "file",
+                "size": item.sizeBytes.formattedBytes,
+            ]
+            if sendFilePaths {
+                entry["name"] = item.url.lastPathComponent
+                if let detail = item.detail { entry["context"] = detail }
+            } else if let cat = item.category {
+                entry["category"] = cat.displayName
+            }
+            if let modified = item.lastModified {
+                entry["lastModified"] = ISO8601DateFormatter().string(from: modified)
+            }
+            entries.append(entry)
+        }
+        let json = (try? JSONSerialization.data(withJSONObject: entries, options: [.sortedKeys])) ?? Data()
+        return "Items (JSON):\n\(String(data: json, encoding: .utf8) ?? "[]")\n\nReturn a verdict for each via the `verdict_items` tool."
+    }
 }

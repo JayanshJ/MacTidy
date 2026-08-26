@@ -414,6 +414,19 @@ final class AppState {
         }
     }
 
+    /// Asks the advisor to verdict a whole batch in one call (one prompt,
+    /// one round-trip for providers that support it). Returns an empty list
+    /// when no provider is configured or the call fails — the UI shows no
+    /// verdicts rather than blocking. Never throws.
+    func explainBatch(items: [ScanItem]) async -> [BatchVerdict] {
+        guard let advisor = advisor, !items.isEmpty else { return [] }
+        do {
+            return try await advisor.explainBatch(items, config: aiConfig)
+        } catch {
+            return []
+        }
+    }
+
     /// Builds a system snapshot and asks the advisor for proactive insights.
     /// Falls back to deterministic, locally-generated insights when no provider
     /// is configured or the call fails — so the Insights panel is useful even
@@ -421,8 +434,15 @@ final class AppState {
     func generateInsights() async -> [Insight] {
         let processes = ProcessScanner.scan()
         let memory = ProcessScanner.memorySummary()
+        // Enrich the snapshot with boot-volume pressure + login items so the
+        // advisor (and deterministic fallback) can surface "disk almost full"
+        // and "heavy startup" insights. Both are read-only and nil-safe.
         let snapshot = SystemSnapshot(
-            categories: categoryResults, memory: memory, processes: processes
+            categories: categoryResults,
+            memory: memory,
+            processes: processes,
+            diskPressure: DiskPressure.current(),
+            launchItems: LaunchItemsAuditor.audit()
         )
         if let advisor = advisor {
             do {

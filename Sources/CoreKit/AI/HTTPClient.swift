@@ -61,4 +61,33 @@ public enum HTTPClient {
         }
         return Response(statusCode: http.statusCode, body: data)
     }
+
+    /// GET a JSON endpoint. Used for Ollama's `/api/tags` — read-only model
+    /// discovery, no credentials. Short timeout so detection fails fast when
+    /// Ollama isn't running.
+    @discardableResult
+    public static func get(
+        url: String,
+        timeout: TimeInterval = 3
+    ) async throws -> Response {
+        guard let endpoint = URL(string: url) else { throw HTTPError.badURL(url) }
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "GET"
+        request.timeoutInterval = timeout
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await URLSession.shared.data(for: request)
+        } catch is URLError {
+            throw HTTPError.timeout
+        } catch {
+            throw HTTPError.requestFailed(0, error.localizedDescription)
+        }
+        guard let http = response as? HTTPURLResponse else {
+            throw HTTPError.requestFailed(0, "no http response")
+        }
+        guard (200...299).contains(http.statusCode) else {
+            throw HTTPError.requestFailed(http.statusCode, String(data: data, encoding: .utf8) ?? "")
+        }
+        return Response(statusCode: http.statusCode, body: data)
+    }
 }

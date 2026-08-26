@@ -11,8 +11,11 @@ struct InsightsTab: View {
     @State private var insights: [Insight] = []
     @State private var isLoading = false
     @State private var sheetPlan: DeletionPlan?
+    @State private var sheetReasoning: String?
     @State private var quitSheet: QuitTarget?
     @State private var usingAI = false
+    @State private var aiIntent = ""
+    @State private var isPlanning = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -21,7 +24,7 @@ struct InsightsTab: View {
             content
         }
         .sheet(item: $sheetPlan) { plan in
-            DeletionConfirmationSheet(title: "Trash suggested items?", plan: plan) { outcome in
+            DeletionConfirmationSheet(title: "Trash suggested items?", plan: plan, reasoning: sheetReasoning) { outcome in
                 if !outcome.dryRun { Task { await refresh() } }
             }
         }
@@ -34,23 +37,46 @@ struct InsightsTab: View {
     }
 
     private var header: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Insights").font(.title3.bold())
-                Text(usingAI ? "Reasoned by your configured AI model." : "Generated locally — add an AI provider in Settings for richer reasoning.")
-                    .font(.caption).foregroundStyle(.secondary)
+        VStack(spacing: Theme.Spacing.sm) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Insights").font(.title3.bold())
+                    Text(usingAI ? "Reasoned by your configured AI model." : "Generated locally — add an AI provider in Settings for richer reasoning.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button { Task { await refresh() } } label: {
+                    if isLoading {
+                        HStack { ProgressView().controlSize(.small); Text("Thinking…") }
+                    } else {
+                        Label("Refresh", systemImage: "sparkles")
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(isLoading)
             }
-            Spacer()
-            Button { Task { await refresh() } } label: {
-                if isLoading {
-                    HStack { ProgressView().controlSize(.small); Text("Thinking…") }
-                } else {
-                    Label("Refresh", systemImage: "sparkles")
+            if state.aiConfig.provider != .none {
+                HStack(spacing: Theme.Spacing.xs) {
+                    Image(systemName: "wand.and.stars").foregroundStyle(Theme.accent)
+                    TextField("Ask AI to clean… e.g. “free up 15 GB”, “clean Xcode stuff”", text: $aiIntent)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit { Task { await runAIPlan() } }
+                        .disabled(isPlanning)
+                    if isPlanning {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Button {
+                            Task { await runAIPlan() }
+                        } label: {
+                            Label("Plan", systemImage: "arrow.up.circle.fill")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(aiIntent.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
                 }
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .disabled(isLoading)
         }
         .padding(.horizontal, Theme.Spacing.lg).padding(.vertical, Theme.Spacing.sm)
     }
@@ -132,6 +158,22 @@ struct InsightsTab: View {
         let result = await state.generateInsights()
         insights = result
         isLoading = false
+    }
+
+    /// Natural-language cleanup: ask the configured advisor for a plan matching
+    /// the typed intent, then open the *existing* confirmation sheet with the
+    /// advisor's reasoning shown above the plan. No new popup surface — it's
+    /// the same sheet a manual "Trash Selected" uses. Falls back to the
+    /// deterministic ranked plan when the call fails or AI is off.
+    private func runAIPlan() async {
+        let intent = aiIntent.trimmingCharacters(in: .whitespaces)
+        guard !intent.isEmpty else { return }
+        isPlanning = true
+        defer { isPlanning = false }
+        let result = await state.aiPlan(for: intent)
+        guard !result.plan.isEmpty else { return }
+        sheetReasoning = result.reasoning
+        sheetPlan = result.plan
     }
 }
 

@@ -14,6 +14,11 @@ struct DashboardView: View {
     @State private var sheetPlanIsCleanAll = false
     @State private var selection = Set<UUID>()
     @State private var showNodeInspector = false
+    /// Per-item AI batch verdicts keyed by `ScanItem.id`, populated by the
+    /// "Review with AI" button on the category drill-in header. Rendered inline
+    /// on `ScanItemRow` — no new popup surface.
+    @State private var batchVerdicts: [UUID: BatchVerdict] = [:]
+    @State private var reviewAll = false
 
     enum DashboardTab: String, CaseIterable, Identifiable {
         case insights = "Insights"
@@ -85,6 +90,7 @@ struct DashboardView: View {
                 tab = t
                 drilledCategory = nil
                 selection.removeAll()
+                batchVerdicts.removeAll()
             }
         } label: {
             Label(t.rawValue, systemImage: t.icon)
@@ -282,6 +288,7 @@ struct DashboardView: View {
             HStack {
                 Button {
                     withAnimation(.snappy) { drilledCategory = nil }
+                    batchVerdicts.removeAll()
                 } label: {
                     Label("Categories", systemImage: "chevron.left")
                 }
@@ -294,6 +301,20 @@ struct DashboardView: View {
                     }
                     .buttonStyle(.bordered).controlSize(.small)
                     .help("Find orphaned and unused npm packages and run npm prune safely.")
+                }
+                if !items.isEmpty && state.aiConfig.provider != .none {
+                    Button {
+                        Task { await reviewCategoryWithAI(items: items) }
+                    } label: {
+                        if reviewAll {
+                            HStack { ProgressView().controlSize(.small); Text("Reviewing…") }
+                        } else {
+                            Label("Review with AI", systemImage: "wand.and.stars")
+                        }
+                    }
+                    .buttonStyle(.bordered).controlSize(.small)
+                    .disabled(reviewAll)
+                    .help("Get a Safe / Review / Keep verdict for each item in one AI pass.")
                 }
                 if !items.isEmpty {
                     Button {
@@ -346,7 +367,7 @@ struct DashboardView: View {
             ForEach(groups, id: \.key) { projectName, groupItems in
                 Section {
                     ForEach(groupItems.sorted { $0.sizeBytes > $1.sizeBytes }) { item in
-                        ScanItemRow(item: item, selection: $selection)
+                        ScanItemRow(item: item, selection: $selection, batchVerdict: batchVerdicts[item.id])
                     }
                 } header: {
                     HStack {
@@ -382,7 +403,7 @@ struct DashboardView: View {
                     Text("Nothing found").foregroundStyle(.tertiary)
                 }
                 ForEach(items) { item in
-                    ScanItemRow(item: item, selection: $selection)
+                    ScanItemRow(item: item, selection: $selection, batchVerdict: batchVerdicts[item.id])
                 }
             } footer: {
                 Text(category.explanation)
@@ -392,6 +413,18 @@ struct DashboardView: View {
     }
 
     // MARK: - Sheet plumbing
+
+    /// One AI pass over the drilled-in category's items, rendering
+    /// Safe/Review/Keep inline on the rows. No new popup — verdicts decorate
+    /// the existing list. Runs in the background; the user can keep browsing.
+    private func reviewCategoryWithAI(items: [ScanItem]) async {
+        reviewAll = true
+        defer { reviewAll = false }
+        let verdicts = await state.explainBatch(items: items)
+        var map: [UUID: BatchVerdict] = [:]
+        for v in verdicts { map[v.id] = v }
+        batchVerdicts = map
+    }
 
     private var sheetPlanTitle: String {
         switch tab {

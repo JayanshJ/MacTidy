@@ -40,6 +40,19 @@ public struct ItemExplanation: Sendable {
     }
 }
 
+/// One row in a batch explain result, keyed by the item's `id` so the UI can
+/// place the verdict back on the correct row regardless of ordering.
+public struct BatchVerdict: Sendable, Identifiable {
+    public let id: UUID
+    public let verdict: ItemExplanation.Verdict?
+    public let summary: String
+    public init(id: UUID, verdict: ItemExplanation.Verdict?, summary: String) {
+        self.id = id
+        self.verdict = verdict
+        self.summary = summary
+    }
+}
+
 /// The abstraction every AI provider implements. Pure CoreKit, no UI, so it's
 /// unit-testable with a mock client. All methods are `async throws` — callers
 /// (the UI) wrap failures and fall back to the deterministic `Recommendations`
@@ -61,6 +74,16 @@ public protocol CleanAdvisor: Sendable {
         config: AIConfig
     ) async throws -> ItemExplanation
 
+    /// Explain a whole batch of items in one call, returning a verdict per
+    /// item keyed by its `id`. Providers that support a single batch prompt
+    /// override this; the default loops `explain` so every provider works
+    /// (slower but functional). The UI uses this to pre-screen a category or
+    /// the biggest files instead of tapping each row.
+    func explainBatch(
+        _ items: [ScanItem],
+        config: AIConfig
+    ) async throws -> [BatchVerdict]
+
     /// Generate proactive insights over the full system snapshot (disk +
     /// memory + processes). Returns narrative reasoning + proposed actions,
     /// sorted by priority. The model never executes — each action routes
@@ -73,4 +96,20 @@ public protocol CleanAdvisor: Sendable {
     /// Light-weight connectivity check used by the Settings "Test connection"
     /// button. Returns a short human-readable status string.
     func testConnection(config: AIConfig) async -> String
+}
+
+public extension CleanAdvisor {
+    /// Default batch implementation: loop the single-item `explain`. A real
+    /// provider overrides this with one batched prompt to cut round-trips.
+    func explainBatch(
+        _ items: [ScanItem],
+        config: AIConfig
+    ) async throws -> [BatchVerdict] {
+        var out: [BatchVerdict] = []
+        for item in items {
+            let explanation = try await explain(item, config: config)
+            out.append(BatchVerdict(id: item.id, verdict: explanation.verdict, summary: explanation.summary))
+        }
+        return out
+    }
 }
