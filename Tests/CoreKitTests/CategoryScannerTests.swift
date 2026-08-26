@@ -139,4 +139,108 @@ struct CategoryScannerTests {
         // Device backups must never be bulk-preselected.
         #expect(!Category.iosBackups.isPreselectable)
     }
+
+    // MARK: - new build-dir categories (Pods, SwiftPM .build, Gradle build, Python)
+
+    /// Builds a fake home + a fake dev root (so `buildDirs` has somewhere to
+    /// walk), returns the dev root URL. The scanner is constructed with this
+    /// as the sole dev root.
+    private func makeFakeHomeWithDevRoot() throws -> (home: URL, devRoot: URL) {
+        let home = FileManager.default.temporaryDirectory
+            .appending(path: "mactidy-home-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let devRoot = home.appending(path: "Developer")
+        try FileManager.default.createDirectory(at: devRoot, withIntermediateDirectories: true)
+        return (home, devRoot)
+    }
+
+    /// Writes a small file into `dir` so its allocated size is non-zero (a
+    /// bare empty dir would be filtered out by the `size > 0` guards).
+    private func seed(_ dir: URL) throws {
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data(count: 4096).write(to: dir.appending(path: "blob.bin"))
+    }
+
+    @Test func podDirsFindsPodsWithPodfile() async throws {
+        let fm = FileManager.default
+        let (home, devRoot) = try makeFakeHomeWithDevRoot()
+        defer { try? fm.removeItem(at: home) }
+
+        let project = devRoot.appending(path: "iOSApp")
+        try seed(project.appending(path: "Pods/Firebase"))
+        try Data("x".utf8).write(to: project.appending(path: "Podfile"))
+
+        // A `Pods` dir with no sibling Podfile must NOT be listed.
+        let decoy = devRoot.appending(path: "Decoy")
+        try seed(decoy.appending(path: "Pods/something"))
+
+        let result = await CategoryScanner(home: home, devRoots: [devRoot]).scan(.podDirs)
+        #expect(result.items.count == 1)
+        #expect(result.items.first?.detail == "iOSApp")
+        #expect(result.items.first?.category == .podDirs)
+        #expect(Category.podDirs.isPreselectable)
+    }
+
+    @Test func swiftBuildDirsFindsBuildWithPackageSwift() async throws {
+        let fm = FileManager.default
+        let (home, devRoot) = try makeFakeHomeWithDevRoot()
+        defer { try? fm.removeItem(at: home) }
+
+        let project = devRoot.appending(path: "SwiftLib")
+        try seed(project.appending(path: ".build/artifacts"))
+        try Data("x".utf8).write(to: project.appending(path: "Package.swift"))
+
+        let result = await CategoryScanner(home: home, devRoots: [devRoot]).scan(.swiftBuildDirs)
+        #expect(result.items.count == 1)
+        #expect(result.items.first?.detail == "SwiftLib")
+        #expect(Category.swiftBuildDirs.isPreselectable)
+    }
+
+    @Test func gradleBuildDirsAcceptsKotlinAndGroovyMarkers() async throws {
+        let fm = FileManager.default
+        let (home, devRoot) = try makeFakeHomeWithDevRoot()
+        defer { try? fm.removeItem(at: home) }
+
+        // Kotlin DSL marker.
+        let kotlin = devRoot.appending(path: "KotlinApp")
+        try seed(kotlin.appending(path: "build/classes"))
+        try Data("x".utf8).write(to: kotlin.appending(path: "build.gradle.kts"))
+        // Groovy marker.
+        let groovy = devRoot.appending(path: "GroovyApp")
+        try seed(groovy.appending(path: "build/libs"))
+        try Data("x".utf8).write(to: groovy.appending(path: "build.gradle"))
+        // A `build` dir with no gradle marker must NOT be listed.
+        let decoy = devRoot.appending(path: "Decoy")
+        try seed(decoy.appending(path: "build/output"))
+
+        let result = await CategoryScanner(home: home, devRoots: [devRoot]).scan(.gradleBuildDirs)
+        #expect(result.items.count == 2)
+        let names = Set(result.items.compactMap(\.detail))
+        #expect(names == ["KotlinApp", "GroovyApp"])
+        #expect(Category.gradleBuildDirs.isPreselectable)
+    }
+
+    @Test func pythonCachesFindsPycacheAndMarkeredVenv() async throws {
+        let fm = FileManager.default
+        let (home, devRoot) = try makeFakeHomeWithDevRoot()
+        defer { try? fm.removeItem(at: home) }
+
+        // __pycache__ anywhere under a project is always picked up.
+        let pyProject = devRoot.appending(path: "PyProj")
+        try seed(pyProject.appending(path: "src/__pycache__"))
+        // .venv with a sibling pyproject.toml → listed.
+        try seed(pyProject.appending(path: ".venv/lib"))
+        try Data("x".utf8).write(to: pyProject.appending(path: "pyproject.toml"))
+
+        // A bare .venv with no project marker must NOT be listed.
+        let decoy = devRoot.appending(path: "Decoy")
+        try seed(decoy.appending(path: ".venv/lib"))
+
+        let result = await CategoryScanner(home: home, devRoots: [devRoot]).scan(.pythonCaches)
+        // One __pycache__ + one .venv from PyProj; Decoy's .venv excluded.
+        #expect(result.items.count == 2)
+        #expect(result.items.allSatisfy { $0.category == .pythonCaches })
+        // Python caches is suggest-only (because of .venv).
+        #expect(!Category.pythonCaches.isPreselectable)
+    }
 }

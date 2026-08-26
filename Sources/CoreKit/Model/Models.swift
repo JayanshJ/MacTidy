@@ -12,6 +12,10 @@ public enum Category: String, CaseIterable, Codable, Sendable, Identifiable {
     case homebrewCache
     case nodeModules
     case rustTargets
+    case podDirs
+    case swiftBuildDirs
+    case gradleBuildDirs
+    case pythonCaches
     case oldInstallers
     case iosBackups
     case devCaches
@@ -30,6 +34,10 @@ public enum Category: String, CaseIterable, Codable, Sendable, Identifiable {
         case .homebrewCache: "Homebrew cache"
         case .nodeModules: "node_modules"
         case .rustTargets: "Rust target/"
+        case .podDirs: "CocoaPods Pods/"
+        case .swiftBuildDirs: "SwiftPM .build/"
+        case .gradleBuildDirs: "Gradle build/"
+        case .pythonCaches: "Python caches"
         case .oldInstallers: "Old installers"
         case .iosBackups: "iOS device backups"
         case .devCaches: "Developer tool caches"
@@ -56,6 +64,14 @@ public enum Category: String, CaseIterable, Codable, Sendable, Identifiable {
             "Installed npm dependencies. Suggest-only: check the project is inactive, restore with npm install."
         case .rustTargets:
             "Cargo build artifacts (dirs named target with a sibling Cargo.toml). Restore with cargo build."
+        case .podDirs:
+            "CocoaPods dependency dirs (a Pods folder with a sibling Podfile). Regenerable — restore with `pod install`."
+        case .swiftBuildDirs:
+            "SwiftPM build artifacts (a .build folder with a sibling Package.swift). Regenerable — restore with `swift build`."
+        case .gradleBuildDirs:
+            "Gradle project build output (a build folder with a sibling build.gradle[.kts]). Regenerable — restore with `./gradlew assemble`."
+        case .pythonCaches:
+            "Python bytecode caches (__pycache__) and virtualenvs (.venv with a sibling pyproject.toml/requirements.txt). Suggest-only: virtualenvs are regenerable but often worth keeping — check before trashing."
         case .oldInstallers:
             "Disk images and installer packages in ~/Downloads you probably already installed."
         case .iosBackups:
@@ -75,7 +91,7 @@ public enum Category: String, CaseIterable, Codable, Sendable, Identifiable {
     public var isPreselectable: Bool {
         switch self {
         case .nodeModules, .rustTargets, .iosBackups, .simulatorRuntimes,
-             .appSupport, .bigFiles:
+             .appSupport, .bigFiles, .pythonCaches:
             false
         default:
             true

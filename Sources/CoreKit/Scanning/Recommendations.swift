@@ -65,6 +65,7 @@ public enum Recommendations {
         case .oldInstallers: .staleInstaller
         case .iosBackups: .staleBackup
         case .nodeModules, .rustTargets: .staleBuildDir
+        case .podDirs, .swiftBuildDirs, .gradleBuildDirs, .pythonCaches: .staleBuildDir
         case .appSupport: nil   // real app state — never recommended, only listed
         case .bigFiles: .bigFile
         }

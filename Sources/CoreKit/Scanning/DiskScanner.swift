@@ -115,7 +115,7 @@ public enum DiskScanner {
             // categories, and skipping them keeps this list from overlapping.
             let skipDirs: Set<String> = [
                 ".git", "node_modules", "target", "build", ".build",
-                ".venv", "DerivedData", "__pycache__",
+                ".venv", "DerivedData", "__pycache__", "Pods",
             ]
             var seen = 0
             while let url = enumerator.nextObject() as? URL {
