@@ -137,41 +137,46 @@ final class UpdateManager {
         return String(data: data, encoding: .utf8) ?? ""
     }
 
-    /// Downloads `url` to a temp file, reporting progress into `phase`.
+    /// Downloads `url` to a temp file, reporting coarse progress into `phase`.
     ///
-    /// The bytes are buffered and progress is reported only in a few coarse
-    /// steps (≈32 updates across the whole download), **not** once per byte.
-    /// The earlier per-byte `phase = .downloading` loop set an `@Observable`
-    /// property on the main actor ~2M times for a typical asset, saturating
-    /// SwiftUI's coalescing so the progress bar never advanced — the download
-    /// appeared "stuck" even though bytes were still arriving.
+    /// Uses a delegate-based `URLSessionDownloadTask` that streams straight to
+    /// disk, not the `bytes` async iterator. Iterating `bytes` yields one
+    /// `UInt8` per `await` — ~2,000,000 async suspensions for a 2 MB asset —
+    /// which is genuinely slow regardless of how often the progress bar is
+    /// updated. The download task has no per-byte loop; progress is reported
+    /// from the delegate callback (throttled to ~32 updates).
     private func download(from url: URL, expectedSize: Int64) async throws -> URL {
-        let (asyncBytes, response) = try await URLSession.shared.bytes(for: URLRequest(url: url))
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw UpdateError.badResponse
-        }
-        let total = expectedSize > 0 ? expectedSize : http.expectedContentLength
-        let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("MacTidy-update-\(UUID().uuidString).zip")
-        var data = Data()
-        if total > 0 { data.reserveCapacity(Int(total)) }
-
         phase = .downloading(progress: 0)
-        // Report at most every ~3% of the file (or 64 KB when the size is
-        // unknown), so a ~2 MB download yields ~32 progress updates total.
-        let step: Int64 = total > 0 ? max(Int64(1), total / 32) : 64 * 1024
-        var nextThreshold: Int64 = step
-        for try await byte in asyncBytes {
-            data.append(byte)
-            if total > 0, Int64(data.count) >= nextThreshold {
-                let p = Double(data.count) / Double(total)
-                phase = .downloading(progress: min(1, max(0, p)))
-                nextThreshold = Int64(data.count) + step
-            }
+        let delegate = DownloadProgressDelegate(expectedTotal: expectedSize) { [weak self] progress in
+            Task { @MainActor in self?.phase = .downloading(progress: progress) }
         }
-        phase = .downloading(progress: 1)
-        try data.write(to: tmp)
-        return tmp
+        let session = URLSession(configuration: .ephemeral, delegate: delegate, delegateQueue: nil)
+        defer { session.finishTasksAndInvalidate() }
+        let task = session.downloadTask(with: url)
+        // Resume + wait via a continuation. The delegate captures the result
+        // (temp file URL or error) and resumes exactly once.
+        let result: DownloadResult = try await withCheckedThrowingContinuation { cont in
+            delegate.completion = { res in cont.resume(returning: res) }
+            task.resume()
+        }
+        switch result {
+        case .success(let tmp, let response):
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                throw UpdateError.badResponse
+            }
+            phase = .downloading(progress: 1)
+            // Move the system temp file to a stable, uniquely-named file the
+            // unzip step owns (the system deletes its scratch file otherwise).
+            let dest = FileManager.default.temporaryDirectory
+                .appendingPathComponent("MacTidy-update-\(UUID().uuidString).zip")
+            if FileManager.default.fileExists(atPath: dest.path) {
+                try FileManager.default.removeItem(at: dest)
+            }
+            try FileManager.default.moveItem(at: tmp, to: dest)
+            return dest
+        case .failure(let error):
+            throw error
+        }
     }
 
     // MARK: - Verify + install
@@ -319,7 +324,70 @@ final class UpdateManager {
     }
 }
 
-// MARK: - Errors
+// MARK: - Download progress delegate
+
+/// The outcome of a delegate-based download: either the temp file URL plus
+/// response, or an error. The continuation in `download` is resumed with
+/// exactly one of these.
+private enum DownloadResult: Sendable {
+    case success(URL, URLResponse)
+    case failure(Error)
+}
+
+/// URLSession delegate that streams the download straight to a temp file and
+/// reports coarse progress (a value in 0...1). Runs on URLSession's own
+/// delegate queue, so the progress callback hops to the main actor to set
+/// `phase`. Kept throttled — at most ~32 updates across the whole file — so
+/// we never flood the main actor even for a large download. The downloaded
+/// file is handed back via `completion` so `download` can move it to a stable
+/// name before the system reclaims its scratch file.
+private final class DownloadProgressDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    private let expectedTotal: Int64
+    private let onProgress: @Sendable (Double) -> Void
+    private let step: Int64
+    private var nextThreshold: Int64
+    /// Set by `download` just before resuming the task; called exactly once
+    /// from `didFinishDownloadingTo` (success) or `didCompleteWithError`
+    /// (failure), whichever fires.
+    var completion: (@Sendable (DownloadResult) -> Void)?
+
+    init(expectedTotal: Int64, onProgress: @escaping @Sendable (Double) -> Void) {
+        self.expectedTotal = expectedTotal
+        self.onProgress = onProgress
+        self.step = expectedTotal > 0 ? max(Int64(1), expectedTotal / 32) : 64 * 1024
+        self.nextThreshold = expectedTotal > 0 ? max(Int64(1), expectedTotal / 32) : 64 * 1024
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
+                    totalBytesExpectedToWrite: Int64) {
+        let total = totalBytesExpectedToWrite > 0 ? totalBytesExpectedToWrite : expectedTotal
+        guard total > 0, totalBytesWritten >= nextThreshold else { return }
+        let progress = min(1, max(0, Double(totalBytesWritten) / Double(total)))
+        nextThreshold = totalBytesWritten + step
+        // `onProgress` hops to the main actor itself; call it directly here.
+        onProgress(progress)
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didFinishDownloadingTo location: URL) {
+        // Copy the scratch file out immediately — the system deletes
+        // `location` after this returns. A unique name avoids any collision.
+        let dest = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MacTidy-dl-\(UUID().uuidString).zip")
+        do {
+            try FileManager.default.moveItem(at: location, to: dest)
+            completion?(.success(dest, downloadTask.response ?? URLResponse()))
+        } catch {
+            completion?(.failure(error))
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error { completion?(.failure(error)) }
+        // Success path is handled in `didFinishDownloadingTo`; no action here.
+    }
+}
 
 enum UpdateError: LocalizedError {
     case badResponse
