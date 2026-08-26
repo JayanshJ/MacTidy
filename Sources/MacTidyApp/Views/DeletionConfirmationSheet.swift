@@ -2,8 +2,7 @@ import SwiftUI
 import CoreKit
 
 /// The one confirmation UI every destructive action goes through. Shows the
-/// complete plan — every path plus the total — with the dry-run toggle
-/// visible, then reports the outcome.
+/// complete plan — every path plus the total — then reports the outcome.
 struct DeletionConfirmationSheet: View {
     @Environment(AppState.self) private var state
     @Environment(\.dismiss) private var dismiss
@@ -38,8 +37,6 @@ struct DeletionConfirmationSheet: View {
 
     @ViewBuilder
     private var planView: some View {
-        @Bindable var state = state
-
         Text(title).font(.title2.bold())
         if let reasoning, !reasoning.isEmpty {
             HStack(alignment: .top, spacing: 6) {
@@ -92,20 +89,11 @@ struct DeletionConfirmationSheet: View {
         }
         .listStyle(.bordered)
 
-        Toggle(isOn: $state.dryRun) {
-            VStack(alignment: .leading) {
-                Text("Dry run")
-                Text("Log what would be trashed without touching anything.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-
         HStack {
             Spacer()
             Button("Cancel") { dismiss() }
                 .keyboardShortcut(.cancelAction)
-            Button(state.dryRun ? "Preview (Dry Run)" : "Move to Trash") { execute() }
+            Button("Move to Trash") { execute() }
                 .keyboardShortcut(.defaultAction)
                 .disabled(plan.isEmpty && uninstallActions.isEmpty)
         }
@@ -115,10 +103,9 @@ struct DeletionConfirmationSheet: View {
         // Non-throwing: policy violations come back as per-item skipped
         // records in the outcome rather than aborting the whole plan.
         let result = state.execute(plan, extraAllowedRoots: extraAllowedRoots, kind: kind)
-        // Run the non-file uninstall actions (TCC reset, lsregister) — only
-        // meaningful for real passes; dry runs report a dry-run result.
+        // Run the non-file uninstall actions (TCC reset, lsregister).
         if !uninstallActions.isEmpty {
-            actionOutcome = AppUninstaller.performActions(uninstallActions, dryRun: state.dryRun)
+            actionOutcome = AppUninstaller.performActions(uninstallActions)
         }
         outcome = result
     }
@@ -126,21 +113,17 @@ struct DeletionConfirmationSheet: View {
     @ViewBuilder
     private func outcomeView(_ outcome: DeletionOutcome) -> some View {
         Label(
-            outcome.dryRun
-                ? "Dry run — nothing was touched"
-                : "Moved \(outcome.trashed.count) item\(outcome.trashed.count == 1 ? "" : "s") to Trash",
-            systemImage: outcome.dryRun ? "eye" : "checkmark.circle"
+            "Moved \(outcome.trashed.count) item\(outcome.trashed.count == 1 ? "" : "s") to Trash",
+            systemImage: "checkmark.circle"
         )
         .font(.title2.bold())
 
-        Text(outcome.dryRun
-             ? "\(outcome.trashed.count) item(s) totalling \(outcome.reclaimedBytes.formattedBytes) would be trashed."
-             : "\(outcome.reclaimedBytes.formattedBytes) reclaimable once you empty the Trash.")
+        Text("\(outcome.reclaimedBytes.formattedBytes) reclaimable once you empty the Trash.")
             .foregroundStyle(.secondary)
 
         List {
             ForEach(outcome.trashed) { record in
-                Label(record.original.path, systemImage: outcome.dryRun ? "eye" : "trash")
+                Label(record.original.path, systemImage: "trash")
                     .lineLimit(1)
                     .truncationMode(.head)
             }

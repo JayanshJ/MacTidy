@@ -39,23 +39,6 @@ struct CloneDedupTests {
         #expect(set.wastedBytes == Int64(payload.count))
     }
 
-    @Test func dryRunDeduplicationTouchesNothing() async throws {
-        let (sandbox, _) = try makeFixture()
-        defer { try? FileManager.default.removeItem(at: sandbox) }
-
-        let before = await DuplicateFinder.find(in: [sandbox])
-        let set = try #require(before.first)
-        let policy = SafePathPolicy(extraAllowedRoots: [sandbox])
-
-        let outcome = CloneDeduplicator.deduplicate(set, policy: policy, dryRun: true)
-
-        #expect(outcome.dryRun)
-        #expect(outcome.deduplicated.count == 1)
-        #expect(outcome.deduplicated.allSatisfy { $0.trashLocation == nil })
-        let after = await DuplicateFinder.find(in: [sandbox])
-        #expect(after.first?.physicalGroups.count == 2, "dry run must not dedup")
-    }
-
     @Test func deduplicationReclaimsSpaceAndPreservesContent() async throws {
         let (sandbox, payload) = try makeFixture()
         defer { try? FileManager.default.removeItem(at: sandbox) }
@@ -64,7 +47,7 @@ struct CloneDedupTests {
         let set = try #require(before.first)
         let policy = SafePathPolicy(extraAllowedRoots: [sandbox])
 
-        let outcome = CloneDeduplicator.deduplicate(set, policy: policy, dryRun: false)
+        let outcome = CloneDeduplicator.deduplicate(set, policy: policy)
 
         #expect(outcome.skipped.isEmpty)
         #expect(outcome.deduplicated.count == 1)
@@ -96,7 +79,7 @@ struct CloneDedupTests {
         // Policy without the sandbox as an allowed root: the extra copy is
         // rejected per-item and reported as skipped, not a thrown abort.
         let outcome = CloneDeduplicator.deduplicate(
-            set, policy: SafePathPolicy(), dryRun: false)
+            set, policy: SafePathPolicy())
         #expect(outcome.deduplicated.isEmpty)
         #expect(outcome.skipped.count == 1)
         let after = await DuplicateFinder.find(in: [sandbox])
@@ -117,7 +100,7 @@ struct CloneDedupTests {
         let extra = set.physicalGroups.dropFirst().flatMap { $0 }.first!.url
         try FileManager.default.removeItem(at: extra)
         let policy = SafePathPolicy(extraAllowedRoots: [sandbox])
-        let outcome = CloneDeduplicator.deduplicate(set, policy: policy, dryRun: false)
+        let outcome = CloneDeduplicator.deduplicate(set, policy: policy)
         #expect(outcome.deduplicated.isEmpty)
         #expect(outcome.skipped.count == 1)
     }

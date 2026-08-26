@@ -88,8 +88,8 @@ struct DiskSheetView: View {
 }
 
 /// The post-cleanup Undo toast. Appears whenever AppState has a fresh
-/// non-dry-run outcome, offering to restore everything just trashed. Auto-
-/// dismisses after a while so it doesn't camp on screen forever.
+/// outcome, offering to restore everything just trashed. Auto-dismisses after
+/// a while so it doesn't camp on screen forever.
 struct UndoToast: View {
     @Environment(AppState.self) private var state
     @State private var isRestoring = false

@@ -49,8 +49,8 @@ struct NodePackagesInspector: View {
         .frame(minWidth: 640, minHeight: 460)
         .task { if analyses.isEmpty { await scan() } }
         .sheet(item: $sheetPlan) { plan in
-            DeletionConfirmationSheet(title: "Trash node_modules?", plan: plan) { outcome in
-                if !outcome.dryRun { Task { await scan() } }
+            DeletionConfirmationSheet(title: "Trash node_modules?", plan: plan) { _ in
+                Task { await scan() }
             }
         }
     }

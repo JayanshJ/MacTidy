@@ -1,9 +1,9 @@
 import Foundation
 
 /// One completed cleanup — the honest, auditable counterpart to the "speed
-/// boost" theater the app rejects. Only real (non-dry-run) executions are
-/// recorded, so the running totals reflect bytes the user actually moved to
-/// the Trash (reclaimable once the Trash is emptied).
+/// boost" theater the app rejects. Every execution moves to the Trash, so the
+/// running totals reflect bytes the user actually moved there (reclaimable
+/// once the Trash is emptied).
 public struct CleanupEntry: Identifiable, Sendable, Codable, Hashable {
     public enum Kind: String, Sendable, Codable {
         case deletion

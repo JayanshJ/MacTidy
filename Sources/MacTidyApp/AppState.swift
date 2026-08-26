@@ -17,12 +17,6 @@ final class AppState {
     /// can run from RootView.
     let updates = UpdateManager()
 
-    /// Dry-run is the app-wide default; every confirmation sheet shows the
-    /// toggle. Persisted so it survives relaunches.
-    var dryRun: Bool {
-        didSet { UserDefaults.standard.set(dryRun, forKey: "MacTidy.dryRun") }
-    }
-
     /// Extra roots the user has allow-listed in Settings, applied to every
     /// destructive action in addition to the policy's built-in roots.
     var extraAllowedRoots: [URL] {
@@ -67,13 +61,13 @@ final class AppState {
     /// Everything MacTidy has trashed, newest first. Drives the "Recently
     /// Trashed" view and the post-cleanup Undo toast.
     var recentTrashed: [TrashRecord] = []
-    /// The most recent real (non-dry-run) outcome, for the Undo toast.
+    /// The most recent outcome, for the Undo toast.
     var lastUndoableOutcome: (records: [TrashRecord], label: String)?
 
-    /// The first-ever real cleanup milestone, for the one-time celebration
-    /// overlay. Nil until the user's first non-dry-run cleanup that actually
-    /// frees space, and only set once (persisted) — so it fires exactly once
-    /// ever, not on every cleanup.
+    /// The first-ever cleanup milestone, for the one-time celebration
+    /// overlay. Nil until the user's first cleanup that actually frees space,
+    /// and only set once (persisted) — so it fires exactly once ever, not on
+    /// every cleanup.
     var firstReclaimMilestone: Int64?
 
     /// Completed cleanups, newest first — the honest reclaim-over-time log.
@@ -92,8 +86,6 @@ final class AppState {
     var flowIndex: Int = 0
     /// The action currently under review (or nil if past the end / not in review).
     var flowCurrent: FlowAction? { flowQueue.indices.contains(flowIndex) ? flowQueue[flowIndex] : nil }
-    /// Whether the current pass is the dry preview or the real cleanup.
-    var flowPass: CleanPass = .dry
     /// The most recent applied outcome, shown briefly on the applying screen.
     var flowLastOutcome: DeletionOutcome?
     /// Apps + leftovers scanned during the flow, for uninstall action cards.
@@ -124,7 +116,6 @@ final class AppState {
             .appending(path: "Library/Application Support/MacTidy")
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         self.lastScanURL = support.appending(path: "last-scan.json")
-        self.dryRun = UserDefaults.standard.object(forKey: "MacTidy.dryRun") as? Bool ?? true
         self.extraAllowedRoots = Self.loadExtraAllowedRoots()
         self.autoScanOnLaunch = UserDefaults.standard.object(forKey: "MacTidy.autoScanOnLaunch") as? Bool ?? false
         self.logRetentionDays = UserDefaults.standard.object(forKey: "MacTidy.logRetentionDays") as? Int ?? 0
@@ -267,28 +258,13 @@ final class AppState {
         flowQueue = queue.sorted { $0.reclaimableBytes > $1.reclaimableBytes }
     }
 
-    /// Applies the current trash action via the destructive gateway. In the
-    /// dry pass, `dryRun` is on so nothing is actually trashed.
+    /// Applies the current trash action via the destructive gateway.
     @discardableResult
     func flowApplyTrash(_ items: [ScanItem]) -> DeletionOutcome {
         let plan = DeletionPlan(items: items)
         let outcome = execute(plan, kind: .deletion)
         flowLastOutcome = outcome
         return outcome
-    }
-
-    /// Switch from the dry pass to the real pass: turn dry-run off, clear
-    /// skipped items, and return to the dashboard.
-    func startRealPass() {
-        dryRun = false
-        flowPass = .real
-        flowSkipped.removeAll()
-        flowIndex = 0
-        if flowQueue.isEmpty {
-            flowPhase = .allClean
-        } else {
-            flowPhase = .dashboard
-        }
     }
 
     /// Reset back to the welcome screen (e.g. after finishing).
@@ -342,8 +318,7 @@ final class AppState {
         kind: TrashRecord.Kind = .deletion
     ) -> DeletionOutcome {
         let executor = DeletionExecutor(
-            policy: SafePathPolicy(extraAllowedRoots: extraAllowedRoots),
-            dryRun: dryRun
+            policy: SafePathPolicy(extraAllowedRoots: extraAllowedRoots)
         )
         let outcome = executor.execute(plan)
         recordOutcome(outcome, plan: plan, kind: kind)
@@ -354,14 +329,14 @@ final class AppState {
     /// `execute`, it is non-throwing and per-item fail-closed: failures come
     /// back in the outcome's `failed` list. Unlike trashing, these actions are
     /// NOT Trash-undoable, so they are NOT recorded to `TrashLog` — only the
-    /// reclaim-over-time `CleanupLog` gets an entry on real passes.
+    /// reclaim-over-time `CleanupLog` gets an entry.
     @discardableResult
     func executeShellActions(
         _ actions: [any ShellAction],
         kind: CleanupEntry.Kind
     ) -> ShellActionOutcome {
-        let outcome = ShellActionExecutor.execute(actions, dryRun: dryRun)
-        if !outcome.dryRun, !outcome.succeeded.isEmpty {
+        let outcome = ShellActionExecutor.execute(actions)
+        if !outcome.succeeded.isEmpty {
             cleanupLog.append(CleanupEntry(
                 kind: kind,
                 reclaimedBytes: outcome.reclaimedBytes,
@@ -455,8 +430,8 @@ final class AppState {
         return DeterministicInsights.from(snapshot)
     }
 
-    /// Gateway for clone-based dedup — same policy and dry-run rules as
-    /// deletion, but content-preserving (copies become APFS clones).
+    /// Gateway for clone-based dedup — same policy as deletion, but
+    /// content-preserving (copies become APFS clones).
     @discardableResult
     func deduplicate(
         _ set: DuplicateSet,
@@ -464,8 +439,7 @@ final class AppState {
     ) -> CloneDeduplicator.Outcome {
         let outcome = CloneDeduplicator.deduplicate(
             set,
-            policy: SafePathPolicy(extraAllowedRoots: extraAllowedRoots),
-            dryRun: dryRun
+            policy: SafePathPolicy(extraAllowedRoots: extraAllowedRoots)
         )
         recordDedupOutcome(outcome, set: set)
         return outcome
@@ -530,7 +504,7 @@ final class AppState {
         _ outcome: DeletionOutcome, plan: DeletionPlan,
         kind: TrashRecord.Kind
     ) {
-        guard !outcome.dryRun, !outcome.trashed.isEmpty else { return }
+        guard !outcome.trashed.isEmpty else { return }
         // Build persisted trash records carrying per-item sizes from the plan.
         let sizeByPath = Dictionary(plan.candidates.map { ($0.url.path, $0.sizeBytes) },
                                     uniquingKeysWith: { a, _ in a })
@@ -565,7 +539,7 @@ final class AppState {
     private func recordDedupOutcome(
         _ outcome: CloneDeduplicator.Outcome, set: DuplicateSet
     ) {
-        guard !outcome.dryRun, !outcome.deduplicated.isEmpty else { return }
+        guard !outcome.deduplicated.isEmpty else { return }
         let records = outcome.deduplicated.compactMap { record -> TrashRecord? in
             guard record.trashLocation != nil else { return nil }
             return TrashRecord(

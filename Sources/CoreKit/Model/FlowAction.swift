@@ -88,10 +88,3 @@ public enum FlowPhase: Sendable, Equatable {
     case dashboard
     case allClean
 }
-
-/// Tracks the dry-pass state. The wizard does a dry run first (trashes
-/// nothing), then offers a real pass.
-public enum CleanPass: Sendable, Equatable {
-    case dry
-    case real
-}

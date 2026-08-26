@@ -11,10 +11,9 @@ struct DedupConfirmationSheet: View {
     /// Only sets that actually waste space (more than one physical group).
     let sets: [DuplicateSet]
     let extraAllowedRoots: [URL]
-    var onCompleted: (_ dryRun: Bool) -> Void = { _ in }
+    var onCompleted: () -> Void = {}
 
     private struct Summary {
-        let dryRun: Bool
         var deduplicated: [TrashedRecord] = []
         var skipped: [SkippedRecord] = []
         var reclaimedBytes: Int64 = 0
@@ -41,8 +40,6 @@ struct DedupConfirmationSheet: View {
 
     @ViewBuilder
     private var planView: some View {
-        @Bindable var state = state
-
         Text("Deduplicate \(sets.count) set\(sets.count == 1 ? "" : "s")?")
             .font(.title2.bold())
         Text("""
@@ -72,20 +69,11 @@ struct DedupConfirmationSheet: View {
         }
         .listStyle(.bordered)
 
-        Toggle(isOn: $state.dryRun) {
-            VStack(alignment: .leading) {
-                Text("Dry run")
-                Text("Log what would be deduplicated without touching anything.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-
         HStack {
             Spacer()
             Button("Cancel") { dismiss() }
                 .keyboardShortcut(.cancelAction)
-            Button(state.dryRun ? "Preview (Dry Run)" : "Deduplicate") { execute() }
+            Button("Deduplicate") { execute() }
                 .keyboardShortcut(.defaultAction)
                 .disabled(sets.isEmpty)
         }
@@ -93,7 +81,7 @@ struct DedupConfirmationSheet: View {
 
     private func execute() {
         // Non-throwing: per-set policy violations come back as skipped records.
-        var result = Summary(dryRun: state.dryRun)
+        var result = Summary()
         for set in sets {
             let outcome = state.deduplicate(set, extraAllowedRoots: extraAllowedRoots)
             result.deduplicated += outcome.deduplicated
@@ -106,22 +94,18 @@ struct DedupConfirmationSheet: View {
     @ViewBuilder
     private func summaryView(_ summary: Summary) -> some View {
         Label(
-            summary.dryRun
-                ? "Dry run — nothing was touched"
-                : "Deduplicated \(summary.deduplicated.count) cop\(summary.deduplicated.count == 1 ? "y" : "ies")",
-            systemImage: summary.dryRun ? "eye" : "checkmark.circle"
+            "Deduplicated \(summary.deduplicated.count) cop\(summary.deduplicated.count == 1 ? "y" : "ies")",
+            systemImage: "checkmark.circle"
         )
         .font(.title2.bold())
 
-        Text(summary.dryRun
-             ? "\(summary.reclaimedBytes.formattedBytes) would be freed, with no file deleted."
-             : "\(summary.reclaimedBytes.formattedBytes) freed once you empty the Trash. All file paths still work.")
+        Text("\(summary.reclaimedBytes.formattedBytes) freed once you empty the Trash. All file paths still work.")
             .foregroundStyle(.secondary)
 
         List {
             ForEach(summary.deduplicated) { record in
                 Label(record.original.path,
-                      systemImage: summary.dryRun ? "eye" : "doc.on.doc")
+                      systemImage: "doc.on.doc")
                     .lineLimit(1)
                     .truncationMode(.head)
             }
@@ -141,7 +125,7 @@ struct DedupConfirmationSheet: View {
         HStack {
             Spacer()
             Button("Done") {
-                onCompleted(summary.dryRun)
+                onCompleted()
                 dismiss()
             }
             .keyboardShortcut(.defaultAction)

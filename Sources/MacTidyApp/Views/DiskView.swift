@@ -115,11 +115,9 @@ struct CategoryCleanupView: View {
             }
         }
         .sheet(item: $sheetPlan) { plan in
-            DeletionConfirmationSheet(title: "Trash selected items?", plan: plan) { outcome in
-                if !outcome.dryRun {
-                    selection.removeAll()
-                    Task { await state.rescanCategories() }
-                }
+            DeletionConfirmationSheet(title: "Trash selected items?", plan: plan) { _ in
+                selection.removeAll()
+                Task { await state.rescanCategories() }
             }
         }
     }
@@ -197,8 +195,8 @@ struct DirectoryExplorerView: View {
         .onAppear { if items.isEmpty { rescan() } }
         .onChange(of: root) { rescan() }
         .sheet(item: $sheetPlan) { plan in
-            DeletionConfirmationSheet(title: "Trash this item?", plan: plan) { outcome in
-                if !outcome.dryRun { rescan() }
+            DeletionConfirmationSheet(title: "Trash this item?", plan: plan) { _ in
+                rescan()
             }
         }
     }

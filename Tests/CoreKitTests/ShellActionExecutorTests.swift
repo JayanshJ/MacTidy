@@ -17,21 +17,10 @@ struct ShellActionExecutorTests {
         func run() -> Shell.Output? { Shell.run(commandPath, []) }
     }
 
-    @Test func dryRunReportsAllAsSucceededWithoutExecuting() {
-        let action = TestAction(displayName: "t", commandSummary: "docker rmi abc",
-                                estimatedBytes: 500, shouldFail: true)
-        let outcome = ShellActionExecutor.execute([action], dryRun: true)
-        #expect(outcome.dryRun)
-        #expect(outcome.succeeded.count == 1)
-        #expect(outcome.failed.isEmpty)
-        #expect(outcome.reclaimedBytes == 500)
-    }
-
     @Test func successfulActionSucceedsAndCountsBytes() {
         let action = TestAction(displayName: "t", commandSummary: "docker rmi abc",
                                 estimatedBytes: 500, shouldFail: false)
-        let outcome = ShellActionExecutor.execute([action], dryRun: false)
-        #expect(!outcome.dryRun)
+        let outcome = ShellActionExecutor.execute([action])
         #expect(outcome.succeeded.count == 1)
         #expect(outcome.failed.isEmpty)
         #expect(outcome.reclaimedBytes == 500)
@@ -42,7 +31,7 @@ struct ShellActionExecutorTests {
                               estimatedBytes: 300, shouldFail: false)
         let bad = TestAction(displayName: "bad", commandSummary: "docker rmi bad",
                              estimatedBytes: 700, shouldFail: true)
-        let outcome = ShellActionExecutor.execute([bad, good], dryRun: false)
+        let outcome = ShellActionExecutor.execute([bad, good])
         #expect(outcome.succeeded.count == 1)
         #expect(outcome.succeeded.first?.displayName == "good")
         #expect(outcome.failed.count == 1)
@@ -54,7 +43,7 @@ struct ShellActionExecutorTests {
     }
 
     @Test func emptyBatchIsHarmless() {
-        let outcome = ShellActionExecutor.execute([], dryRun: false)
+        let outcome = ShellActionExecutor.execute([])
         #expect(outcome.succeeded.isEmpty)
         #expect(outcome.failed.isEmpty)
         #expect(outcome.reclaimedBytes == 0)

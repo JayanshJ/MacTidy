@@ -37,12 +37,10 @@ public struct ShellActionOutcome: Sendable {
     }
     public var succeeded: [any ShellAction]
     public var failed: [Failure]
-    public var dryRun: Bool
 
-    public init(succeeded: [any ShellAction] = [], failed: [Failure] = [], dryRun: Bool) {
+    public init(succeeded: [any ShellAction] = [], failed: [Failure] = []) {
         self.succeeded = succeeded
         self.failed = failed
-        self.dryRun = dryRun
     }
 
     public var reclaimedBytes: Int64 {
@@ -51,15 +49,10 @@ public struct ShellActionOutcome: Sendable {
 }
 
 public enum ShellActionExecutor {
-    /// Executes `actions` per-item. In `dryRun`, nothing runs — every action is
-    /// reported as would-run (`succeeded`, with the dry-run flag set so the UI
-    /// can show "would have run"). Otherwise each action runs; success adds to
+    /// Executes `actions` per-item. Each action runs; success adds to
     /// `succeeded`, failure (nil Output or non-zero exit) adds to `failed`
     /// with the real stderr. A failure never aborts the remaining actions.
-    public static func execute(_ actions: [any ShellAction], dryRun: Bool) -> ShellActionOutcome {
-        if dryRun {
-            return ShellActionOutcome(succeeded: actions, failed: [], dryRun: true)
-        }
+    public static func execute(_ actions: [any ShellAction]) -> ShellActionOutcome {
         var succeeded: [any ShellAction] = []
         var failed: [ShellActionOutcome.Failure] = []
         for action in actions {
@@ -74,6 +67,6 @@ public enum ShellActionExecutor {
                 failed.append(.init(action: action, message: msg.isEmpty ? "Command exited with code \(output.exitCode)." : msg))
             }
         }
-        return ShellActionOutcome(succeeded: succeeded, failed: failed, dryRun: false)
+        return ShellActionOutcome(succeeded: succeeded, failed: failed)
     }
 }

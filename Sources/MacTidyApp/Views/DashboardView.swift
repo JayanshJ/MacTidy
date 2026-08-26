@@ -58,11 +58,9 @@ struct DashboardView: View {
                 title: sheetPlanTitle,
                 plan: plan,
                 kind: sheetPlanKind
-            ) { outcome in
-                if !outcome.dryRun {
-                    selection.removeAll()
-                    Task { await state.rescanCategories() }
-                }
+            ) { _ in
+                selection.removeAll()
+                Task { await state.rescanCategories() }
             }
         }
         .sheet(isPresented: $showNodeInspector) {
@@ -163,45 +161,42 @@ struct DashboardView: View {
     /// The dashboard header: total reclaimable + dry-pass banner + the one-
     /// click clean-all-safe action.
     private var header: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.md) {
-                Text(state.totalReclaimable.formattedBytes)
-                    .font(.system(size: 34, weight: .bold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(Theme.accent)
-                Text("reclaimable")
-                    .font(.title3).foregroundStyle(.secondary)
-                Spacer()
-                Button { Task { await state.rescanCategories() } } label: {
-                    Label("Rescan", systemImage: "arrow.clockwise")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                Button {
-                    showNodeInspector = true
-                } label: {
-                    Label("Node Packages", systemImage: "shippingbox")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .help("Find orphaned and unused npm packages across your Node projects, and run npm prune safely.")
-                Button {
-                    sheetPlanIsCleanAll = true
-                    sheetPlan = DeletionPlan(items: allSafeItems)
-                } label: {
-                    if allSafeItems.isEmpty {
-                        Label("Clean All Safe", systemImage: "trash.circle.fill")
-                    } else {
-                        Label("Clean All Safe · \(allSafeBytes.formattedBytes)",
-                              systemImage: "trash.circle.fill")
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .disabled(allSafeItems.isEmpty)
-                .help("Trash every item in the safe categories (caches, build artifacts, old installers). Suggest-only categories like Downloads and large files are never included.")
+        HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.md) {
+            Text(state.totalReclaimable.formattedBytes)
+                .font(.system(size: 34, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(Theme.accent)
+            Text("reclaimable")
+                .font(.title3).foregroundStyle(.secondary)
+            Spacer()
+            Button { Task { await state.rescanCategories() } } label: {
+                Label("Rescan", systemImage: "arrow.clockwise")
             }
-            passBanner
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            Button {
+                showNodeInspector = true
+            } label: {
+                Label("Node Packages", systemImage: "shippingbox")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("Find orphaned and unused npm packages across your Node projects, and run npm prune safely.")
+            Button {
+                sheetPlanIsCleanAll = true
+                sheetPlan = DeletionPlan(items: allSafeItems)
+            } label: {
+                if allSafeItems.isEmpty {
+                    Label("Clean All Safe", systemImage: "trash.circle.fill")
+                } else {
+                    Label("Clean All Safe · \(allSafeBytes.formattedBytes)",
+                          systemImage: "trash.circle.fill")
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .disabled(allSafeItems.isEmpty)
+            .help("Trash every item in the safe categories (caches, build artifacts, old installers). Suggest-only categories like Downloads and large files are never included.")
         }
     }
 
@@ -219,31 +214,6 @@ struct DashboardView: View {
 
     private var allSafeBytes: Int64 {
         allSafeItems.reduce(0) { $0 + $1.sizeBytes }
-    }
-
-    private var passBanner: some View {
-        HStack(spacing: Theme.Spacing.xs) {
-            Image(systemName: state.flowPass == .dry ? "eye" : "checkmark.shield")
-            Text(state.flowPass == .dry
-                 ? "Preview mode — nothing is trashed until you run for real"
-                 : "Real pass — items move to the Trash (undoable)")
-                .font(.caption.bold())
-            Spacer()
-            if state.flowPass == .dry {
-                Button("Run for real") {
-                    state.startRealPass()
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            }
-        }
-        .foregroundStyle(state.flowPass == .dry ? .secondary : Theme.accent)
-        .padding(.horizontal, Theme.Spacing.md)
-        .padding(.vertical, Theme.Spacing.xs)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill((state.flowPass == .dry ? Color.secondary : Theme.accent).opacity(0.1))
-        )
     }
 
     private func categoryCard(_ result: CategoryResult) -> some View {

@@ -25,20 +25,16 @@ struct DuplicatesView: View {
         .sheet(item: $sheetPlan) { plan in
             DeletionConfirmationSheet(title: "Trash duplicate copies?",
                                       plan: plan,
-                                      extraAllowedRoots: roots) { outcome in
-                if !outcome.dryRun {
-                    selection.removeAll()
-                    scan()
-                }
+                                      extraAllowedRoots: roots) { _ in
+                selection.removeAll()
+                scan()
             }
         }
         .sheet(isPresented: $showDedupSheet) {
             DedupConfirmationSheet(sets: dedupableSets,
-                                   extraAllowedRoots: roots) { dryRun in
-                if !dryRun {
-                    selection.removeAll()
-                    scan()
-                }
+                                   extraAllowedRoots: roots) {
+                selection.removeAll()
+                scan()
             }
         }
     }

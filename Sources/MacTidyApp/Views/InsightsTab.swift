@@ -24,8 +24,8 @@ struct InsightsTab: View {
             content
         }
         .sheet(item: $sheetPlan) { plan in
-            DeletionConfirmationSheet(title: "Trash suggested items?", plan: plan, reasoning: sheetReasoning) { outcome in
-                if !outcome.dryRun { Task { await refresh() } }
+            DeletionConfirmationSheet(title: "Trash suggested items?", plan: plan, reasoning: sheetReasoning) { _ in
+                Task { await refresh() }
             }
         }
         .sheet(item: $quitSheet) { target in

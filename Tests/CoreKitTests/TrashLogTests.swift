@@ -21,7 +21,7 @@ struct TrashLogTests {
         try Data("important".utf8).write(to: file)
         let originalPath = file.path
 
-        // Trash it for real (not dry run) so there's a Trash location to undo.
+        // Trash it so there's a Trash location to undo.
         let trashLocation = try Trasher.trash(file)
         #expect(!fm.fileExists(atPath: originalPath))
         #expect(fm.fileExists(atPath: trashLocation.path))
@@ -44,13 +44,14 @@ struct TrashLogTests {
         #expect(log.load().isEmpty)
     }
 
-    @Test func dryRunRecordsAreNotPersisted() throws {
+    @Test func recordsWithoutATrashLocationAreNotPersisted() throws {
         let fm = FileManager.default
         let storage = fm.temporaryDirectory.appending(path: "trash-log-\(UUID().uuidString).json")
         let log = TrashLog(storageURL: storage)
         defer { try? fm.removeItem(at: storage) }
 
-        // A record with no trash location (dry run) must be filtered out.
+        // A record with no trash location has nothing to restore, so it must
+        // be filtered out and never persisted.
         log.append([TrashRecord(
             original: URL(fileURLWithPath: "/tmp/none"), trashLocation: nil,
             date: Date(), bytes: 0, kind: .deletion)])

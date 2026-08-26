@@ -30,13 +30,11 @@ struct DashboardUninstaller: View {
             DeletionConfirmationSheet(title: "Uninstall \(selectedApp?.app.name ?? "app")?",
                                       plan: plan,
                                       kind: .uninstall,
-                                      uninstallActions: actions) { outcome in
-                if !outcome.dryRun {
-                    selectedAppID = nil
-                    leftovers = []
-                    actions = []
-                    Task { await state.startFlow() }
-                }
+                                      uninstallActions: actions) { _ in
+                selectedAppID = nil
+                leftovers = []
+                actions = []
+                Task { await state.startFlow() }
             }
         }
     }

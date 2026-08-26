@@ -37,7 +37,7 @@ public struct DeletionPlan: Sendable {
 public struct TrashedRecord: Identifiable, Sendable {
     public let id = UUID()
     public let original: URL
-    /// Where the item landed in the Trash; nil on a dry run.
+    /// Where the item landed in the Trash.
     public let trashLocation: URL?
 }
 
@@ -48,13 +48,11 @@ public struct SkippedRecord: Identifiable, Sendable {
 }
 
 public struct DeletionOutcome: Sendable {
-    public let dryRun: Bool
     public let trashed: [TrashedRecord]
     public let skipped: [SkippedRecord]
     public let reclaimedBytes: Int64
 
-    public init(dryRun: Bool, trashed: [TrashedRecord], skipped: [SkippedRecord], reclaimedBytes: Int64) {
-        self.dryRun = dryRun
+    public init(trashed: [TrashedRecord], skipped: [SkippedRecord], reclaimedBytes: Int64) {
         self.trashed = trashed
         self.skipped = skipped
         self.reclaimedBytes = reclaimedBytes
@@ -64,13 +62,9 @@ public struct DeletionOutcome: Sendable {
 /// The single execution path for every destructive action in the app.
 public struct DeletionExecutor: Sendable {
     public var policy: SafePathPolicy
-    /// When true (the default), the executor logs what it *would* trash and
-    /// touches nothing.
-    public var dryRun: Bool
 
-    public init(policy: SafePathPolicy = SafePathPolicy(), dryRun: Bool = true) {
+    public init(policy: SafePathPolicy = SafePathPolicy()) {
         self.policy = policy
-        self.dryRun = dryRun
     }
 
     /// Validates every candidate against the SafePathPolicy, partitioning the
@@ -93,23 +87,18 @@ public struct DeletionExecutor: Sendable {
                 break
             }
 
-            if dryRun {
-                NSLog("MacTidy dry-run: would trash %@ (%@)",
-                      candidate.url.path, candidate.sizeBytes.formattedBytes)
-                trashed.append(TrashedRecord(original: candidate.url, trashLocation: nil))
-                reclaimed += candidate.sizeBytes
-                continue
-            }
             do {
                 let location = try Trasher.trash(candidate.url)
                 trashed.append(TrashedRecord(original: candidate.url, trashLocation: location))
                 reclaimed += candidate.sizeBytes
+                NSLog("MacTidy: trashed %@ (%@)",
+                      candidate.url.path, candidate.sizeBytes.formattedBytes)
             } catch {
                 skipped.append(SkippedRecord(url: candidate.url,
                                              reason: error.localizedDescription))
             }
         }
-        return DeletionOutcome(dryRun: dryRun, trashed: trashed,
+        return DeletionOutcome(trashed: trashed,
                                skipped: skipped, reclaimedBytes: reclaimed)
     }
 }

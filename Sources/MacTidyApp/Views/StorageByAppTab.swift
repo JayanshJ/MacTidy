@@ -26,8 +26,8 @@ struct StorageByAppTab: View {
             DeletionConfirmationSheet(
                 title: "Trash caches for \(selected?.app.name ?? "app")?",
                 plan: plan
-            ) { outcome in
-                if !outcome.dryRun { Task { await load() } }
+            ) { _ in
+                Task { await load() }
             }
         }
     }

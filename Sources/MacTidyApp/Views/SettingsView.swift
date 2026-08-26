@@ -1,8 +1,8 @@
 import SwiftUI
 import CoreKit
 
-/// App preferences: dry-run default, extra allowed roots, auto-scan-on-launch,
-/// and log retention. Everything here is persisted via `AppState`.
+/// App preferences: extra allowed roots, auto-scan-on-launch, and log
+/// retention. Everything here is persisted via `AppState`.
 struct SettingsView: View {
     @Environment(AppState.self) private var state
     @Environment(\.dismiss) private var dismiss
@@ -46,10 +46,7 @@ struct SettingsView: View {
             }
 
             Section("Safety") {
-                @Bindable var state = state
-                Toggle("Preview before deleting", isOn: $state.dryRun)
-                    .help("Scan and review without trashing anything. You can still override per action.")
-                Text("Deletion always means Move to Trash. A hard denylist protects /System, your documents, photos, and media no matter what a scan proposes.")
+                Text("Every deletion moves to the Trash — undo from the Recently Trashed list. A hard denylist protects /System, your documents, photos, and media no matter what a scan proposes.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

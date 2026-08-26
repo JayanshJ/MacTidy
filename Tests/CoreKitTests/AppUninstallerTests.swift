@@ -107,18 +107,4 @@ struct AppUninstallerTests {
         )
         #expect(AppUninstaller.actions(for: app).isEmpty)
     }
-
-    @Test func actionsDryRunReportsSuccessWithoutRunning() {
-        let app = InstalledApp(
-            url: URL(fileURLWithPath: "/Applications/Foo.app"),
-            name: "Foo",
-            bundleID: "com.nonexistent.bundle.xyz",
-            sizeBytes: 0
-        )
-        let outcome = AppUninstaller.performActions(
-            AppUninstaller.actions(for: app), dryRun: true
-        )
-        #expect(outcome.results.count == 2)
-        #expect(outcome.results.allSatisfy { $0.succeeded })
-    }
 }

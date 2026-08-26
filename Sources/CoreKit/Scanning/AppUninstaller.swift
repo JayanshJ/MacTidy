@@ -213,21 +213,13 @@ public enum AppUninstaller {
 
     /// Runs the non-file uninstall actions (TCC reset, lsregister). Each runs
     /// independently and reports its own result, so one failure never aborts
-    /// the others or rolls back trashed files. When `dryRun` is true, nothing
-    /// is actually run — the actions are reported as dry-run successes so the
-    /// preview shows what *would* happen.
+    /// the others or rolls back trashed files.
     @discardableResult
     public static func performActions(
-        _ actions: [UninstallAction], dryRun: Bool
+        _ actions: [UninstallAction]
     ) -> UninstallActionOutcome {
         var results: [UninstallActionOutcome.StepResult] = []
         for action in actions {
-            if dryRun {
-                NSLog("MacTidy dry-run: would perform %@ for %@", action.kind.rawValue, action.target)
-                results.append(.init(action: action, succeeded: true,
-                                     message: "Would run in a real pass."))
-                continue
-            }
             switch action.kind {
             case .tccReset:
                 // `tccutil reset All <bundleid>` revokes every TCC grant for

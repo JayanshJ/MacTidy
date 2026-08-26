@@ -221,8 +221,6 @@ struct DockerActionConfirmationSheet: View {
 
     @ViewBuilder
     private var planView: some View {
-        @Bindable var state = state
-
         Text("Docker cleanup").font(.title2.bold())
         Label("This cannot be undone — Docker does not go through the Trash.",
               systemImage: "exclamationmark.triangle.fill")
@@ -248,19 +246,12 @@ struct DockerActionConfirmationSheet: View {
         }
         .listStyle(.bordered)
 
-        Toggle(isOn: $state.dryRun) {
-            VStack(alignment: .leading) {
-                Text("Dry run")
-                Text("Log what would run without touching Docker.").font(.caption).foregroundStyle(.secondary)
-            }
-        }
-
         HStack {
             Spacer()
             Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-            Button(state.dryRun ? "Preview (Dry Run)" : "Run") { execute() }
+            Button("Run") { execute() }
                 .keyboardShortcut(.defaultAction)
-                .tint(state.dryRun ? .blue : .red)
+                .tint(.red)
                 .disabled(actions.isEmpty)
         }
     }
@@ -284,9 +275,8 @@ struct DockerActionConfirmationSheet: View {
 
     @ViewBuilder
     private func outcomeView(_ outcome: ShellActionOutcome) -> some View {
-        Label(outcome.dryRun ? "Dry run — nothing was touched"
-              : "Ran \(outcome.succeeded.count) action(s) · ≈ \(outcome.reclaimedBytes.formattedBytes)",
-              systemImage: outcome.dryRun ? "eye" : "checkmark.circle")
+        Label("Ran \(outcome.succeeded.count) action(s) · ≈ \(outcome.reclaimedBytes.formattedBytes)",
+              systemImage: "checkmark.circle")
             .font(.title2.bold())
         List {
             if !outcome.succeeded.isEmpty {
