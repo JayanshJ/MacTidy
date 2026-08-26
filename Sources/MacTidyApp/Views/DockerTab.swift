@@ -22,6 +22,11 @@ struct DashboardDocker: View {
     /// on the "Open Docker" button.
     @State private var waitingForDocker = false
     @State private var waitTask: Task<Void, Never>?
+    /// Multi-select mode for containers. When on, each container row shows a
+    /// checkbox and the toolbar exposes Select All / Select None / Remove
+    /// Selected. Keyed by container id (stable across rescans).
+    @State private var selectingContainers = false
+    @State private var selectedContainerIDs: Set<String> = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -33,7 +38,12 @@ struct DashboardDocker: View {
             DockerActionConfirmationSheet(
                 actions: pendingActions,
                 removeVolumes: $removeVolumes,
-                onCompleted: { Task { await scan() } }
+                onCompleted: {
+                    // Batch removal just ran — clear the selection and rescan.
+                    selectedContainerIDs.removeAll()
+                    selectingContainers = false
+                    Task { await scan() }
+                }
             )
         }
         .task { if availability == nil { await scan() } }
@@ -53,6 +63,20 @@ struct DashboardDocker: View {
             Text("Docker").font(.title3.bold())
             Spacer()
             if isLoading { ProgressView().controlSize(.small) }
+            // Toggle multi-select for containers. Only meaningful when there
+            // are containers to select; hidden otherwise so the header stays
+            // clean for image-only / empty states.
+            if dockerState?.containers.isEmpty == false {
+                Button {
+                    selectingContainers.toggle()
+                    if !selectingContainers { selectedContainerIDs.removeAll() }
+                } label: {
+                    Label(selectingContainers ? "Done" : "Select",
+                          systemImage: selectingContainers ? "checkmark.circle" : "checkmark.circle.fill")
+                }
+                .buttonStyle(.bordered).controlSize(.small)
+                .help("Select multiple containers to remove at once.")
+            }
             Button { Task { await scan() } } label: {
                 Label("Rescan", systemImage: "arrow.clockwise")
             }
@@ -100,8 +124,12 @@ struct DashboardDocker: View {
 
     @ViewBuilder
     private func dockerList(_ ds: DockerState) -> some View {
-        List {
-            if let df = dfTable, !df.isEmpty {
+        VStack(spacing: 0) {
+            if selectingContainers, !ds.containers.isEmpty {
+                containerSelectionBar(ds)
+            }
+            List {
+                if let df = dfTable, !df.isEmpty {
                 DisclosureGroup("Docker disk usage (raw)") {
                     Text(df).font(.caption.monospaced())
                         .textSelection(.enabled)
@@ -141,7 +169,54 @@ struct DashboardDocker: View {
                 }
             }
         }
+        }
         .listStyle(.inset)
+    }
+
+    /// The multi-select action bar: Select All / None + a Remove Selected
+    /// button that batches the chosen containers into one confirmation sheet.
+    /// Shown only while `selectingContainers` is on.
+    @ViewBuilder
+    private func containerSelectionBar(_ ds: DockerState) -> some View {
+        let allIDs = Set(ds.containers.map(\.id))
+        let allSelected = selectedContainerIDs.count == allIDs.count && !allIDs.isEmpty
+        HStack(spacing: Theme.Spacing.sm) {
+            Button {
+                if allSelected {
+                    selectedContainerIDs.removeAll()
+                } else {
+                    selectedContainerIDs = allIDs
+                }
+            } label: {
+                Label(allSelected ? "Deselect All" : "Select All",
+                      systemImage: allSelected ? "circle" : "checkmark.circle.fill")
+            }
+            .buttonStyle(.bordered).controlSize(.small)
+            .disabled(allIDs.isEmpty)
+
+            Text("\(selectedContainerIDs.count) selected")
+                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+
+            Spacer()
+
+            Button {
+                removeSelectedContainers(ds)
+            } label: {
+                Label("Remove Selected", systemImage: "trash")
+            }
+            .buttonStyle(.borderedProminent).controlSize(.small)
+            .tint(.red)
+            .disabled(selectedContainerIDs.isEmpty)
+        }
+        .padding(.horizontal, Theme.Spacing.lg).padding(.vertical, Theme.Spacing.xs)
+        .background(.separator.opacity(0.35))
+    }
+
+    private func removeSelectedContainers(_ ds: DockerState) {
+        let chosen = ds.containers.filter { selectedContainerIDs.contains($0.id) }
+        guard !chosen.isEmpty else { return }
+        pendingActions = chosen.map { DockerContainerRemoveAction(container: $0) }
+        showSheet = true
     }
 
     @ViewBuilder
@@ -205,6 +280,18 @@ struct DashboardDocker: View {
     @ViewBuilder
     private func dockerContainerRow(_ c: DockerContainer) -> some View {
         HStack {
+            if selectingContainers {
+            Button {
+                toggleContainer(c)
+            } label: {
+                Image(systemName: selectedContainerIDs.contains(c.id)
+                      ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(selectedContainerIDs.contains(c.id)
+                                     ? Theme.accent : .secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Select this container for batch removal.")
+            }
             VStack(alignment: .leading, spacing: 2) {
                 Text(c.name).fontWeight(.medium)
                 Text("image \(c.image)").font(.caption.monospaced()).foregroundStyle(.secondary)
@@ -212,14 +299,24 @@ struct DashboardDocker: View {
             Spacer()
             Badge(text: c.running ? "running" : "stopped",
                   tint: c.running ? Theme.Status.good : Theme.Status.caution)
-            Button {
-                pendingActions = [DockerContainerRemoveAction(container: c)]
-                showSheet = true
-            } label: {
-                Label("Remove", systemImage: "trash")
+            if !selectingContainers {
+                Button {
+                    pendingActions = [DockerContainerRemoveAction(container: c)]
+                    showSheet = true
+                } label: {
+                    Label("Remove", systemImage: "trash")
+                }
+                .buttonStyle(.bordered).controlSize(.small)
+                .help(c.running ? "Stops then removes the container (docker rm -f)." : "Removes the stopped container.")
             }
-            .buttonStyle(.bordered).controlSize(.small)
-            .help(c.running ? "Stops then removes the container (docker rm -f)." : "Removes the stopped container.")
+        }
+    }
+
+    private func toggleContainer(_ c: DockerContainer) {
+        if selectedContainerIDs.contains(c.id) {
+            selectedContainerIDs.remove(c.id)
+        } else {
+            selectedContainerIDs.insert(c.id)
         }
     }
 
@@ -230,6 +327,12 @@ struct DashboardDocker: View {
         if avail == .available {
             dockerState = DockerScanner.scan()
             dfTable = DockerScanner.systemDFTable()
+            // Drop selections for containers that no longer exist after the
+            // rescan (e.g. removed out-of-band or by a prior cleanup).
+            if let ds = dockerState {
+                let live = Set(ds.containers.map(\.id))
+                selectedContainerIDs = selectedContainerIDs.intersection(live)
+            }
         } else {
             dockerState = nil
         }
