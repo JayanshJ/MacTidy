@@ -2,9 +2,10 @@ import Foundation
 import Testing
 @testable import CoreKit
 
-/// Node package analysis — the safety-critical distinction between Level 1
-/// (orphaned, safe) and Level 2 (unused, advisory). Builds a fake Node
-/// project in a temp dir so the matching logic is exercised for real.
+/// Node package analysis — orphaned-package detection (what `npm prune`
+/// removes). Builds a fake Node project in a temp dir so the matching logic
+/// is exercised for real. (The previous "declared-but-unused" heuristic was
+/// removed as false-positive-prone; these tests cover the orphaned path only.)
 @Suite("NodePackageAnalyzer")
 struct NodePackageAnalyzerTests {
     private func makeProject() throws -> URL {
@@ -13,13 +14,13 @@ struct NodePackageAnalyzerTests {
         let fm = FileManager.default
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
 
-        // package.json declares three deps: one used, one unused, one used.
+        // package.json declares three deps.
         let pkg: [String: Any] = [
             "name": "testproj",
             "dependencies": [
-                "lodash": "^4.0.0",       // used
-                "moment": "^2.0.0",       // unused (Level 2)
-                "express": "^4.0.0",      // used
+                "lodash": "^4.0.0",
+                "moment": "^2.0.0",
+                "express": "^4.0.0",
             ],
         ]
         let pkgData = try JSONSerialization.data(withJSONObject: pkg)
@@ -31,33 +32,38 @@ struct NodePackageAnalyzerTests {
             try fm.createDirectory(at: nm.appending(path: name), withIntermediateDirectories: true)
             try Data("x".utf8).write(to: nm.appending(path: "\(name)/index.js"))
         }
-
-        // Source that imports lodash and express but NOT moment.
-        let src = """
-        import _ from 'lodash';
-        const app = require('express')();
-        export default app;
-        """
-        try src.write(to: dir.appending(path: "index.js"), atomically: true, encoding: .utf8)
-
         return dir
     }
 
-    @Test func detectsOrphanedAndUnused() throws {
+    @Test func detectsOrphanedPackages() throws {
         let project = try makeProject()
         let analysis = try #require(NodePackageAnalyzer.analyze(project))
 
-        // Level 1: leftpad is orphaned (installed, not declared).
+        // leftpad is orphaned (installed, not declared).
         #expect(analysis.orphaned.contains("leftpad"))
+        // Declared packages are not flagged as orphaned.
         #expect(!analysis.orphaned.contains("lodash"))
-
-        // Level 2: moment is declared but never imported.
-        #expect(analysis.unused.contains("moment"))
-        #expect(!analysis.unused.contains("lodash"))
-        #expect(!analysis.unused.contains("express"))
+        #expect(!analysis.orphaned.contains("express"))
 
         // Total installed = 4 top-level packages.
         #expect(analysis.totalInstalledPackages == 4)
+        // No orphaned-package findings until leftpad is removed.
+        #expect(analysis.hasFindings == true)
+    }
+
+    @Test func cleanProjectHasNoFindings() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "mactidy-clean-\(UUID().uuidString)")
+        let fm = FileManager.default
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let pkg: [String: Any] = ["name": "cleanproj", "dependencies": ["lodash": "^4.0.0"]]
+        try JSONSerialization.data(withJSONObject: pkg).write(to: dir.appending(path: "package.json"))
+        let nm = dir.appending(path: "node_modules/lodash")
+        try fm.createDirectory(at: nm, withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: nm.appending(path: "index.js"))
+        let analysis = try #require(NodePackageAnalyzer.analyze(dir))
+        #expect(analysis.orphaned.isEmpty)
+        #expect(analysis.hasFindings == false)
     }
 
     @Test func nonNodeDirReturnsNil() throws {
