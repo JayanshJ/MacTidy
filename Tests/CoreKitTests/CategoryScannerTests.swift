@@ -54,6 +54,31 @@ struct CategoryScannerTests {
         #expect(labels.contains("Maven repository"))
     }
 
+    @Test func devCachesFindsBunXdgDeno() async throws {
+        let fm = FileManager.default
+        let home = try makeFakeHome()
+        defer { try? fm.removeItem(at: home) }
+
+        try fm.createDirectory(at: home.appending(path: ".bun/install/cache"),
+                               withIntermediateDirectories: true)
+        try Data(count: 4096).write(to: home.appending(path: ".bun/install/cache/pkg.tar"))
+        try fm.createDirectory(at: home.appending(path: ".cache/pip"),
+                               withIntermediateDirectories: true)
+        try Data(count: 8192).write(to: home.appending(path: ".cache/pip/wheel.whl"))
+        try fm.createDirectory(at: home.appending(path: ".deno/gen"),
+                               withIntermediateDirectories: true)
+        try Data(count: 2048).write(to: home.appending(path: ".deno/gen/file.ts.js"))
+
+        let result = await CategoryScanner(home: home).scan(.devCaches)
+        let labels = Set(result.items.compactMap(\.detail))
+        #expect(labels.contains("Bun cache"))
+        #expect(labels.contains("XDG cache (~/.cache)"))
+        #expect(labels.contains("Deno cache"))
+        // ~8KB across three caches (XDG is counted at its root, so its child
+        // wheel bytes are rolled into the XDG entry — not double-listed).
+        #expect(result.items.count == 3)
+    }
+
     @Test func simulatorRuntimesListsDownloadedRuntimes() async throws {
         let fm = FileManager.default
         let home = try makeFakeHome()

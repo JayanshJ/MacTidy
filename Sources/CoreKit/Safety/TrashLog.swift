@@ -13,8 +13,8 @@ public struct TrashRecord: Identifiable, Sendable, Codable, Hashable {
 
     public let id: UUID
     public let originalPath: String
-    /// Where the item landed in the Trash; nil for dry-run records (which are
-    /// not persisted) and for any trashed item that didn't report a location.
+    /// Where the item landed in the Trash; nil only when a trashed item didn't
+    /// report a location (records without a location are not persisted).
     public let trashPath: String?
     public let date: Date
     public let bytes: Int64
@@ -42,8 +42,8 @@ public struct TrashRecord: Identifiable, Sendable, Codable, Hashable {
 
 /// Persistent log of everything MacTidy has trashed, stored as JSON in the
 /// app's Application Support folder. The Trash is the undo button; this log
-/// is what makes that undo visible and one-click. Only real (non-dry-run)
-/// records are persisted — dry runs touch nothing and aren't recorded.
+/// is what makes that undo visible and one-click. Only records with a Trash
+/// location are persisted — that's what makes them restorable.
 public final class TrashLog: @unchecked Sendable {
     public static let shared = TrashLog()
 
@@ -81,9 +81,8 @@ public final class TrashLog: @unchecked Sendable {
         }
     }
 
-    /// Appends fully-formed records. Callers should only pass real (non-dry-
-    /// run) records with a trash location — dry runs touch nothing and have
-    /// nothing to undo.
+    /// Appends fully-formed records. Records without a trash location are
+    /// filtered out — there's nothing to undo without a Trash path.
     public func append(_ records: [TrashRecord]) {
         let persistable = records.filter { $0.trashLocation != nil }
         guard !persistable.isEmpty else { return }
@@ -110,6 +109,31 @@ public final class TrashLog: @unchecked Sendable {
 
     public func clear() {
         queue.sync { try? FileManager.default.removeItem(at: fileURL) }
+    }
+
+    /// Reconciles the log against the actual Trash: drops records whose
+    /// `trashLocation` no longer exists on disk (the user emptied the Trash
+    /// in Finder, or restored+deleted the item elsewhere). Records with no
+    /// recorded location are dropped too — there's nothing to undo. Read-only
+    /// except for the log file itself; never touches the Trash. Returns the
+    /// number of records pruned.
+    @discardableResult
+    public func pruneMissing() -> Int {
+        let fm = FileManager.default
+        return queue.sync {
+            guard let data = try? Data(contentsOf: fileURL),
+                  var entries = try? JSONDecoder().decode([TrashRecord].self, from: data)
+            else { return 0 }
+            let before = entries.count
+            entries.removeAll { record in
+                guard let trash = record.trashLocation else { return true }
+                return !fm.fileExists(atPath: trash.path)
+            }
+            let pruned = before - entries.count
+            guard pruned > 0 else { return 0 }
+            try? JSONEncoder().encode(entries).write(to: fileURL, options: .atomic)
+            return pruned
+        }
     }
 
     /// Removes records older than the given number of days. No-op when `days`
@@ -144,7 +168,7 @@ public enum Restorer {
         public var errorDescription: String? {
             switch self {
             case .noTrashLocation:
-                "This record has no Trash location to restore from (it was a dry run)."
+                "This record has no Trash location to restore from."
             case .trashItemMissing(let path):
                 "The item is no longer in the Trash (maybe emptied): \(path)"
             case .restoreFailed(let reason):

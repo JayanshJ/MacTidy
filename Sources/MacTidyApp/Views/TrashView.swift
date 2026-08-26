@@ -22,13 +22,6 @@ struct TrashView: View {
                 list
             }
         }
-        .navigationTitle("Recently Trashed")
-        .toolbar {
-            if !state.recentTrashed.isEmpty {
-                Button("Clear List") { state.recentTrashed.forEach { state.dismissTrashed($0) } }
-                    .help("Remove all entries from this list (items stay in the Trash).")
-            }
-        }
         .alert("Restore failed",
                isPresented: Binding(get: { errorMessage != nil },
                                     set: { if !$0 { errorMessage = nil } })) {

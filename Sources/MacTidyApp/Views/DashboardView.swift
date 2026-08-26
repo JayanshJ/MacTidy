@@ -14,6 +14,11 @@ struct DashboardView: View {
     @State private var sheetPlanIsCleanAll = false
     @State private var selection = Set<UUID>()
     @State private var showNodeInspector = false
+    /// Per-item AI batch verdicts keyed by `ScanItem.id`, populated by the
+    /// "Review with AI" button on the category drill-in header. Rendered inline
+    /// on `ScanItemRow` — no new popup surface.
+    @State private var batchVerdicts: [UUID: BatchVerdict] = [:]
+    @State private var reviewAll = false
 
     enum DashboardTab: String, CaseIterable, Identifiable {
         case insights = "Insights"
@@ -21,6 +26,7 @@ struct DashboardView: View {
         case byApp = "Storage by App"
         case uninstaller = "Uninstaller"
         case startup = "Startup"
+        case docker = "Docker"
         case duplicates = "Duplicates"
         var id: String { rawValue }
         var icon: String {
@@ -30,6 +36,7 @@ struct DashboardView: View {
             case .byApp: "person.crop.square"
             case .uninstaller: "trash.slash"
             case .startup: "power"
+            case .docker: "cylinder.split.1x2"
             case .duplicates: "doc.on.doc"
             }
         }
@@ -51,11 +58,9 @@ struct DashboardView: View {
                 title: sheetPlanTitle,
                 plan: plan,
                 kind: sheetPlanKind
-            ) { outcome in
-                if !outcome.dryRun {
-                    selection.removeAll()
-                    Task { await state.rescanCategories() }
-                }
+            ) { _ in
+                selection.removeAll()
+                Task { await state.rescanCategories() }
             }
         }
         .sheet(isPresented: $showNodeInspector) {
@@ -83,6 +88,7 @@ struct DashboardView: View {
                 tab = t
                 drilledCategory = nil
                 selection.removeAll()
+                batchVerdicts.removeAll()
             }
         } label: {
             Label(t.rawValue, systemImage: t.icon)
@@ -111,6 +117,7 @@ struct DashboardView: View {
         case .byApp: StorageByAppTab()
         case .uninstaller: DashboardUninstaller()
         case .startup: DashboardStartup()
+        case .docker: DashboardDocker()
         case .duplicates: DuplicatesView()
         }
     }
@@ -119,9 +126,11 @@ struct DashboardView: View {
 
     /// Grid of category cards. Each shows the category name, total bytes, a
     /// proportion bar, item count, and a suggest-only badge where relevant.
-    /// Tapping drills into the category's items. When there's nothing to
-    /// clean, a compact empty state replaces the header + grid so the tab
-    /// doesn't waste vertical space on disabled chrome.
+    /// Tapping drills into the category's items. Zero-byte categories are
+    /// filtered out so the grid doesn't waste space on cards with nothing to
+    /// reclaim; when every category is empty, a compact empty state replaces
+    /// the header + grid so the tab doesn't waste vertical space on disabled
+    /// chrome.
     private var categoryGrid: some View {
         Group {
             if state.categoryResults.allSatisfy({ $0.items.isEmpty }) {
@@ -135,9 +144,12 @@ struct DashboardView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: Theme.Spacing.md) {
                         header
+                        if state.trashBytes >= TrashNudgeCard.threshold {
+                            TrashNudgeCard()
+                        }
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 240), spacing: Theme.Spacing.md)],
                                   spacing: Theme.Spacing.md) {
-                            ForEach(state.categoryResults) { result in
+                            ForEach(state.categoryResults.filter { $0.totalBytes > 0 }) { result in
                                 categoryCard(result)
                             }
                         }
@@ -151,45 +163,42 @@ struct DashboardView: View {
     /// The dashboard header: total reclaimable + dry-pass banner + the one-
     /// click clean-all-safe action.
     private var header: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.md) {
-                Text(state.totalReclaimable.formattedBytes)
-                    .font(.system(size: 34, weight: .bold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(Theme.accent)
-                Text("reclaimable")
-                    .font(.title3).foregroundStyle(.secondary)
-                Spacer()
-                Button { Task { await state.rescanCategories() } } label: {
-                    Label("Rescan", systemImage: "arrow.clockwise")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                Button {
-                    showNodeInspector = true
-                } label: {
-                    Label("Node Packages", systemImage: "shippingbox")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .help("Find orphaned and unused npm packages across your Node projects, and run npm prune safely.")
-                Button {
-                    sheetPlanIsCleanAll = true
-                    sheetPlan = DeletionPlan(items: allSafeItems)
-                } label: {
-                    if allSafeItems.isEmpty {
-                        Label("Clean All Safe", systemImage: "trash.circle.fill")
-                    } else {
-                        Label("Clean All Safe · \(allSafeBytes.formattedBytes)",
-                              systemImage: "trash.circle.fill")
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.small)
-                .disabled(allSafeItems.isEmpty)
-                .help("Trash every item in the safe categories (caches, build artifacts, old installers). Suggest-only categories like Downloads and large files are never included.")
+        HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.md) {
+            Text(state.totalReclaimable.formattedBytes)
+                .font(.system(size: 34, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(Theme.accent)
+            Text("reclaimable")
+                .font(.title3).foregroundStyle(.secondary)
+            Spacer()
+            Button { Task { await state.rescanCategories() } } label: {
+                Label("Rescan", systemImage: "arrow.clockwise")
             }
-            passBanner
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            Button {
+                showNodeInspector = true
+            } label: {
+                Label("Node Packages", systemImage: "shippingbox")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("Find orphaned and unused npm packages across your Node projects, and run npm prune safely.")
+            Button {
+                sheetPlanIsCleanAll = true
+                sheetPlan = DeletionPlan(items: allSafeItems)
+            } label: {
+                if allSafeItems.isEmpty {
+                    Label("Clean All Safe", systemImage: "trash.circle.fill")
+                } else {
+                    Label("Clean All Safe · \(allSafeBytes.formattedBytes)",
+                          systemImage: "trash.circle.fill")
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .disabled(allSafeItems.isEmpty)
+            .help("Trash every item in the safe categories (caches, build artifacts, old installers). Suggest-only categories like Downloads and large files are never included.")
         }
     }
 
@@ -207,31 +216,6 @@ struct DashboardView: View {
 
     private var allSafeBytes: Int64 {
         allSafeItems.reduce(0) { $0 + $1.sizeBytes }
-    }
-
-    private var passBanner: some View {
-        HStack(spacing: Theme.Spacing.xs) {
-            Image(systemName: state.flowPass == .dry ? "eye" : "checkmark.shield")
-            Text(state.flowPass == .dry
-                 ? "Preview mode — nothing is trashed until you run for real"
-                 : "Real pass — items move to the Trash (undoable)")
-                .font(.caption.bold())
-            Spacer()
-            if state.flowPass == .dry {
-                Button("Run for real") {
-                    state.startRealPass()
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-            }
-        }
-        .foregroundStyle(state.flowPass == .dry ? .secondary : Theme.accent)
-        .padding(.horizontal, Theme.Spacing.md)
-        .padding(.vertical, Theme.Spacing.xs)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill((state.flowPass == .dry ? Color.secondary : Theme.accent).opacity(0.1))
-        )
     }
 
     private func categoryCard(_ result: CategoryResult) -> some View {
@@ -276,12 +260,34 @@ struct DashboardView: View {
             HStack {
                 Button {
                     withAnimation(.snappy) { drilledCategory = nil }
+                    batchVerdicts.removeAll()
                 } label: {
                     Label("Categories", systemImage: "chevron.left")
                 }
                 .buttonStyle(.plain)
                 Text(category.displayName).font(.title3.bold())
                 Spacer()
+                if category == .nodeModules {
+                    Button { showNodeInspector = true } label: {
+                        Label("Analyze packages", systemImage: "shippingbox")
+                    }
+                    .buttonStyle(.bordered).controlSize(.small)
+                    .help("Find orphaned and unused npm packages and run npm prune safely.")
+                }
+                if !items.isEmpty && state.aiConfig.provider != .none {
+                    Button {
+                        Task { await reviewCategoryWithAI(items: items) }
+                    } label: {
+                        if reviewAll {
+                            HStack { ProgressView().controlSize(.small); Text("Reviewing…") }
+                        } else {
+                            Label("Review with AI", systemImage: "wand.and.stars")
+                        }
+                    }
+                    .buttonStyle(.bordered).controlSize(.small)
+                    .disabled(reviewAll)
+                    .help("Get a Safe / Review / Keep verdict for each item in one AI pass.")
+                }
                 if !items.isEmpty {
                     Button {
                         let allSelected = items.allSatisfy { selection.contains($0.id) }
@@ -294,26 +300,17 @@ struct DashboardView: View {
                         Label(allSelected ? "Deselect All" : "Select All",
                               systemImage: allSelected ? "circle" : "checkmark.circle")
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    .buttonStyle(.bordered).controlSize(.small)
                 }
                 Text("\(items.count) item\(items.count == 1 ? "" : "s") · \(result?.totalBytes.formattedBytes ?? "0")")
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             }
             .padding(.horizontal, Theme.Spacing.lg).padding(.vertical, Theme.Spacing.sm)
             Divider()
-            List {
-                Section {
-                    if items.isEmpty {
-                        Text("Nothing found").foregroundStyle(.tertiary)
-                    }
-                    ForEach(items) { item in
-                        ScanItemRow(item: item, selection: $selection)
-                    }
-                } footer: {
-                    Text(category.explanation)
-                        .font(.caption).foregroundStyle(.tertiary)
-                }
+            if category == .nodeModules {
+                nodeModulesList(items: items)
+            } else {
+                flatList(items: items, category: category)
             }
             SelectionFooter(
                 selectedCount: selection.count,
@@ -327,7 +324,79 @@ struct DashboardView: View {
         }
     }
 
+    /// node_modules grouped by parent project so the user isn't scrolling one
+    /// flat list across every Node project. Each section is one project, with
+    /// per-section select-all (grab a whole project at once) and the project's
+    /// total node_modules bytes in the header.
+    @ViewBuilder
+    private func nodeModulesList(items: [ScanItem]) -> some View {
+        let groups = Dictionary(grouping: items, by: { $0.detail ?? "Other" })
+            .sorted { (lhs, rhs) in lhs.value.reduce(0) { $0 + $1.sizeBytes } > rhs.value.reduce(0) { $0 + $1.sizeBytes } }
+        List {
+            if items.isEmpty {
+                Text("Nothing found").foregroundStyle(.tertiary)
+            }
+            ForEach(groups, id: \.key) { projectName, groupItems in
+                Section {
+                    ForEach(groupItems.sorted { $0.sizeBytes > $1.sizeBytes }) { item in
+                        ScanItemRow(item: item, selection: $selection, batchVerdict: batchVerdicts[item.id])
+                    }
+                } header: {
+                    HStack {
+                        Text(projectName).font(.headline)
+                        Spacer()
+                        Text("≈ \(groupItems.reduce(0) { $0 + $1.sizeBytes }.formattedBytes)")
+                            .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        Button {
+                            let allSelected = groupItems.allSatisfy { selection.contains($0.id) }
+                            if allSelected {
+                                for item in groupItems { selection.remove(item.id) }
+                            } else {
+                                for item in groupItems { selection.insert(item.id) }
+                            }
+                        } label: {
+                            let allSelected = groupItems.allSatisfy { selection.contains($0.id) }
+                            Image(systemName: allSelected ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(allSelected ? Theme.accent : .secondary)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+        .listStyle(.inset)
+    }
+
+    @ViewBuilder
+    private func flatList(items: [ScanItem], category: CoreKit.Category) -> some View {
+        List {
+            Section {
+                if items.isEmpty {
+                    Text("Nothing found").foregroundStyle(.tertiary)
+                }
+                ForEach(items) { item in
+                    ScanItemRow(item: item, selection: $selection, batchVerdict: batchVerdicts[item.id])
+                }
+            } footer: {
+                Text(category.explanation)
+                    .font(.caption).foregroundStyle(.tertiary)
+            }
+        }
+    }
+
     // MARK: - Sheet plumbing
+
+    /// One AI pass over the drilled-in category's items, rendering
+    /// Safe/Review/Keep inline on the rows. No new popup — verdicts decorate
+    /// the existing list. Runs in the background; the user can keep browsing.
+    private func reviewCategoryWithAI(items: [ScanItem]) async {
+        reviewAll = true
+        defer { reviewAll = false }
+        let verdicts = await state.explainBatch(items: items)
+        var map: [UUID: BatchVerdict] = [:]
+        for v in verdicts { map[v.id] = v }
+        batchVerdicts = map
+    }
 
     private var sheetPlanTitle: String {
         switch tab {
@@ -335,7 +404,7 @@ struct DashboardView: View {
             sheetPlanIsCleanAll ? "Clean all safe items?" : "Trash selected items?"
         case .byApp: "Trash selected items?"
         case .uninstaller: "Uninstall \(state.flowApps.first?.app.name ?? "app")?"
-        case .startup, .duplicates: "Trash selected items?"
+        case .startup, .docker, .duplicates: "Trash selected items?"
         }
     }
 

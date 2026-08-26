@@ -23,7 +23,7 @@ struct DiskView: View {
             case .explorer: DirectoryExplorerView()
             }
         }
-        .navigationTitle("Disk")
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -33,6 +33,10 @@ struct CategoryCleanupView: View {
     @Environment(AppState.self) private var state
     @State private var selection = Set<UUID>()
     @State private var sheetPlan: DeletionPlan?
+    /// Per-item batch verdicts keyed by `ScanItem.id`. Populated by the
+    /// category-level "Review with AI" button and rendered inline on rows.
+    @State private var batchVerdicts: [UUID: BatchVerdict] = [:]
+    @State private var reviewAll = false
 
     private var allItems: [ScanItem] {
         state.categoryResults.flatMap(\.items)
@@ -55,12 +59,53 @@ struct CategoryCleanupView: View {
                     }
                     .disabled(state.isScanningCategories)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
+                HStack {
+                    Button("Select All Safe") {
+                        selection = Set(
+                            state.categoryResults
+                                .filter(\.category.isPreselectable)
+                                .flatMap(\.items)
+                                .map(\.id)
+                        )
+                    }
+                    .buttonStyle(.bordered).controlSize(.small)
+                    if state.aiConfig.provider != .none {
+                        Button {
+                            Task { await reviewAllWithAI() }
+                        } label: {
+                            if reviewAll {
+                                HStack { ProgressView().controlSize(.small); Text("Reviewing…") }
+                            } else {
+                                Label("Review all with AI", systemImage: "wand.and.stars")
+                            }
+                        }
+                        .buttonStyle(.bordered).controlSize(.small)
+                        .disabled(reviewAll)
+                        .help("Get a Safe / Review / Keep verdict for every item in one AI pass.")
+                    }
+                    Spacer()
+                    Button {
+                        Task { await state.rescanCategories() }
+                    } label: {
+                        if state.isScanningCategories {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Label("Rescan", systemImage: "arrow.clockwise")
+                        }
+                    }
+                    .buttonStyle(.bordered).controlSize(.small)
+                    .disabled(state.isScanningCategories)
+                }
+                .padding(.horizontal, Theme.Spacing.lg).padding(.vertical, Theme.Spacing.sm)
+                Divider()
                 List {
                     ForEach(state.categoryResults) { result in
                         categorySection(result)
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 SelectionFooter(
                     selectedCount: selection.count,
                     selectedBytes: selectedItems.reduce(0) { $0 + $1.sizeBytes },
@@ -71,29 +116,10 @@ struct CategoryCleanupView: View {
                 }
             }
         }
-        .toolbar {
-            Button("Select All Safe") {
-                selection = Set(
-                    state.categoryResults
-                        .filter(\.category.isPreselectable)
-                        .flatMap(\.items)
-                        .map(\.id)
-                )
-            }
-            .disabled(state.categoryResults.isEmpty)
-            Button {
-                Task { await state.rescanCategories() }
-            } label: {
-                Label("Rescan", systemImage: "arrow.clockwise")
-            }
-            .disabled(state.isScanningCategories)
-        }
         .sheet(item: $sheetPlan) { plan in
-            DeletionConfirmationSheet(title: "Trash selected items?", plan: plan) { outcome in
-                if !outcome.dryRun {
-                    selection.removeAll()
-                    Task { await state.rescanCategories() }
-                }
+            DeletionConfirmationSheet(title: "Trash selected items?", plan: plan) { _ in
+                selection.removeAll()
+                Task { await state.rescanCategories() }
             }
         }
     }
@@ -105,7 +131,7 @@ struct CategoryCleanupView: View {
                 Text("Nothing found").foregroundStyle(.tertiary)
             }
             ForEach(result.items) { item in
-                ScanItemRow(item: item, selection: $selection)
+                ScanItemRow(item: item, selection: $selection, batchVerdict: batchVerdicts[item.id])
             }
         } header: {
             HStack {
@@ -122,6 +148,19 @@ struct CategoryCleanupView: View {
                 .font(.caption)
                 .foregroundStyle(.tertiary)
         }
+    }
+
+    /// One AI pass over every scanned item, rendering Safe/Review/Keep inline
+    /// on the rows. No new popup — verdicts decorate the existing list. Runs
+    /// in the background; the user can keep using the view while it works.
+    private func reviewAllWithAI() async {
+        reviewAll = true
+        defer { reviewAll = false }
+        let all = state.categoryResults.flatMap(\.items)
+        let verdicts = await state.explainBatch(items: all)
+        var map: [UUID: BatchVerdict] = [:]
+        for v in verdicts { map[v.id] = v }
+        batchVerdicts = map
     }
 }
 
@@ -151,15 +190,17 @@ struct DirectoryExplorerView: View {
                 }
                 .padding(.horizontal, 8)
                 .padding(.bottom, 8)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 list
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .onAppear { if items.isEmpty { rescan() } }
         .onChange(of: root) { rescan() }
         .sheet(item: $sheetPlan) { plan in
-            DeletionConfirmationSheet(title: "Trash this item?", plan: plan) { outcome in
-                if !outcome.dryRun { rescan() }
+            DeletionConfirmationSheet(title: "Trash this item?", plan: plan) { _ in
+                rescan()
             }
         }
     }

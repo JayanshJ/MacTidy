@@ -28,15 +28,64 @@ public struct DuplicateSet: Identifiable, Sendable {
 /// Three-stage pipeline so almost nothing gets fully hashed:
 /// size grouping → first-4KB partial hash → full SHA-256.
 public enum DuplicateFinder {
+    /// Curated user-data roots for the "scan whole computer" mode: the
+    /// places documents, downloads, and media actually live. System files,
+    /// `~/Library` caches, and app bundles are deliberately excluded (see
+    /// `shouldSkip`) so the results aren't flooded with macOS's legitimate
+    /// duplicates. Missing roots (e.g. no ~/Movies on a headless setup) are
+    /// dropped automatically.
+    public static func defaultUserRoots() -> [URL] {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let candidates = [
+            "Documents", "Downloads", "Desktop", "Movies", "Music", "Pictures",
+            "Library/Mobile Documents"
+        ]
+        return candidates.compactMap { home.appendingPathComponent($0) }
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    /// Directories whose contents are either system-managed, build/VCS noise,
+    /// or otherwise guaranteed to produce false-positive "duplicates." Reused
+    /// conceptually from `DiskScanner.largeFiles`'s skip set so the two
+    /// scanners stay aligned on what counts as noise.
+    private static let skipDirs: Set<String> = [
+        ".git", "node_modules", "target", "build", ".build",
+        ".venv", "DerivedData", "__pycache__",
+        ".Spotlight-V100", ".DocumentRevisions-V100", ".fseventsd",
+        ".Trashes", ".vol", ".Trash",
+    ]
+
+    /// True for path components that should never be scanned for duplicates —
+    /// system volumes, hidden files/dirs, and bundle internals.
+    private static func shouldSkip(_ component: String) -> Bool {
+        component.hasPrefix(".") || skipDirs.contains(component)
+    }
+
+    /// Top-level roots that are never scanned in whole-computer mode even if
+    /// somehow reachable: system volumes and app bundles. macOS legitimately
+    /// duplicates files across these, so including them is pure noise.
+    private static let systemRoots: Set<String> = [
+        "/System", "/bin", "/sbin", "/usr", "/Library", "/Applications",
+        "/private/var", "/opt", "/etc", "/dev", "/Volumes",
+    ]
+
     public static func find(
         in roots: [URL],
         minFileSize: Int64 = 1,
         progress: (@Sendable (String) -> Void)? = nil
     ) async -> [DuplicateSet] {
+        // Filter out any system root handed in (manual or whole-computer
+        // mode) — scanning /System or /Applications would flood results with
+        // macOS's own duplicates and is never what the user wants.
+        let safeRoots = roots.filter { root in
+            let path = root.path
+            return !systemRoots.contains(where: { path == $0 || path.hasPrefix($0 + "/") })
+        }
+
         // Stage 1: group by exact logical size; unique sizes can't be dupes.
         progress?("Listing files…")
         var bySize: [Int64: [URL]] = [:]
-        for root in roots {
+        for root in safeRoots {
             for (url, size) in regularFiles(under: root) where size >= minFileSize {
                 bySize[size, default: []].append(url)
             }
@@ -67,6 +116,13 @@ public enum DuplicateFinder {
 
         var files: [(URL, Int64)] = []
         while let url = enumerator.nextObject() as? URL {
+            // Skip hidden files/dirs and build/VCS/system-noise directories
+            // anywhere under a root — a duplicate of `.DS_Store` or a
+            // `node_modules` cache blob is never actionable.
+            if shouldSkip(url.lastPathComponent) {
+                if url.hasDirectoryPath { enumerator.skipDescendants() }
+                continue
+            }
             guard let values = try? url.resourceValues(forKeys: keys),
                   values.isSymbolicLink != true,
                   values.isRegularFile == true,

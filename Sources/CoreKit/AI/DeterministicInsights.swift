@@ -78,6 +78,36 @@ public enum DeterministicInsights {
             ))
         }
 
+        // 5. Disk almost full — surface the biggest safe reclaim framed as
+        // urgent when free space is under 10%. Reuses the existing trash
+        // action; no new destructive path.
+        if let pressure = snapshot.diskPressure, pressure.isAvailable,
+           let biggest = safe.max(by: { $0.totalBytes < $1.totalBytes }),
+           biggest.totalBytes > 100 * 1024 * 1024,
+           pressure.freeBytes < pressure.totalBytes / 10 {
+            let usedPct = Int(pressure.usedFraction * 100)
+            insights.append(Insight(
+                kind: .disk,
+                reasoning: "Your disk is \(usedPct)% full — only \(pressure.freeBytes.formattedBytes) free. Clearing \(biggest.category.displayName) (\(biggest.totalBytes.formattedBytes)) is the fastest way back.",
+                action: .trash(items: biggest.items),
+                reclaimableBytes: biggest.totalBytes,
+                priority: Int(biggest.totalBytes / 1024 / 1024) + 50
+            ))
+        }
+
+        // 6. Heavy startup — observe-only. MacTidy points at a long list of
+        // login items; the user disables them in System Settings. Never wires
+        // a destructive path for launch items.
+        if let items = snapshot.launchItems, items.count >= 12 {
+            insights.append(Insight(
+                kind: .processes,
+                reasoning: "\(items.count) login items run at startup. Each adds to boot time and background RAM. Review the ones you don't need in the Startup tab or System Settings → General → Login Items.",
+                action: .observe,
+                reclaimableBytes: 0,
+                priority: 3
+            ))
+        }
+
         return insights.sorted { $0.priority > $1.priority }
     }
 }

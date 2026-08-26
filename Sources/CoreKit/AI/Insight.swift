@@ -1,20 +1,32 @@
 import Foundation
 
 /// A point-in-time snapshot of everything MacTidy can reason over: disk
-/// reclaim opportunities, system memory, and running processes. This is the
-/// payload the AI advisor is asked to turn into narrative insights. The
-/// sanitizer applies before it ever leaves the machine.
+/// reclaim opportunities, system memory, running processes, boot-volume
+/// pressure, and login items. This is the payload the AI advisor is asked to
+/// turn into narrative insights. The sanitizer applies before it ever leaves
+/// the machine.
 public struct SystemSnapshot: Sendable {
     public let categories: [CategoryResult]
     public let memory: ProcessScanner.MemorySummary?
     public let processes: [RunningProcess]
+    /// Free/total space on the boot volume — drives the "disk is almost full"
+    /// insight. nil when the capacities couldn't be read.
+    public let diskPressure: DiskPressure?
+    /// Login items the user can act on — drives "this slows startup" insights.
+    /// nil when the auditor wasn't run (kept optional so callers that don't
+    /// care don't pay for the audit).
+    public let launchItems: [LaunchItem]?
 
     public init(categories: [CategoryResult],
                 memory: ProcessScanner.MemorySummary?,
-                processes: [RunningProcess]) {
+                processes: [RunningProcess],
+                diskPressure: DiskPressure? = nil,
+                launchItems: [LaunchItem]? = nil) {
         self.categories = categories
         self.memory = memory
         self.processes = processes
+        self.diskPressure = diskPressure
+        self.launchItems = launchItems
     }
 }
 

@@ -15,7 +15,9 @@ struct SizeBar: View {
     var body: some View {
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
-                Capsule().fill(.quaternary)
+                // Use a separator-level fill so the track is visible in both
+                // light and dark mode (.quaternary washes out in light mode).
+                Capsule().fill(.separator.opacity(0.5))
                 Capsule()
                     .fill(.tint)
                     .frame(width: max(2, proxy.size.width * min(1, fraction)))
@@ -31,9 +33,21 @@ struct ScanItemRow: View {
     @Environment(AppState.self) private var state
     let item: ScanItem
     @Binding var selection: Set<UUID>
+    /// A batch verdict injected from the parent (category-level "Review with
+    /// AI"). Renders inline like the per-row `explain()` result so the UI has
+    /// one consistent verdict surface, not two.
+    var batchVerdict: BatchVerdict?
     @State private var explanation: ItemExplanation?
     @State private var isExplaining = false
     @State private var showSafetyNote = false
+
+    /// The verdict to show: a batch verdict takes precedence over the row's
+    /// own one-shot `explain()` result, since batch is the more deliberate pass.
+    private var displayedVerdict: (verdict: ItemExplanation.Verdict?, summary: String)? {
+        if let batchVerdict { return (batchVerdict.verdict, batchVerdict.summary) }
+        if let explanation { return (explanation.verdict, explanation.summary) }
+        return nil
+    }
 
     var body: some View {
         HStack(spacing: Theme.Spacing.sm) {
@@ -54,15 +68,17 @@ struct ScanItemRow: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
-                if let explanation {
+                if let displayed = displayedVerdict {
                     HStack(spacing: 4) {
-                        if let verdict = explanation.verdict {
+                        if let verdict = displayed.verdict {
                             Image(systemName: verdict.icon)
                                 .foregroundStyle(verdictColor(verdict))
                         }
-                        Text(explanation.summary)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        if !displayed.summary.isEmpty {
+                            Text(displayed.summary)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
             }

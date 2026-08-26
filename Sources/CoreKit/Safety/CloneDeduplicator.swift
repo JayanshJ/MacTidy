@@ -12,9 +12,8 @@ import Foundation
 /// Any failure unwinds and leaves the target untouched.
 public enum CloneDeduplicator {
     public struct Outcome: Sendable {
-        public let dryRun: Bool
         /// One record per replaced copy; `trashLocation` is where its
-        /// pre-dedup bytes went (nil on dry run).
+        /// pre-dedup bytes went.
         public let deduplicated: [TrashedRecord]
         public let skipped: [SkippedRecord]
         public let reclaimedBytes: Int64
@@ -51,11 +50,10 @@ public enum CloneDeduplicator {
     /// rest proceed, fail-closed per item.
     public static func deduplicate(
         _ set: DuplicateSet,
-        policy: SafePathPolicy,
-        dryRun: Bool
+        policy: SafePathPolicy
     ) -> Outcome {
         guard let primary = set.physicalGroups.first?.first else {
-            return Outcome(dryRun: dryRun, deduplicated: [], skipped: [], reclaimedBytes: 0)
+            return Outcome(deduplicated: [], skipped: [], reclaimedBytes: 0)
         }
         let targets = set.physicalGroups.dropFirst().flatMap { $0 }
 
@@ -71,24 +69,19 @@ public enum CloneDeduplicator {
             case .success:
                 break
             }
-            if dryRun {
-                NSLog("MacTidy dry-run: would replace %@ with a clone of %@",
-                      target.url.path, primary.url.path)
-                deduplicated.append(TrashedRecord(original: target.url, trashLocation: nil))
-                reclaimed += set.fileSizeBytes
-                continue
-            }
             do {
                 let record = try replaceWithClone(of: primary.url, at: target.url,
                                                   expectedSize: set.fileSizeBytes)
                 deduplicated.append(record)
                 reclaimed += set.fileSizeBytes
+                NSLog("MacTidy: deduplicated %@ (clone of %@)",
+                      target.url.path, primary.url.path)
             } catch {
                 skipped.append(SkippedRecord(url: target.url,
                                              reason: error.localizedDescription))
             }
         }
-        return Outcome(dryRun: dryRun, deduplicated: deduplicated,
+        return Outcome(deduplicated: deduplicated,
                        skipped: skipped, reclaimedBytes: reclaimed)
     }
 

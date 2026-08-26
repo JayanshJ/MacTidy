@@ -9,9 +9,10 @@ enum InsightPrompts {
     static let system = """
     You are MacTidy's proactive system advisor. You receive a JSON snapshot of
     the user's Mac: reclaimable disk categories (with byte sizes), system
-    memory totals, and the top running processes by resident RAM. Your job is
-    to surface 3–6 narrative insights that would actually help: where they can
-    reclaim space, where idle apps are wasting RAM, what's worth leaving alone.
+    memory totals, the top running processes by resident RAM, boot-volume free
+    space, and the list of login items. Your job is to surface 3–6 narrative
+    insights that would actually help: where they can reclaim space, where idle
+    apps are wasting RAM, what's worth leaving alone.
 
     Each insight is one short sentence a human would say, plus a proposed
     action via the `propose_insights` tool. Rules:
@@ -23,6 +24,11 @@ enum InsightPrompts {
     - For disk, prefer safe-to-bulk categories (safeToBulkDelete true). Only
       surface suggest-only categories (large files, downloads, app support)
       when there's a clear, specific reason — and mark them "review".
+    - When the boot volume is nearly full (low free space), frame the biggest
+      safe reclaim as urgent and lead with it.
+    - Login items: if there are many, surface a "startup is heavy" observe
+      insight pointing the user at System Settings. Never propose an action to
+      disable a login item — that's the user's call. Use the `observe` action.
     - When there's nothing worth doing, return an `observe` insight explaining
       why (e.g. "Docker is using 6GB but you ran a container today").
     - Reference disk categories by their displayName and item indices; apps
@@ -62,6 +68,29 @@ enum InsightPrompts {
             procLines.append(line)
         }
         parts.append("Top processes by RAM:\n" + procLines.joined(separator: "\n"))
+
+        // Boot-volume pressure — drives "disk almost full" framing. Just the
+        // totals + used fraction; no paths.
+        if let pressure = snapshot.diskPressure, pressure.isAvailable {
+            parts.append("""
+            Boot volume:
+            - total: \(pressure.totalBytes.formattedBytes)
+            - free: \(pressure.freeBytes.formattedBytes)
+            - used: \(Int(pressure.usedFraction * 100))%
+            """)
+        }
+
+        // Login items — count +, when paths are allowed, their labels. Startup
+        // insights are observe-only; the model should point, not act.
+        if let items = snapshot.launchItems {
+            var launchLines: [String] = ["- count: \(items.count)"]
+            if sendFilePaths {
+                for item in items.prefix(40) {
+                    launchLines.append("- \(item.label)")
+                }
+            }
+            parts.append("Login items:\n" + launchLines.joined(separator: "\n"))
+        }
 
         return parts.joined(separator: "\n\n")
     }

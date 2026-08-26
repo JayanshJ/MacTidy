@@ -12,11 +12,10 @@ final class AppState {
     /// menu bar panel can read its summary.
     let monitor = SpaceMonitor()
 
-    /// Dry-run is the app-wide default; every confirmation sheet shows the
-    /// toggle. Persisted so it survives relaunches.
-    var dryRun: Bool {
-        didSet { UserDefaults.standard.set(dryRun, forKey: "MacTidy.dryRun") }
-    }
+    /// Self-update: checks GitHub Releases for a newer MacTidy and installs
+    /// it in place. Owned here so Settings can bind it and the launch check
+    /// can run from RootView.
+    let updates = UpdateManager()
 
     /// Extra roots the user has allow-listed in Settings, applied to every
     /// destructive action in addition to the policy's built-in roots.
@@ -62,8 +61,18 @@ final class AppState {
     /// Everything MacTidy has trashed, newest first. Drives the "Recently
     /// Trashed" view and the post-cleanup Undo toast.
     var recentTrashed: [TrashRecord] = []
-    /// The most recent real (non-dry-run) outcome, for the Undo toast.
+    /// Current size of `~/.Trash` in bytes. Observable so the Trash nudge card
+    /// and its dashboard gate update live after a trash (and after the user
+    /// empties the Trash in Finder) instead of only on first appear.
+    var trashBytes: Int64 = 0
+    /// The most recent outcome, for the Undo toast.
     var lastUndoableOutcome: (records: [TrashRecord], label: String)?
+
+    /// The first-ever cleanup milestone, for the one-time celebration
+    /// overlay. Nil until the user's first cleanup that actually frees space,
+    /// and only set once (persisted) — so it fires exactly once ever, not on
+    /// every cleanup.
+    var firstReclaimMilestone: Int64?
 
     /// Completed cleanups, newest first — the honest reclaim-over-time log.
     var cleanupHistory: [CleanupEntry] = []
@@ -81,8 +90,6 @@ final class AppState {
     var flowIndex: Int = 0
     /// The action currently under review (or nil if past the end / not in review).
     var flowCurrent: FlowAction? { flowQueue.indices.contains(flowIndex) ? flowQueue[flowIndex] : nil }
-    /// Whether the current pass is the dry preview or the real cleanup.
-    var flowPass: CleanPass = .dry
     /// The most recent applied outcome, shown briefly on the applying screen.
     var flowLastOutcome: DeletionOutcome?
     /// Apps + leftovers scanned during the flow, for uninstall action cards.
@@ -101,6 +108,13 @@ final class AppState {
     private let scanHistoryStore: ScanHistory
     private let lastScanURL: URL
 
+    /// Persisted scheduled-cleanup jobs. Loaded once at init; the Settings UI
+    /// edits this in place and rewrites the launchd plist via
+    /// `LaunchAgentWriter` whenever a job changes. The headless `--run-scheduled`
+    /// launch path runs `runScheduledIfDue()` against this list.
+    private(set) var schedules: [ScheduledJob] = []
+    private let scheduleStore = ScheduleStore()
+
     init(
         trashLog: TrashLog = .shared,
         cleanupLog: CleanupLog = .shared,
@@ -113,7 +127,7 @@ final class AppState {
             .appending(path: "Library/Application Support/MacTidy")
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         self.lastScanURL = support.appending(path: "last-scan.json")
-        self.dryRun = UserDefaults.standard.object(forKey: "MacTidy.dryRun") as? Bool ?? true
+        self.schedules = scheduleStore.load()
         self.extraAllowedRoots = Self.loadExtraAllowedRoots()
         self.autoScanOnLaunch = UserDefaults.standard.object(forKey: "MacTidy.autoScanOnLaunch") as? Bool ?? false
         self.logRetentionDays = UserDefaults.standard.object(forKey: "MacTidy.logRetentionDays") as? Int ?? 0
@@ -122,7 +136,14 @@ final class AppState {
         // Restore persisted state so relaunch isn't a blank screen + full rescan.
         self.recentTrashed = trashLog.load()
         self.cleanupHistory = cleanupLog.load()
+        self.trashBytes = TrashUsage.totalBytes()
         self.scanHistory = scanHistoryStore.load()
+        // The one-time first-reclaim milestone: nil until the first real
+        // cleanup that frees space, and only ever set once. Read from
+        // UserDefaults so a relaunch mid-celebration still shows it.
+        if let stored = UserDefaults.standard.object(forKey: "MacTidy.firstReclaimMilestone") as? Int64 {
+            self.firstReclaimMilestone = stored
+        }
         // Drop log entries older than the retention window before showing them.
         applyLogRetention()
         if let results = Self.loadLastScan(from: lastScanURL) {
@@ -250,28 +271,13 @@ final class AppState {
         flowQueue = queue.sorted { $0.reclaimableBytes > $1.reclaimableBytes }
     }
 
-    /// Applies the current trash action via the destructive gateway. In the
-    /// dry pass, `dryRun` is on so nothing is actually trashed.
+    /// Applies the current trash action via the destructive gateway.
     @discardableResult
     func flowApplyTrash(_ items: [ScanItem]) -> DeletionOutcome {
         let plan = DeletionPlan(items: items)
         let outcome = execute(plan, kind: .deletion)
         flowLastOutcome = outcome
         return outcome
-    }
-
-    /// Switch from the dry pass to the real pass: turn dry-run off, clear
-    /// skipped items, and return to the dashboard.
-    func startRealPass() {
-        dryRun = false
-        flowPass = .real
-        flowSkipped.removeAll()
-        flowIndex = 0
-        if flowQueue.isEmpty {
-            flowPhase = .allClean
-        } else {
-            flowPhase = .dashboard
-        }
     }
 
     /// Reset back to the welcome screen (e.g. after finishing).
@@ -325,12 +331,94 @@ final class AppState {
         kind: TrashRecord.Kind = .deletion
     ) -> DeletionOutcome {
         let executor = DeletionExecutor(
-            policy: SafePathPolicy(extraAllowedRoots: extraAllowedRoots),
-            dryRun: dryRun
+            policy: SafePathPolicy(extraAllowedRoots: extraAllowedRoots)
         )
         let outcome = executor.execute(plan)
         recordOutcome(outcome, plan: plan, kind: kind)
         return outcome
+    }
+
+    /// Gateway for shell-based destructive actions (Docker, future brew). Like
+    /// `execute`, it is non-throwing and per-item fail-closed: failures come
+    /// back in the outcome's `failed` list. Unlike trashing, these actions are
+    /// NOT Trash-undoable, so they are NOT recorded to `TrashLog` — only the
+    /// reclaim-over-time `CleanupLog` gets an entry.
+    @discardableResult
+    func executeShellActions(
+        _ actions: [any ShellAction],
+        kind: CleanupEntry.Kind
+    ) -> ShellActionOutcome {
+        let outcome = ShellActionExecutor.execute(actions)
+        if !outcome.succeeded.isEmpty {
+            cleanupLog.append(CleanupEntry(
+                kind: kind,
+                reclaimedBytes: outcome.reclaimedBytes,
+                itemCount: outcome.succeeded.count
+            ))
+            cleanupHistory = cleanupLog.load()
+        }
+        return outcome
+    }
+
+    // MARK: - Scheduled cleanup
+
+    /// Replaces the persisted job list and rewrites the launchd plist. Called
+    /// by the Settings UI whenever a job is added/edited/toggled/deleted. The
+    /// plist is the *trigger* (when to wake the app); the job list is the
+    /// source of truth for *what* to run, kept here in `schedules`.
+    func saveSchedules(_ jobs: [ScheduledJob]) {
+        schedules = jobs
+        scheduleStore.save(jobs)
+        _ = try? LaunchAgentWriter.write(for: jobs)
+    }
+
+    /// Runs every due scheduled job headlessly, through the same destructive
+    /// path as a manual cleanup: scan the job's safe categories, build a
+    /// `DeletionPlan`, run `DeletionExecutor` + `SafePathPolicy`, and record to
+    /// `TrashLog`/`CleanupLog` via `recordOutcome`. Then stamps `lastRun` /
+    /// `nextRun` and persists. Safe by construction — `ScheduledJob` only
+    /// holds `isPreselectable` categories, and `SafePathPolicy` still vets
+    /// every item on top of that. Returns nil when nothing is due.
+    @discardableResult
+    func runScheduledIfDue(now: Date = Date()) async -> ScheduledRunResult? {
+        // Re-read from disk in case a Settings edit landed since init.
+        let jobs = scheduleStore.load()
+        guard !jobs.isEmpty else { return nil }
+        let scanner = CategoryScanner()
+        let executor = DeletionExecutor(
+            policy: SafePathPolicy(extraAllowedRoots: extraAllowedRoots)
+        )
+        let result = await ScheduledRunner.run(
+            jobs: jobs,
+            now: now,
+            scan: { categories in
+                // Scan only the requested categories (one per category in the
+                // union of due jobs) — cheaper than a full scanAll when the
+                // schedule touches just a few categories.
+                var results: [CategoryResult] = []
+                for category in Category.allCases where categories.contains(category) {
+                    if Task.isCancelled { break }
+                    results.append(await scanner.scan(category))
+                }
+                return results
+            },
+            executor: executor
+        )
+        guard let result else { return nil }
+        // Record via the same path as a manual run so TrashLog/CleanupLog stay
+        // single-sourced. `recordOutcome` ignores empty-trash outcomes, so a
+        // scheduled run that found nothing trashes nothing and logs nothing.
+        recordOutcome(result.outcome, plan: result.plan, kind: .deletion)
+        // Stamp lastRun/nextRun for the jobs that fired, then persist + rewrite
+        // the plist so launchd's next fire reflects the updated schedule.
+        var updated = jobs
+        let fired = Set(result.firedJobs)
+        for i in updated.indices where fired.contains(updated[i].id) {
+            updated[i].lastRun = now
+            updated[i].nextRun = SchedulePlanner.nextRun(for: updated[i], after: now)
+        }
+        saveSchedules(updated)
+        return result
     }
 
     /// Asks the configured AI advisor for a cleanup plan matching a
@@ -375,6 +463,19 @@ final class AppState {
         }
     }
 
+    /// Asks the advisor to verdict a whole batch in one call (one prompt,
+    /// one round-trip for providers that support it). Returns an empty list
+    /// when no provider is configured or the call fails — the UI shows no
+    /// verdicts rather than blocking. Never throws.
+    func explainBatch(items: [ScanItem]) async -> [BatchVerdict] {
+        guard let advisor = advisor, !items.isEmpty else { return [] }
+        do {
+            return try await advisor.explainBatch(items, config: aiConfig)
+        } catch {
+            return []
+        }
+    }
+
     /// Builds a system snapshot and asks the advisor for proactive insights.
     /// Falls back to deterministic, locally-generated insights when no provider
     /// is configured or the call fails — so the Insights panel is useful even
@@ -382,8 +483,15 @@ final class AppState {
     func generateInsights() async -> [Insight] {
         let processes = ProcessScanner.scan()
         let memory = ProcessScanner.memorySummary()
+        // Enrich the snapshot with boot-volume pressure + login items so the
+        // advisor (and deterministic fallback) can surface "disk almost full"
+        // and "heavy startup" insights. Both are read-only and nil-safe.
         let snapshot = SystemSnapshot(
-            categories: categoryResults, memory: memory, processes: processes
+            categories: categoryResults,
+            memory: memory,
+            processes: processes,
+            diskPressure: DiskPressure.current(),
+            launchItems: LaunchItemsAuditor.audit()
         )
         if let advisor = advisor {
             do {
@@ -396,8 +504,8 @@ final class AppState {
         return DeterministicInsights.from(snapshot)
     }
 
-    /// Gateway for clone-based dedup — same policy and dry-run rules as
-    /// deletion, but content-preserving (copies become APFS clones).
+    /// Gateway for clone-based dedup — same policy as deletion, but
+    /// content-preserving (copies become APFS clones).
     @discardableResult
     func deduplicate(
         _ set: DuplicateSet,
@@ -405,8 +513,7 @@ final class AppState {
     ) -> CloneDeduplicator.Outcome {
         let outcome = CloneDeduplicator.deduplicate(
             set,
-            policy: SafePathPolicy(extraAllowedRoots: extraAllowedRoots),
-            dryRun: dryRun
+            policy: SafePathPolicy(extraAllowedRoots: extraAllowedRoots)
         )
         recordDedupOutcome(outcome, set: set)
         return outcome
@@ -419,6 +526,8 @@ final class AppState {
         let destination = try Restorer.restore(record)
         trashLog.remove(record.id)
         recentTrashed = trashLog.load()
+        // The item just left the Trash — republish so the nudge card updates.
+        refreshTrashBytes()
         return destination
     }
 
@@ -451,8 +560,21 @@ final class AppState {
     }
 
     func refreshLogs() {
+        // Reconcile the Recently Trashed list with the actual Trash: drop
+        // entries whose Trash location no longer exists (the user emptied the
+        // Trash in Finder between sessions) before showing the list.
+        trashLog.pruneMissing()
         recentTrashed = trashLog.load()
         cleanupHistory = cleanupLog.load()
+        refreshTrashBytes()
+    }
+
+    /// Re-sizes `~/.Trash` and republishes `trashBytes` so the nudge card and
+    /// its dashboard gate reflect the current Trash — call after a trash and
+    /// when the app becomes active (the user may have emptied the Trash in
+    /// Finder). Read-only.
+    func refreshTrashBytes() {
+        trashBytes = TrashUsage.totalBytes()
     }
 
     // MARK: - Recording
@@ -471,35 +593,39 @@ final class AppState {
         _ outcome: DeletionOutcome, plan: DeletionPlan,
         kind: TrashRecord.Kind
     ) {
-        guard !outcome.dryRun, !outcome.trashed.isEmpty else { return }
-        // Build persisted trash records carrying per-item sizes from the plan.
-        let sizeByPath = Dictionary(plan.candidates.map { ($0.url.path, $0.sizeBytes) },
-                                    uniquingKeysWith: { a, _ in a })
-        let records = outcome.trashed.compactMap { record -> TrashRecord? in
-            guard record.trashLocation != nil else { return nil }
-            return TrashRecord(
-                original: record.original,
-                trashLocation: record.trashLocation,
-                date: Date(),
-                bytes: sizeByPath[record.original.path] ?? 0,
-                kind: kind
-            )
-        }
+        guard !outcome.trashed.isEmpty else { return }
+        // Delegate the pure record-building to `OutcomeRecorder` so it's
+        // unit-tested; `AppState` owns only the side-effects (log writes,
+        // milestone persistence, Trash-size refresh).
+        let records = OutcomeRecorder.trashRecords(for: outcome, plan: plan, kind: kind)
         trashLog.append(records)
         recentTrashed = trashLog.load()
-        cleanupLog.append(CleanupEntry(
-            kind: cleanupKind(for: kind),
-            reclaimedBytes: outcome.reclaimedBytes,
-            itemCount: outcome.trashed.count
-        ))
+        if let entry = OutcomeRecorder.cleanupEntry(for: outcome, cleanupKind: cleanupKind(for: kind)) {
+            cleanupLog.append(entry)
+        }
         cleanupHistory = cleanupLog.load()
-        lastUndoableOutcome = (records, "Moved \(outcome.trashed.count) item\(outcome.trashed.count == 1 ? "" : "s") (\(outcome.reclaimedBytes.formattedBytes)) to Trash")
+        if let label = OutcomeRecorder.undoLabel(for: outcome) {
+            lastUndoableOutcome = (records, label)
+        }
+        // One-time first-reclaim celebration: fire only on the user's first
+        // real cleanup that actually frees space. Persisted so it never fires
+        // again (a future relaunch sees the stored value and skips).
+        if OutcomeRecorder.shouldFireFirstReclaimMilestone(
+            existingMilestone: firstReclaimMilestone,
+            reclaimedBytes: outcome.reclaimedBytes
+        ) {
+            firstReclaimMilestone = outcome.reclaimedBytes
+            UserDefaults.standard.set(outcome.reclaimedBytes, forKey: "MacTidy.firstReclaimMilestone")
+        }
+        // Republish the Trash size so the nudge card updates live (we just
+        // added bytes to the Trash).
+        refreshTrashBytes()
     }
 
     private func recordDedupOutcome(
         _ outcome: CloneDeduplicator.Outcome, set: DuplicateSet
     ) {
-        guard !outcome.dryRun, !outcome.deduplicated.isEmpty else { return }
+        guard !outcome.deduplicated.isEmpty else { return }
         let records = outcome.deduplicated.compactMap { record -> TrashRecord? in
             guard record.trashLocation != nil else { return nil }
             return TrashRecord(
@@ -519,6 +645,7 @@ final class AppState {
         ))
         cleanupHistory = cleanupLog.load()
         lastUndoableOutcome = (records, "Deduplicated \(outcome.deduplicated.count) cop\(outcome.deduplicated.count == 1 ? "y" : "ies") (\(outcome.reclaimedBytes.formattedBytes))")
+        refreshTrashBytes()
     }
 
     // MARK: - Scan persistence

@@ -21,22 +21,6 @@ struct DeletionPlanTests {
         return (sandbox, SafePathPolicy(extraAllowedRoots: [sandbox]), plan)
     }
 
-    @Test func dryRunTouchesNothing() throws {
-        let (sandbox, policy, plan) = try makeFixture()
-        defer { try? FileManager.default.removeItem(at: sandbox) }
-
-        let outcome = DeletionExecutor(policy: policy, dryRun: true).execute(plan)
-
-        #expect(outcome.dryRun)
-        #expect(outcome.trashed.count == 2)
-        #expect(outcome.trashed.allSatisfy { $0.trashLocation == nil })
-        #expect(outcome.reclaimedBytes == 6)
-        for candidate in plan.candidates {
-            #expect(FileManager.default.fileExists(atPath: candidate.url.path),
-                    "dry run must not touch \(candidate.url.path)")
-        }
-    }
-
     @Test func policyViolationIsSkippedNotFatal() throws {
         let (sandbox, policy, plan) = try makeFixture()
         defer { try? FileManager.default.removeItem(at: sandbox) }
@@ -48,7 +32,7 @@ struct DeletionPlanTests {
         // Partial execution: the bad path is skipped (with a policy reason),
         // but the valid candidates still go through. Fail-closed per item,
         // not abort-all.
-        let outcome = DeletionExecutor(policy: policy, dryRun: false).execute(poisoned)
+        let outcome = DeletionExecutor(policy: policy).execute(poisoned)
         #expect(outcome.trashed.count == 2)
         #expect(outcome.skipped.count == 1)
         #expect(outcome.skipped.first?.reason.contains("system path") ?? false)
@@ -67,9 +51,8 @@ struct DeletionPlanTests {
         let (sandbox, policy, plan) = try makeFixture()
         defer { try? FileManager.default.removeItem(at: sandbox) }
 
-        let outcome = DeletionExecutor(policy: policy, dryRun: false).execute(plan)
+        let outcome = DeletionExecutor(policy: policy).execute(plan)
 
-        #expect(!outcome.dryRun)
         #expect(outcome.skipped.isEmpty)
         #expect(outcome.trashed.count == 2)
         for record in outcome.trashed {
@@ -89,7 +72,7 @@ struct DeletionPlanTests {
         withGhost.candidates.append(
             DeletionCandidate(url: sandbox.appending(path: "never-existed.txt"), sizeBytes: 100))
 
-        let outcome = DeletionExecutor(policy: policy, dryRun: false).execute(withGhost)
+        let outcome = DeletionExecutor(policy: policy).execute(withGhost)
         #expect(outcome.trashed.count == 2)
         #expect(outcome.skipped.count == 1)
         #expect(outcome.reclaimedBytes == 6)

@@ -2,6 +2,18 @@ import SwiftUI
 import CoreKit
 
 struct DuplicatesView: View {
+    /// Manual = pick folders with Add Folder…. Whole computer = scan the
+    /// curated user-data roots (Documents, Downloads, Desktop, …) with
+    /// system/build/hidden noise excluded, so the user can find dupes
+    /// across their own files without drowning in macOS's legitimate
+    /// duplicates.
+    enum Mode: String, CaseIterable, Identifiable {
+        case manual = "Manual folders"
+        case wholeComputer = "Whole computer"
+        var id: String { rawValue }
+    }
+
+    @State private var mode: Mode = .manual
     @State private var roots: [URL] = []
     @State private var sets: [DuplicateSet] = []
     @State private var hasScanned = false
@@ -10,10 +22,24 @@ struct DuplicatesView: View {
     @State private var selection = Set<UUID>()
     @State private var sheetPlan: DeletionPlan?
     @State private var showDedupSheet = false
+    @State private var scanTask: Task<Void, Never>?
 
     /// Sets where distinct physical copies exist — clone dedup can help.
     private var dedupableSets: [DuplicateSet] {
         sets.filter { $0.physicalGroups.count > 1 }
+    }
+
+    /// Roots effective for the current mode: user-picked folders in manual
+    /// mode, the curated user-data set in whole-computer mode.
+    private var effectiveRoots: [URL] {
+        mode == .wholeComputer ? DuplicateFinder.defaultUserRoots() : roots
+    }
+
+    /// Min file size for the scan. Whole-computer scans use a 1 MB floor so
+    /// tiny config/text duplicates the user doesn't care about don't drown
+    /// the results; manual mode keeps the 1-byte floor.
+    private var effectiveMinSize: Int64 {
+        mode == .wholeComputer ? 1_048_576 : 1
     }
 
     var body: some View {
@@ -22,64 +48,86 @@ struct DuplicatesView: View {
             Divider()
             content
         }
-        .navigationTitle("Duplicates")
         .sheet(item: $sheetPlan) { plan in
             DeletionConfirmationSheet(title: "Trash duplicate copies?",
                                       plan: plan,
-                                      extraAllowedRoots: roots) { outcome in
-                if !outcome.dryRun {
-                    selection.removeAll()
-                    scan()
-                }
+                                      extraAllowedRoots: effectiveRoots) { _ in
+                selection.removeAll()
+                scan()
             }
         }
         .sheet(isPresented: $showDedupSheet) {
             DedupConfirmationSheet(sets: dedupableSets,
-                                   extraAllowedRoots: roots) { dryRun in
-                if !dryRun {
-                    selection.removeAll()
-                    scan()
-                }
+                                   extraAllowedRoots: effectiveRoots) {
+                selection.removeAll()
+                scan()
             }
         }
+        .onDisappear { scanTask?.cancel() }
     }
 
     private var rootsBar: some View {
-        HStack {
-            if roots.isEmpty {
-                Text("Pick the folders to compare — duplicates are only searched where you point.")
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(roots, id: \.self) { root in
-                    HStack(spacing: 4) {
-                        Image(systemName: "folder")
-                        Text(root.lastPathComponent)
-                        Button {
-                            roots.removeAll { $0 == root }
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                        }
-                        .buttonStyle(.borderless)
+        VStack(spacing: 8) {
+            HStack {
+                Picker("", selection: $mode) {
+                    ForEach(Mode.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 240)
+                .help(mode == .wholeComputer
+                    ? "Scan your Documents, Downloads, Desktop, and media folders — system and build files are excluded."
+                    : "Pick specific folders to compare for duplicates.")
+                Spacer()
+                Button {
+                    scan()
+                } label: {
+                    if isScanning {
+                        Label("Scanning…", systemImage: "hourglass")
+                    } else {
+                        Label("Find Duplicates", systemImage: "doc.on.doc")
                     }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(.quaternary, in: Capsule())
-                    .help(root.path)
                 }
-            }
-            Spacer()
-            Button("Add Folder…") { addFolder() }
-            Button {
-                scan()
-            } label: {
+                .keyboardShortcut(.defaultAction)
+                .disabled(effectiveRoots.isEmpty || isScanning)
                 if isScanning {
-                    Label("Scanning…", systemImage: "hourglass")
-                } else {
-                    Label("Find Duplicates", systemImage: "doc.on.doc")
+                    Button("Cancel") { scanTask?.cancel() }
+                        .buttonStyle(.bordered).controlSize(.small)
                 }
             }
-            .keyboardShortcut(.defaultAction)
-            .disabled(roots.isEmpty || isScanning)
+            HStack {
+                if mode == .manual {
+                    if roots.isEmpty {
+                        Text("Pick the folders to compare — duplicates are only searched where you point.")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(roots, id: \.self) { root in
+                            HStack(spacing: 4) {
+                                Image(systemName: "folder")
+                                Text(root.lastPathComponent)
+                                Button {
+                                    roots.removeAll { $0 == root }
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                }
+                                .buttonStyle(.borderless)
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(.quaternary, in: Capsule())
+                            .help(root.path)
+                        }
+                    }
+                } else {
+                    Text("Scanning your Documents, Downloads, Desktop, Movies, Music, Pictures, and iCloud Drive. System, hidden, and build files are skipped. Files under 1 MB are ignored.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if mode == .manual {
+                    Button("Add Folder…") { addFolder() }
+                }
+            }
         }
         .padding()
     }
@@ -100,6 +148,7 @@ struct DuplicatesView: View {
                     ? "Every file in the selected folders is unique by content."
                     : "Add folders and run a scan. Files are compared by content (SHA-256), not by name.")
             )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             VStack(spacing: 0) {
                 HStack {
@@ -219,14 +268,17 @@ struct DuplicatesView: View {
     }
 
     private func scan() {
+        scanTask?.cancel()
         isScanning = true
         selection.removeAll()
         status = "Listing files…"
-        let targets = roots
-        Task {
-            let found = await DuplicateFinder.find(in: targets) { message in
+        let targets = effectiveRoots
+        let minSize = effectiveMinSize
+        scanTask = Task {
+            let found = await DuplicateFinder.find(in: targets, minFileSize: minSize) { message in
                 Task { @MainActor in status = message }
             }
+            if Task.isCancelled { return }
             sets = found
             hasScanned = true
             isScanning = false

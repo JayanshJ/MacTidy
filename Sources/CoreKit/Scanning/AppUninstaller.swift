@@ -1,15 +1,34 @@
 import Foundation
+import CoreServices
 
 public struct InstalledApp: Identifiable, Hashable, Sendable {
     public let url: URL
     public let name: String
     public let bundleID: String?
     public let sizeBytes: Int64
+    /// Last time the app was launched, per Spotlight's `kMDItemLastUsedDate`.
+    /// Nil when Spotlight has no record (never launched, or not yet indexed).
+    /// Read-only — never triggers a launch or shell-out.
+    public let lastUsedDate: Date?
     public var id: String { url.path }
 
     /// Apple's own apps are listed but not uninstallable — trashing them
     /// fails or breaks things, so don't offer it.
     public var isApple: Bool { bundleID?.hasPrefix("com.apple.") == true }
+
+    public init(
+        url: URL,
+        name: String,
+        bundleID: String?,
+        sizeBytes: Int64,
+        lastUsedDate: Date? = nil
+    ) {
+        self.url = url
+        self.name = name
+        self.bundleID = bundleID
+        self.sizeBytes = sizeBytes
+        self.lastUsedDate = lastUsedDate
+    }
 }
 
 /// A non-file step an uninstall should perform that can't be expressed as a
@@ -106,8 +125,63 @@ public enum AppUninstaller {
             url: bundle,
             name: name,
             bundleID: plist["CFBundleIdentifier"] as? String,
-            sizeBytes: DiskScanner.allocatedSize(of: bundle)
+            sizeBytes: DiskScanner.allocatedSize(of: bundle),
+            lastUsedDate: Self.lastUsedDate(for: bundle)
         )
+    }
+
+    /// Spotlight's record of when the app at `bundle` was last launched, or
+    /// nil when Spotlight has no `kMDItemLastUsedDate` for it (never launched
+    /// or not yet indexed). A read-only `MDItem` attribute lookup — no shell,
+    /// no launch, no FDA. Spotlight may be disabled or stale; nil is a safe
+    /// "unknown" rather than a claim the app was never used.
+    static func lastUsedDate(for bundle: URL) -> Date? {
+        guard let item = MDItemCreate(nil, bundle.path as CFString) else { return nil }
+        guard let raw = MDItemCopyAttribute(item, kMDItemLastUsedDate as CFString) else {
+            return nil
+        }
+        // Spotlight returns an NSDate for kMDItemLastUsedDate; bridge to Date.
+        return raw as? Date
+    }
+
+    /// Relative, human-readable label for a last-used date — "Never" when
+    /// unknown, otherwise a coarse relative ("3 days ago", "8 months ago",
+    /// "2 years ago"). Pure so it's unit-testable without the event loop.
+    public static func lastUsedLabel(for date: Date?, now: Date = Date()) -> String {
+        guard let date else { return "Never" }
+        let secs = now.timeIntervalSince(date)
+        if secs < 0 { return "Never" }  // clock skew — treat as unknown
+        let mins = Int(secs / 60)
+        if mins < 1 { return "Just now" }
+        if mins < 60 { return "\(mins) min ago" }
+        let hours = mins / 60
+        if hours < 24 { return "\(hours) hr ago" }
+        let days = hours / 24
+        if days < 30 { return "\(days) day\(days == 1 ? "" : "s") ago" }
+        // Months/years use calendar units so they match what a user expects.
+        let cal = Calendar.current
+        let comps = cal.dateComponents([.month, .year], from: date, to: now)
+        let months = (comps.year ?? 0) * 12 + (comps.month ?? 0)
+        if months < 12 { return "\(months) month\(months == 1 ? "" : "s") ago" }
+        let years = months / 12
+        return "\(years) year\(years == 1 ? "" : "s") ago"
+    }
+
+    /// Sort comparator for "by last opened" ranking: never-opened (nil)
+    /// first, then oldest first, size descending as the tiebreaker so the
+    /// biggest unused apps surface above smaller ones of the same age. Pure.
+    public static func byLastOpened(_ a: InstalledApp, _ b: InstalledApp) -> Bool {
+        switch (a.lastUsedDate, b.lastUsedDate) {
+        case (nil, nil):
+            return a.sizeBytes > b.sizeBytes
+        case (nil, _?):
+            return true   // never-opened sorts first
+        case (_?, nil):
+            return false
+        case (let da, let db):
+            if da! != db! { return da! < db! }      // oldest first
+            return a.sizeBytes > b.sizeBytes       // size tiebreak
+        }
     }
 
     /// Orphaned data left behind by an app, matched by bundle ID (exact) and
@@ -213,21 +287,13 @@ public enum AppUninstaller {
 
     /// Runs the non-file uninstall actions (TCC reset, lsregister). Each runs
     /// independently and reports its own result, so one failure never aborts
-    /// the others or rolls back trashed files. When `dryRun` is true, nothing
-    /// is actually run — the actions are reported as dry-run successes so the
-    /// preview shows what *would* happen.
+    /// the others or rolls back trashed files.
     @discardableResult
     public static func performActions(
-        _ actions: [UninstallAction], dryRun: Bool
+        _ actions: [UninstallAction]
     ) -> UninstallActionOutcome {
         var results: [UninstallActionOutcome.StepResult] = []
         for action in actions {
-            if dryRun {
-                NSLog("MacTidy dry-run: would perform %@ for %@", action.kind.rawValue, action.target)
-                results.append(.init(action: action, succeeded: true,
-                                     message: "Would run in a real pass."))
-                continue
-            }
             switch action.kind {
             case .tccReset:
                 // `tccutil reset All <bundleid>` revokes every TCC grant for
