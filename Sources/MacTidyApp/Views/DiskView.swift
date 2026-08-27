@@ -208,9 +208,14 @@ struct DirectoryExplorerView: View {
                 rescan()
             }
         }
+        // Gate on `isReviewingWithAI`, NOT `aiExplanation != nil`. The sheet
+        // must appear immediately so the "Asking the AI…" spinner shows while
+        // the advisor is thinking; gating on the explanation would hide the
+        // sheet until the response lands (so a slow/failed call shows nothing
+        // at all — the bug this fixed).
         .sheet(isPresented: Binding(
-            get: { aiExplanation != nil },
-            set: { if !$0 { aiExplanation = nil; aiReviewingItem = nil } }
+            get: { isReviewingWithAI },
+            set: { if !$0 { aiExplanation = nil; aiReviewingItem = nil; isReviewingWithAI = false } }
         )) {
             AIReviewSheet(item: aiReviewingItem, explanation: aiExplanation)
         }
