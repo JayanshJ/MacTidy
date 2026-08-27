@@ -266,7 +266,10 @@ final class UpdateManager {
 
     /// Writes a detached shell helper to /tmp and launches it with
     /// `Process.disown`. The helper:
-    ///   1. waits up to 60s for the current MacTidy process to exit (300 × 0.2s),
+    ///   1. waits up to 30s for the current MacTidy process to exit (150 × 0.2s),
+    ///      then force-kills it if it's still alive (termination can hang when
+    ///      something holds the run loop — the force-kill guarantees the swap
+    ///      proceeds and the app relaunches),
     ///   2. rm -rf the old /Applications/MacTidy.app,
     ///   3. moves the new bundle into place,
     ///   4. strips the quarantine attribute (updates aren't notarized),
