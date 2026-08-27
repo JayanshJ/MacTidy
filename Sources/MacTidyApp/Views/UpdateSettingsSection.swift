@@ -7,6 +7,11 @@ import CoreKit
 /// `phase` so a single source of truth drives every state.
 struct UpdateSettingsSection: View {
     @Environment(AppState.self) private var state
+    /// Dismisses the Settings sheet. The "Quit & Relaunch" button lives inside
+    /// that sheet, and `NSApp.terminate` can stall while a modal SwiftUI
+    /// sheet is still presented — so we dismiss the sheet before quitting, and
+    /// defer the actual terminate a beat so the dismissal animation finishes.
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         @Bindable var updates = state.updates
@@ -112,7 +117,18 @@ struct UpdateSettingsSection: View {
                 .buttonStyle(.bordered)
             case .readyToRelaunch:
                 Button {
-                    state.updates.relaunchToApply()
+                    // Close the Settings sheet first — terminating with a
+                    // modal sheet still presented can hang the run loop and
+                    // the app never quits. Give the dismissal animation a beat
+                    // to finish, then terminate. The swap helper (already
+                    // spawned during download-and-install) is waiting for this
+                    // process to exit; once it does, it swaps the bundle and
+                    // relaunches.
+                    dismiss()
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(350))
+                        state.updates.relaunchToApply()
+                    }
                 } label: {
                     Label("Quit & Relaunch", systemImage: "arrow.triangle.2.circlepath")
                 }
