@@ -220,16 +220,26 @@ final class UpdateManager {
         NSLog("[MacTidy.update] helper spawned (\(Int(Date().timeIntervalSince(t) * 1000))ms)")
     }
 
-    /// Unzip via the system `unzip` tool (always present on macOS). Falls back
-    /// to `tar -xf` for zip extraction if unzip is somehow missing.
+    /// Extracts the downloaded update zip into `dest`.
+    ///
+    /// Uses `ditto -x -k` — the symmetric inverse of the `ditto -c -k` that
+    /// packages the release asset. This matters for code-signing integrity:
+    /// `ditto -c -k` stores resource forks / extended attributes as AppleDouble
+    /// `._*` files inside the zip. `/usr/bin/unzip` does NOT merge those back on
+    /// extraction — it leaves stray `._CodeResources` next to the real
+    /// `CodeResources`, which breaks the seal (`codesign -v` reports "a sealed
+    /// resource is missing or invalid") and the update fails verification.
+    /// `ditto -x -k` reassembles the AppleDouble files correctly, so the
+    /// signature verifies. Falls back to `unzip` only if `ditto` is somehow
+    /// missing (it never is on macOS); in that degraded case the downstream
+    /// codesign check fails closed rather than installing a broken app.
     private func unzip(at zipURL: URL, into dest: URL) throws {
-        let unzip = "/usr/bin/unzip"
-        if FileManager.default.isExecutableFile(atPath: unzip) {
-            let r = Shell.run(unzip, ["-q", "-o", zipURL.path, "-d", dest.path])
+        let ditto = "/usr/bin/ditto"
+        if FileManager.default.isExecutableFile(atPath: ditto) {
+            let r = Shell.run(ditto, ["-x", "-k", zipURL.path, dest.path])
             guard r?.succeeded == true else { throw UpdateError.unzipFailed(r?.stderr ?? "") }
         } else {
-            // tar can read zip archives.
-            let r = Shell.run("/usr/bin/tar", ["-xf", zipURL.path, "-C", dest.path])
+            let r = Shell.run("/usr/bin/unzip", ["-q", "-o", zipURL.path, "-d", dest.path])
             guard r?.succeeded == true else { throw UpdateError.unzipFailed(r?.stderr ?? "") }
         }
     }
