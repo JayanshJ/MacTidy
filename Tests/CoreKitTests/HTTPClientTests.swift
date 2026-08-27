@@ -61,4 +61,24 @@ struct HTTPClientTests {
             Issue.record("unexpected error type: \(error)")
         }
     }
+
+    /// `bodySnippet` surfaces the response body when a 2xx has no parseable
+    /// model reply, so "Reachable but no model reply" isn't a blind failure.
+    @Test func bodySnippetReturnsShortBodyAsIs() {
+        let resp = HTTPClient.Response(statusCode: 200, body: Data(#"{"error":"model not found"}"#.utf8))
+        #expect(resp.bodySnippet() == #"{"error":"model not found"}"#)
+    }
+
+    @Test func bodySnippetTruncatesLongBody() {
+        let long = String(repeating: "a", count: 500)
+        let resp = HTTPClient.Response(statusCode: 200, body: Data(long.utf8))
+        let snippet = resp.bodySnippet()
+        #expect(snippet.count == 301) // 300 + the ellipsis char
+        #expect(snippet.hasSuffix("…"))
+    }
+
+    @Test func bodySnippetHandlesEmptyBody() {
+        let resp = HTTPClient.Response(statusCode: 200, body: Data())
+        #expect(resp.bodySnippet() == "(empty body)")
+    }
 }

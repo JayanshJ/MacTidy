@@ -12,6 +12,18 @@ public enum HTTPClient {
             try? JSONSerialization.jsonObject(with: body)
         }
         public func string() -> String { String(data: body, encoding: .utf8) ?? "" }
+
+        /// Truncated UTF-8 body for diagnostics. Shown to the user when a 2xx
+        /// response has no parseable model reply, so "Reachable but no model
+        /// reply" is no longer a blind failure — they can see whether the
+        /// server returned an error JSON, a differently-shaped reply, or an
+        /// empty body. Capped so a huge or binary body can't flood the UI.
+        public func bodySnippet(maxLength: Int = 300) -> String {
+            let s = string()
+            if s.isEmpty { return "(empty body)" }
+            if s.count > maxLength { return String(s.prefix(maxLength)) + "…" }
+            return s
+        }
     }
 
     public enum HTTPError: Error, LocalizedError {

@@ -104,8 +104,11 @@ struct OpenAICompatibleAdvisor: CleanAdvisor {
             // HTTP 2xx but no parseable model reply — the endpoint is
             // reachable but didn't produce content. Report this distinctly
             // from a real connection so the UI doesn't mark an empty-reply
-            // endpoint as "connected" (the prior false positive).
-            return "Reachable but no model reply (status \(resp.statusCode))"
+            // endpoint as "connected" (the prior false positive). Include
+            // the response body so the user can see *why* — a server-side
+            // error JSON, a differently-shaped reply, or an empty body —
+            // instead of a blind "no model reply".
+            return "Reachable but no model reply (status \(resp.statusCode)). Response: \(resp.bodySnippet())"
         } catch {
             return "Failed: \(error.localizedDescription)"
         }
@@ -285,7 +288,15 @@ struct OpenAICompatibleAdvisor: CleanAdvisor {
               let choices = json["choices"] as? [[String: Any]],
               let choice = choices.first,
               let message = choice["message"] as? [String: Any] else { return nil }
-        return message["content"] as? String
+        // OpenAI-compatible responses normally carry `content` as a string,
+        // but some compatible servers return an array of content blocks
+        // ([{"type":"text","text":"…"}]) — handle both so a valid reply isn't
+        // misread as "no model reply".
+        if let s = message["content"] as? String { return s }
+        if let blocks = message["content"] as? [[String: Any]] {
+            return blocks.first(where: { $0["type"] as? String == "text" })?["text"] as? String
+        }
+        return nil
     }
 
     private func authHeaders() -> [String: String] {
