@@ -20,6 +20,12 @@ public enum Category: String, CaseIterable, Codable, Sendable, Identifiable {
     case containerCaches
     case xcodeArchives
     case mailDownloads
+    case mavenTarget
+    case phpVendor
+    case flutterDartTool
+    case unityLibrary
+    case androidSystemImages
+    case staleScreenshots
     case oldInstallers
     case iosBackups
     case devCaches
@@ -46,6 +52,12 @@ public enum Category: String, CaseIterable, Codable, Sendable, Identifiable {
         case .containerCaches: "Sandboxed app caches"
         case .xcodeArchives: "Xcode Archives"
         case .mailDownloads: "Mail Downloads"
+        case .mavenTarget: "Maven target/"
+        case .phpVendor: "PHP vendor/"
+        case .flutterDartTool: "Flutter .dart_tool/"
+        case .unityLibrary: "Unity Library/"
+        case .androidSystemImages: "Android system images"
+        case .staleScreenshots: "Stale screenshots"
         case .oldInstallers: "Old installers"
         case .iosBackups: "iOS device backups"
         case .devCaches: "Developer tool caches"
@@ -88,6 +100,18 @@ public enum Category: String, CaseIterable, Codable, Sendable, Identifiable {
             "Xcode archive bundles in ~/Library/Developer/Xcode/Archives. Suggest-only: these hold symbols for past uploads — keep them until you're sure you won't need to symbolicate an old crash."
         case .mailDownloads:
             "Mail attachment cache (~/Library/Containers/com.apple.Mail/…/Mail Downloads). Mail re-downloads from the server when you open the message."
+        case .mavenTarget:
+            "Maven project build output (a target folder with a sibling pom.xml). Regenerable — restore with `mvn package`."
+        case .phpVendor:
+            "Composer dependencies (a vendor folder with a sibling composer.json). Regenerable — restore with `composer install`."
+        case .flutterDartTool:
+            "Flutter/Dart build cache (a .dart_tool folder with a sibling pubspec.yaml). Regenerable — restore with `flutter pub get`."
+        case .unityLibrary:
+            "Unity's imported-asset cache (a Library folder under a Unity project, gated on a sibling ProjectSettings dir). Suggest-only: Unity re-imports every asset on rebuild, which can take a long time."
+        case .androidSystemImages:
+            "Downloaded Android SDK system images (~​/Library/Android/sdk/system-images). Suggest-only: each is needed by a specific AVD; re-download is large and slow."
+        case .staleScreenshots:
+            "Screenshot files on your Desktop older than 30 days. Suggest-only: these are your files, not regenerable — review before trashing."
         case .oldInstallers:
             "Disk images and installer packages in ~/Downloads you probably already installed."
         case .iosBackups:
@@ -107,7 +131,8 @@ public enum Category: String, CaseIterable, Codable, Sendable, Identifiable {
     public var isPreselectable: Bool {
         switch self {
         case .nodeModules, .rustTargets, .iosBackups, .simulatorRuntimes,
-             .appSupport, .bigFiles, .pythonCaches, .xcodeArchives:
+             .appSupport, .bigFiles, .pythonCaches, .xcodeArchives,
+             .unityLibrary, .androidSystemImages, .staleScreenshots:
             false
         default:
             true

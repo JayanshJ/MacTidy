@@ -66,9 +66,11 @@ public enum Recommendations {
         case .oldInstallers: .staleInstaller
         case .iosBackups: .staleBackup
         case .nodeModules, .rustTargets: .staleBuildDir
-        case .podDirs, .swiftBuildDirs, .gradleBuildDirs, .pythonCaches: .staleBuildDir
-        case .xcodeArchives: nil   // symbols for past uploads — never auto-recommended, only listed
+        case .podDirs, .swiftBuildDirs, .gradleBuildDirs, .pythonCaches,
+             .mavenTarget, .phpVendor, .flutterDartTool: .staleBuildDir
+        case .xcodeArchives, .unityLibrary, .androidSystemImages: nil   // never auto-recommended, only listed
         case .appSupport: nil   // real app state — never recommended, only listed
+        case .staleScreenshots: .bigFile   // user files — ranked like large files, not as caches
         case .bigFiles: .bigFile
         }
     }
