@@ -98,12 +98,21 @@ public enum UpdateInstaller {
         exec >>"$LOG" 2>&1
         log "=== swap helper started (old pid \(currentPID)) ==="
 
+        # Wait for the old process to exit on its own. The app calls
+        # NSApp.terminate, which should return promptly, but if anything
+        # keeps the run loop alive we don't want to hang forever — after the
+        # graceful wait we force-kill so the swap can proceed.
         i=0
-        while [ $i -lt 300 ]; do
+        while [ $i -lt 150 ]; do
             if ! kill -0 \(currentPID) 2>/dev/null; then break; fi
             sleep 0.2
             i=$((i + 1))
         done
+        if kill -0 \(currentPID) 2>/dev/null; then
+            log "old process still alive after 30s — force killing"
+            kill -9 \(currentPID) 2>/dev/null
+            sleep 0.5
+        fi
         log "old process gone, swapping"
 
         if [ -e "$DEST" ]; then
