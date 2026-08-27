@@ -12,6 +12,14 @@ struct UpdateCheckerTests {
         #expect(UpdateChecker.Version("1.10.0").numeric == [1, 10, 0])
     }
 
+    @Test func rawStripsVPrefix() {
+        // The views render `Text("v\(version.raw)")`, so `raw` must NOT
+        // carry its own leading `v`/`V` — otherwise it shows as "vv1.9.0".
+        #expect(UpdateChecker.Version("v1.9.0").raw == "1.9.0")
+        #expect(UpdateChecker.Version("V1.9.0").raw == "1.9.0")
+        #expect(UpdateChecker.Version("1.9.0").raw == "1.9.0")
+    }
+
     @Test func newerVersionIsGreaterThan() {
         #expect(UpdateChecker.Version("1.5") > UpdateChecker.Version("1.4"))
         #expect(UpdateChecker.Version("1.10") > UpdateChecker.Version("1.9"))

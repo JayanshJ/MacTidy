@@ -39,9 +39,13 @@ public enum UpdateChecker {
         public let numeric: [Int]
 
         public init(_ raw: String) {
-            self.raw = raw
             var s = raw
+            // Store the version with any leading `v`/`V` prefix stripped so
+            // `raw` is the clean numeric form ("1.9.0", not "v1.9.0"). The
+            // views render `Text("v\(version.raw)")` — a raw that still
+            // carried the prefix would show as "vv1.9.0".
             if s.hasPrefix("v") || s.hasPrefix("V") { s.removeFirst() }
+            self.raw = s
             // Strip any prerelease suffix after the first non-version char
             // (e.g. "1.5-beta" → [1,5]); keep numeric dot components only.
             self.numeric = Version.parse(s)
