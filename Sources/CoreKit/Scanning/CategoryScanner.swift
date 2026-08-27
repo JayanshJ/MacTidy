@@ -1,6 +1,6 @@
 import Foundation
 
-public struct CategoryResult: Identifiable, Sendable, Codable {
+public struct CategoryResult: Identifiable, Sendable, Codable, Equatable {
     public let category: Category
     public let items: [ScanItem]
     public var id: Category { category }

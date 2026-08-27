@@ -67,4 +67,32 @@ public enum OutcomeRecorder {
     ) -> Bool {
         existingMilestone == nil && reclaimedBytes > 0
     }
+
+    /// Returns a copy of `results` with items whose `url` (symlink-resolved,
+    /// standardized) is in `trashedPaths` removed, and — when `dropMissing`
+    /// is true — non-directory items whose file no longer exists on disk
+    /// removed. Emptied `CategoryResult`s are dropped so the UI can show its
+    /// "all clean" empty state. Pure (no `FileManager` when `dropMissing` is
+    /// false), so the trashed-path pruning is unit-testable without a
+    /// filesystem; `dropMissing` is the belt-and-suspenders path used before
+    /// feeding the AI.
+    public static func pruneDeleted(
+        _ results: [CategoryResult],
+        trashedPaths: Set<String>,
+        dropMissing: Bool = false,
+        fileExists: (URL) -> Bool = { _ in true }
+    ) -> [CategoryResult] {
+        guard !trashedPaths.isEmpty || dropMissing else { return results }
+        let resolved = Set(trashedPaths.map { URL(fileURLWithPath: $0)
+            .resolvingSymlinksInPath().standardizedFileURL.path })
+        return results.compactMap { result -> CategoryResult? in
+            let kept = result.items.filter { item in
+                let p = item.url.resolvingSymlinksInPath().standardizedFileURL.path
+                if resolved.contains(p) { return false }
+                if dropMissing, !item.isDirectory, !fileExists(item.url) { return false }
+                return true
+            }
+            return kept.isEmpty ? nil : CategoryResult(category: result.category, items: kept)
+        }
+    }
 }

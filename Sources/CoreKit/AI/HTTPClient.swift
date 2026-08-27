@@ -18,6 +18,12 @@ public enum HTTPClient {
         case badURL(String)
         case requestFailed(Int, String)
         case timeout
+        /// No network route to the endpoint — host not found, connection
+        /// refused, offline, or the request was cancelled. Distinct from
+        /// `.timeout` (which means the endpoint was reachable but slow) so
+        /// the UI can tell the user the right thing: "is the endpoint up?"
+        /// vs "the model is slow / the timeout is too low".
+        case connection(String)
         case decoding(String)
 
         public var errorDescription: String? {
@@ -25,8 +31,32 @@ public enum HTTPClient {
             case .badURL(let u): "Bad URL: \(u)"
             case .requestFailed(let code, let body): "Request failed (\(code)): \(body)"
             case .timeout: "The request timed out."
+            case .connection(let m): "Couldn't reach the endpoint: \(m)"
             case .decoding(let m): "Failed to decode the model response: \(m)"
             }
+        }
+    }
+
+    /// Maps a thrown `URLError` to the right `HTTPError`. Only true timeouts
+    /// (`.timedOut`) and mid-stream disconnects (`.networkConnectionLost`)
+    /// become `.timeout`; everything else a user would blame on the endpoint
+    /// being down (`.notConnectedToInternet`, `.cannotFindHost`,
+    /// `.cannotConnectToHost`, `.cancelled`, …) becomes `.connection`. The
+    /// previous code collapsed *all* `URLError`s into `.timeout`, so a
+    /// refused connection printed "The request timed out" — misleading.
+    private static func map(_ error: URLError) -> HTTPError {
+        switch error.code {
+        case .timedOut, .networkConnectionLost:
+            return .timeout
+        case .cancelled:
+            return .connection("request cancelled")
+        case .notConnectedToInternet:
+            return .connection("no internet connection")
+        case .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed,
+             .cannotLoadFromNetwork, .dataNotAllowed, .internationalRoamingOff:
+            return .connection(error.localizedDescription)
+        default:
+            return .connection(error.localizedDescription)
         }
     }
 
@@ -35,7 +65,7 @@ public enum HTTPClient {
         url: String,
         headers: [String: String],
         body: [String: Any],
-        timeout: TimeInterval = 20
+        timeout: TimeInterval = 60
     ) async throws -> Response {
         guard let endpoint = URL(string: url) else { throw HTTPError.badURL(url) }
         var request = URLRequest(url: endpoint)
@@ -48,8 +78,8 @@ public enum HTTPClient {
         let (data, response): (Data, URLResponse)
         do {
             (data, response) = try await URLSession.shared.data(for: request)
-        } catch is URLError {
-            throw HTTPError.timeout
+        } catch let error as URLError {
+            throw map(error)
         } catch {
             throw HTTPError.requestFailed(0, error.localizedDescription)
         }
@@ -77,8 +107,8 @@ public enum HTTPClient {
         let (data, response): (Data, URLResponse)
         do {
             (data, response) = try await URLSession.shared.data(for: request)
-        } catch is URLError {
-            throw HTTPError.timeout
+        } catch let error as URLError {
+            throw map(error)
         } catch {
             throw HTTPError.requestFailed(0, error.localizedDescription)
         }

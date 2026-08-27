@@ -51,8 +51,26 @@ struct MenuBarPanel: View {
         .tint(Theme.accent)
         .task {
             state.monitor.start()
-            diskPressure = await Task.detached { DiskPressure.current() }.value
+            await refreshDiskPressure()
+            // Keep the free-space ticker live while the popover is open —
+            // a user who empties Trash or frees space in another app should
+            // see the number update without reopening the panel. 30s cadence
+            // is cheap (one volume attribute probe) and smooth.
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(30))
+                if Task.isCancelled { break }
+                await refreshDiskPressure()
+            }
         }
+    }
+
+    /// Re-probes the boot volume's free bytes off the main actor and republishes
+    /// `diskPressure`. Called on appear, on a 30s loop while the popover is
+    /// open, and after "Quick check now" so the free-space line stays live
+    /// (the original loaded it once and went stale for the life of the view).
+    private func refreshDiskPressure() async {
+        let pressure = await Task.detached { DiskPressure.current() }.value
+        diskPressure = pressure
     }
 
     // MARK: - Header
@@ -208,7 +226,13 @@ struct MenuBarPanel: View {
             .controlSize(.small)
 
             Button {
-                Task { await state.monitor.checkNow() }
+                Task {
+                    await state.monitor.checkNow()
+                    // A quick check may have freed context (or the user just
+                    // trashed in the main window); refresh the free-space
+                    // ticker too so the panel reflects the new reality.
+                    await refreshDiskPressure()
+                }
             } label: {
                 if state.monitor.isChecking {
                     HStack(spacing: 6) { ProgressView().controlSize(.mini); Text("Checking…") }

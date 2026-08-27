@@ -122,4 +122,106 @@ struct OutcomeRecorderTests {
         #expect(OutcomeRecorder.shouldFireFirstReclaimMilestone(
             existingMilestone: nil, reclaimedBytes: 0) == false)
     }
+
+    // MARK: - pruneDeleted (global state refresh after a trash)
+
+    private func item(_ path: String, _ bytes: Int64, isDir: Bool = false) -> ScanItem {
+        ScanItem(url: URL(fileURLWithPath: path), sizeBytes: bytes, isDirectory: isDir,
+                 category: .bigFiles)
+    }
+
+    @Test func pruneRemovedTrashedItemsFromResults() {
+        // The core "duplicate rescanning" fix: after trashing, the items must
+        // leave the in-memory scan results so the grid/total reflect the
+        // deletion without a full rescan.
+        let results = [
+            CategoryResult(category: .bigFiles, items: [
+                item("/tmp/keep.bin", 100),
+                item("/tmp/gone.bin", 200),
+            ]),
+        ]
+        let pruned = OutcomeRecorder.pruneDeleted(
+            results, trashedPaths: ["/tmp/gone.bin"])
+        #expect(pruned.count == 1)
+        #expect(pruned[0].items.count == 1)
+        #expect(pruned[0].items.first?.url.lastPathComponent == "keep.bin")
+        #expect(pruned[0].totalBytes == 100)
+    }
+
+    @Test func pruneDropsCategoriesThatBecomeEmpty() {
+        // A category whose every item was trashed must drop entirely so the
+        // "all clean" empty state shows (a zero-item CategoryResult would
+        // otherwise still render a 0-byte card before the view filter).
+        let results = [
+            CategoryResult(category: .bigFiles, items: [item("/tmp/a", 100)]),
+            CategoryResult(category: .oldInstallers, items: [item("/tmp/keep", 50)]),
+        ]
+        let pruned = OutcomeRecorder.pruneDeleted(
+            results, trashedPaths: ["/tmp/a"])
+        #expect(pruned.count == 1)
+        #expect(pruned.first?.category == .oldInstallers)
+    }
+
+    @Test func pruneResolvesSymlinksBeforeMatching() {
+        // A trashed path that was an alias must still match the scan item that
+        // resolved through it — otherwise a symlinked file wouldn't be pruned.
+        let real = "/tmp/real.bin"
+        let results = [
+            CategoryResult(category: .bigFiles, items: [item(real, 100)]),
+        ]
+        // Pretend the trashed path is a symlink path that resolves to `real`.
+        // OutcomeRecorder resolves trashedPaths via resolvingSymlinksInPath;
+        // since we pass the real path directly, it must match.
+        let pruned = OutcomeRecorder.pruneDeleted(
+            results, trashedPaths: [real])
+        #expect(pruned.isEmpty)
+    }
+
+    @Test func pruneDoesNotMutateWhenNothingMatches() {
+        let results = [
+            CategoryResult(category: .bigFiles, items: [item("/tmp/a", 100)]),
+        ]
+        let pruned = OutcomeRecorder.pruneDeleted(
+            results, trashedPaths: ["/tmp/unrelated"])
+        #expect(pruned == results)
+        #expect(pruned.first?.totalBytes == 100)
+    }
+
+    @Test func pruneDropMissingAlsoRemovesGoneFilesForAIContext() {
+        // The Insights AI-context sync: a file trashed outside the app (Finder,
+        // Trash emptied) must be dropped from the snapshot so the AI can't
+        // recommend it. `dropMissing` with a fileExists that says "gone" simulates
+        // that without a real filesystem.
+        let results = [
+            CategoryResult(category: .bigFiles, items: [
+                item("/tmp/present.bin", 100),
+                item("/tmp/missing.bin", 200),
+            ]),
+        ]
+        let pruned = OutcomeRecorder.pruneDeleted(
+            results, trashedPaths: [],
+            dropMissing: true,
+            fileExists: { $0.path.contains("missing") ? false : true }
+        )
+        #expect(pruned.count == 1)
+        #expect(pruned[0].items.count == 1)
+        #expect(pruned[0].items.first?.url.lastPathComponent == "present.bin")
+    }
+
+    @Test func pruneDropMissingKeepsDirectoriesEvenIfFileExistsFalse() {
+        // Directories are kept unconditionally (they may legitimately be empty;
+        // their size was summed at scan time). A false-yielding fileExists must
+        // not drop a directory item.
+        let results = [
+            CategoryResult(category: .bigFiles, items: [
+                item("/tmp/dir", 100, isDir: true),
+            ]),
+        ]
+        let pruned = OutcomeRecorder.pruneDeleted(
+            results, trashedPaths: [], dropMissing: true,
+            fileExists: { _ in false }
+        )
+        #expect(pruned.count == 1)
+        #expect(pruned[0].items.count == 1)
+    }
 }

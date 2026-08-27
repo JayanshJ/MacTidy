@@ -98,10 +98,14 @@ struct OpenAICompatibleAdvisor: CleanAdvisor {
         ]
         do {
             let resp = try await HTTPClient.post(url: endpoint, headers: authHeaders(), body: body, timeout: 10)
-            if let content = extractContent(from: resp) {
+            if let content = extractContent(from: resp), !content.isEmpty {
                 return "Connected — model replied: \(content)"
             }
-            return "Connected (status \(resp.statusCode))"
+            // HTTP 2xx but no parseable model reply — the endpoint is
+            // reachable but didn't produce content. Report this distinctly
+            // from a real connection so the UI doesn't mark an empty-reply
+            // endpoint as "connected" (the prior false positive).
+            return "Reachable but no model reply (status \(resp.statusCode))"
         } catch {
             return "Failed: \(error.localizedDescription)"
         }

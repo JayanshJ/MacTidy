@@ -167,12 +167,17 @@ struct CategoryCleanupView: View {
 // MARK: - Biggest directories explorer
 
 struct DirectoryExplorerView: View {
+    @Environment(AppState.self) private var state
     @State private var root = FileManager.default.homeDirectoryForCurrentUser
     @State private var items: [ScanItem] = []
     @State private var isScanning = false
     @State private var scanTask: Task<Void, Never>?
     @State private var sheetPlan: DeletionPlan?
     @State private var renderAsMap = false
+    /// AI explanation for the currently-selected row, shown in a sheet.
+    @State private var aiExplanation: ItemExplanation?
+    @State private var aiReviewingItem: ScanItem?
+    @State private var isReviewingWithAI = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -202,6 +207,12 @@ struct DirectoryExplorerView: View {
             DeletionConfirmationSheet(title: "Trash this item?", plan: plan) { _ in
                 rescan()
             }
+        }
+        .sheet(isPresented: Binding(
+            get: { aiExplanation != nil },
+            set: { if !$0 { aiExplanation = nil; aiReviewingItem = nil } }
+        )) {
+            AIReviewSheet(item: aiReviewingItem, explanation: aiExplanation)
         }
     }
 
@@ -260,9 +271,36 @@ struct DirectoryExplorerView: View {
             }
             .contextMenu {
                 Button("Show in Finder") { showInFinder(item.url) }
+                // AI review for any disk-browsing file — asks the configured
+                // advisor for a safe/review/keep verdict + one-line reason,
+                // same path as the category-view "Review with AI" button.
+                Button {
+                    reviewWithAI(item)
+                } label: {
+                    Label("Review with AI", systemImage: "sparkles")
+                }
+                .disabled(state.advisor == nil)
                 Button("Trash…", role: .destructive) {
                     sheetPlan = DeletionPlan(items: [item])
                 }
+            }
+        }
+    }
+
+    /// Asks the configured advisor to explain a disk-browser item and shows
+    /// the verdict in a sheet. Mirrors the category-view AI review flow but
+    /// for arbitrary browsed files (not just scanned category items). No-op
+    /// when no AI provider is configured.
+    private func reviewWithAI(_ item: ScanItem) {
+        guard state.advisor != nil else { return }
+        aiReviewingItem = item
+        aiExplanation = nil
+        isReviewingWithAI = true
+        Task {
+            let explanation = await state.explain(item: item)
+            await MainActor.run {
+                aiExplanation = explanation
+                isReviewingWithAI = false
             }
         }
     }
@@ -288,4 +326,55 @@ struct DirectoryExplorerView: View {
 
 extension DeletionPlan: Identifiable {
     public var id: String { candidates.map(\.url.path).joined(separator: "|") }
+}
+
+/// Sheet showing an AI verdict + one-line reason for a disk-browser file.
+/// Shown while the advisor is thinking (spinner) and once the explanation
+/// lands. Mirrors the inline verdict the category view shows, but as a
+/// standalone sheet for the explorer's ad-hoc review.
+private struct AIReviewSheet: View {
+    let item: ScanItem?
+    let explanation: ItemExplanation?
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+            HStack(spacing: Theme.Spacing.sm) {
+                Image(systemName: "sparkles").foregroundStyle(Theme.accent)
+                Text("AI review").font(.headline)
+                Spacer()
+            }
+            if let item {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.url.lastPathComponent).font(.callout).lineLimit(1)
+                    Text(item.url.path).font(.caption2).foregroundStyle(.tertiary)
+                        .lineLimit(2).truncationMode(.middle)
+                }
+            }
+            Divider()
+            if let explanation {
+                HStack(alignment: .top, spacing: Theme.Spacing.sm) {
+                    if let verdict = explanation.verdict {
+                        Image(systemName: verdict.icon)
+                            .foregroundStyle(verdict == .safe ? Theme.Status.good : (verdict == .keep ? Theme.Status.blocked : .orange))
+                    }
+                    Text(explanation.summary).font(.callout)
+                    Spacer()
+                }
+            } else {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Asking the AI…").foregroundStyle(.secondary)
+                }
+            }
+            Spacer(minLength: 0)
+            HStack {
+                Spacer()
+                Button("Done") { dismiss() }
+                    .buttonStyle(.bordered)
+            }
+        }
+        .padding(Theme.Spacing.lg)
+        .frame(width: 420, height: 200)
+    }
 }
