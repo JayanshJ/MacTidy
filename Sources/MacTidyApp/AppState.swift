@@ -487,6 +487,15 @@ final class AppState {
         }
     }
 
+    /// Throwing variant of `explainBatch` so the UI can surface *why* a batch
+    /// "Review all with AI" failed (timeout, parse error, etc.) instead of
+    /// silently rendering no verdicts. Returns empty for no-provider/empty
+    /// input (not an error). The view catches and shows the message.
+    func explainBatchThrowing(items: [ScanItem]) async throws -> [BatchVerdict] {
+        guard let advisor = advisor, !items.isEmpty else { return [] }
+        return try await advisor.explainBatch(items, config: aiConfig)
+    }
+
     /// Builds a system snapshot and asks the advisor for proactive insights.
     /// Falls back to deterministic, locally-generated insights when no provider
     /// is configured or the call fails — so the Insights panel is useful even

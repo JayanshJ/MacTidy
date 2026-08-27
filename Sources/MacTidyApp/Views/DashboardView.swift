@@ -19,6 +19,9 @@ struct DashboardView: View {
     /// on `ScanItemRow` — no new popup surface.
     @State private var batchVerdicts: [UUID: BatchVerdict] = [:]
     @State private var reviewAll = false
+    /// Surfaces why a "Review with AI" batch pass failed, so it isn't a silent
+    /// no-op (spinner stops, nothing renders). Mirrors CategoryCleanupView.
+    @State private var reviewError: String?
 
     enum DashboardTab: String, CaseIterable, Identifiable {
         case insights = "Insights"
@@ -91,6 +94,7 @@ struct DashboardView: View {
                 drilledCategory = nil
                 selection.removeAll()
                 batchVerdicts.removeAll()
+                reviewError = nil
             }
         } label: {
             Label(t.rawValue, systemImage: t.icon)
@@ -264,6 +268,7 @@ struct DashboardView: View {
                 Button {
                     withAnimation(.snappy) { drilledCategory = nil }
                     batchVerdicts.removeAll()
+                    reviewError = nil
                 } label: {
                     Label("Categories", systemImage: "chevron.left")
                 }
@@ -309,6 +314,13 @@ struct DashboardView: View {
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             }
             .padding(.horizontal, Theme.Spacing.lg).padding(.vertical, Theme.Spacing.sm)
+            if let reviewError {
+                Label(reviewError, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .padding(.horizontal, Theme.Spacing.lg)
+                    .padding(.bottom, Theme.Spacing.sm)
+            }
             Divider()
             if category == .nodeModules {
                 nodeModulesList(items: items)
@@ -394,11 +406,22 @@ struct DashboardView: View {
     /// the existing list. Runs in the background; the user can keep browsing.
     private func reviewCategoryWithAI(items: [ScanItem]) async {
         reviewAll = true
+        reviewError = nil
         defer { reviewAll = false }
-        let verdicts = await state.explainBatch(items: items)
-        var map: [UUID: BatchVerdict] = [:]
-        for v in verdicts { map[v.id] = v }
-        batchVerdicts = map
+        do {
+            let verdicts = try await state.explainBatchThrowing(items: items)
+            var map: [UUID: BatchVerdict] = [:]
+            for v in verdicts { map[v.id] = v }
+            batchVerdicts = map
+            if verdicts.isEmpty {
+                reviewError = "The model returned no verdicts."
+            } else if verdicts.allSatisfy({ $0.verdict == nil && $0.summary.isEmpty }) {
+                reviewError = "The model replied but with no parseable verdicts — it may be a reasoning model that needs more time, or one that doesn't support the tool-call format."
+            }
+        } catch {
+            reviewError = error.localizedDescription
+            batchVerdicts = [:]
+        }
     }
 
     private var sheetPlanTitle: String {

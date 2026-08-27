@@ -60,7 +60,7 @@ struct OpenAICompatibleAdvisor: CleanAdvisor {
             "tool_choice": ["type": "function", "function": ["name": "verdict_items"]],
             "temperature": 0.2,
         ]
-        let resp = try await HTTPClient.post(url: endpoint, headers: authHeaders(), body: body)
+        let resp = try await HTTPClient.post(url: endpoint, headers: authHeaders(), body: body, timeout: 120)
         if let parsed = parseBatchVerdicts(from: resp, items: items), !parsed.isEmpty {
             return parsed
         }

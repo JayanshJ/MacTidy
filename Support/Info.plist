@@ -19,9 +19,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.10.6</string>
+	<string>1.10.7</string>
 	<key>CFBundleVersion</key>
-	<string>29</string>
+	<string>30</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 Jayansh Jain</string>
 	<key>LSMinimumSystemVersion</key>

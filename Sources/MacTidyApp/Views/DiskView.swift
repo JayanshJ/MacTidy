@@ -37,6 +37,11 @@ struct CategoryCleanupView: View {
     /// category-level "Review with AI" button and rendered inline on rows.
     @State private var batchVerdicts: [UUID: BatchVerdict] = [:]
     @State private var reviewAll = false
+    /// Surfaces why a "Review all with AI" pass failed (timeout, parse error,
+    /// a reasoning model that put its answer in `reasoning` not `content`).
+    /// Without this the call failed silently — the spinner stopped and
+    /// nothing rendered, so the feature read as "broken."
+    @State private var reviewError: String?
 
     private var allItems: [ScanItem] {
         state.categoryResults.flatMap(\.items)
@@ -99,6 +104,13 @@ struct CategoryCleanupView: View {
                     .disabled(state.isScanningCategories)
                 }
                 .padding(.horizontal, Theme.Spacing.lg).padding(.vertical, Theme.Spacing.sm)
+                if let reviewError {
+                    Label(reviewError, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, Theme.Spacing.lg)
+                        .padding(.bottom, Theme.Spacing.sm)
+                }
                 Divider()
                 List {
                     ForEach(state.categoryResults) { result in
@@ -155,12 +167,28 @@ struct CategoryCleanupView: View {
     /// in the background; the user can keep using the view while it works.
     private func reviewAllWithAI() async {
         reviewAll = true
+        reviewError = nil
         defer { reviewAll = false }
         let all = state.categoryResults.flatMap(\.items)
-        let verdicts = await state.explainBatch(items: all)
-        var map: [UUID: BatchVerdict] = [:]
-        for v in verdicts { map[v.id] = v }
-        batchVerdicts = map
+        do {
+            let verdicts = try await state.explainBatchThrowing(items: all)
+            var map: [UUID: BatchVerdict] = [:]
+            for v in verdicts { map[v.id] = v }
+            batchVerdicts = map
+            // Distinguish a genuine failure from a working pass: an empty list
+            // or all-nil/empty verdicts means the model replied with nothing
+            // parseable (common with reasoning models that put their answer in
+            // `reasoning` instead of `content`). Surface that so it isn't a
+            // silent no-op.
+            if verdicts.isEmpty {
+                reviewError = "The model returned no verdicts."
+            } else if verdicts.allSatisfy({ $0.verdict == nil && $0.summary.isEmpty }) {
+                reviewError = "The model replied but with no parseable verdicts — it may be a reasoning model that needs more time, or one that doesn't support the tool-call format."
+            }
+        } catch {
+            reviewError = error.localizedDescription
+            batchVerdicts = [:]
+        }
     }
 }
 
