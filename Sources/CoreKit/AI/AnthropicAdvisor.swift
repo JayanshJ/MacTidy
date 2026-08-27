@@ -83,8 +83,12 @@ struct AnthropicAdvisor: CleanAdvisor {
         ]
         do {
             let resp = try await HTTPClient.post(url: anthropicEndpoint, headers: headers, body: body, timeout: 10)
-            if let text = extractText(from: resp) { return "Connected — model replied: \(text)" }
-            return "Connected (status \(resp.statusCode))"
+            if let text = extractText(from: resp), !text.isEmpty {
+                return "Connected — model replied: \(text)"
+            }
+            // HTTP 2xx but no parseable model reply — report distinctly so the
+            // UI doesn't mark an empty-reply endpoint as "connected".
+            return "Reachable but no model reply (status \(resp.statusCode))"
         } catch {
             return "Failed: \(error.localizedDescription)"
         }

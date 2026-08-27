@@ -494,11 +494,17 @@ final class AppState {
     func generateInsights() async -> [Insight] {
         let processes = ProcessScanner.scan()
         let memory = ProcessScanner.memorySummary()
+        // Sync the AI context to the live filesystem: drop any scanned item
+        // whose file no longer exists (trashed via the app, via Finder, or
+        // the Trash was emptied) so the AI can't recommend deleting a file
+        // that's already gone. `pruneDeleted` handles app-trashed items at
+        // trash time; this catches the rest before the AI sees them.
+        let freshCategories = prunedForMissingFiles(categoryResults)
         // Enrich the snapshot with boot-volume pressure + login items so the
         // advisor (and deterministic fallback) can surface "disk almost full"
         // and "heavy startup" insights. Both are read-only and nil-safe.
         let snapshot = SystemSnapshot(
-            categories: categoryResults,
+            categories: freshCategories,
             memory: memory,
             processes: processes,
             diskPressure: DiskPressure.current(),
@@ -631,6 +637,11 @@ final class AppState {
         // Republish the Trash size so the nudge card updates live (we just
         // added bytes to the Trash).
         refreshTrashBytes()
+        // Drop the just-trashed items from the in-memory scan results so the
+        // grid, total, and AI context reflect the deletion immediately —
+        // without this, trashed items linger until the next full rescan and
+        // get re-recommended by the Insights AI.
+        pruneDeleted(outcome.trashed.map(\.original))
     }
 
     private func recordDedupOutcome(
@@ -657,6 +668,50 @@ final class AppState {
         cleanupHistory = cleanupLog.load()
         lastUndoableOutcome = (records, "Deduplicated \(outcome.deduplicated.count) cop\(outcome.deduplicated.count == 1 ? "y" : "ies") (\(outcome.reclaimedBytes.formattedBytes))")
         refreshTrashBytes()
+        // The dedup swap sends the swapped-out originals to Trash — prune them
+        // from scan results too, same reason as `recordOutcome`.
+        pruneDeleted(records.map(\.original))
+    }
+
+    /// Returns a copy of `results` with non-directory items whose file no
+    /// longer exists on disk removed (directories are kept — they may just
+    /// be empty, and their size was already summed at scan time). Used by
+    /// `generateInsights` to feed the AI a live-filesystem view, so a file
+    /// trashed outside the app (Finder, Trash emptied) isn't recommended
+    /// again. Does not mutate `categoryResults` — a pure filter for the
+    /// snapshot only. Delegates to the testable `OutcomeRecorder.pruneDeleted`.
+    private func prunedForMissingFiles(_ results: [CategoryResult]) -> [CategoryResult] {
+        let fm = FileManager.default
+        return OutcomeRecorder.pruneDeleted(
+            results, trashedPaths: [], dropMissing: true,
+            fileExists: { fm.fileExists(atPath: $0.resolvingSymlinksInPath().path) }
+        )
+    }
+
+    /// Removes items whose `url` matches any of the given URLs from the
+    /// in-memory `categoryResults`, and drops any `ScanItem` whose file no
+    /// longer exists on disk. This is the "global state refresh" after a
+    /// destructive action: the grid, the reclaim total, and the AI context
+    /// all read from `categoryResults`, so pruning here keeps them honest
+    /// without forcing a full (expensive) rescan. Resolved-symlink comparison
+    /// so a trashed alias path still matches. Emptied `CategoryResult`s are
+    /// dropped so the "all clean" empty state shows. Delegates the pure work
+    /// to `OutcomeRecorder.pruneDeleted` (unit-tested) and owns only the
+    /// mutation + persistence.
+    private func pruneDeleted(_ urls: [URL]) {
+        let trashed = Set(urls.map { $0.resolvingSymlinksInPath().standardizedFileURL.path })
+        guard !trashed.isEmpty else { return }
+        let before = categoryResults
+        let fm = FileManager.default
+        categoryResults = OutcomeRecorder.pruneDeleted(
+            categoryResults,
+            trashedPaths: trashed,
+            dropMissing: true,
+            fileExists: { fm.fileExists(atPath: $0.resolvingSymlinksInPath().path) }
+        )
+        if categoryResults != before {
+            persistLastScan(categoryResults)
+        }
     }
 
     // MARK: - Scan persistence
