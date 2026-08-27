@@ -93,21 +93,35 @@ struct OpenAICompatibleAdvisor: CleanAdvisor {
         let body: [String: Any] = [
             "model": model,
             "messages": [["role": "user", "content": "Reply with the single word: ok"]],
-            "max_tokens": 5,
+            // Reasoning models (deepseek-r1, etc.) emit chain-of-thought
+            // tokens before the final answer. With max_tokens=5 the whole
+            // budget went to reasoning and `content` came back empty
+            // (finish_reason "length") — a false "no model reply". Give the
+            // model room to finish thinking and emit its answer.
+            "max_tokens": 512,
             "temperature": 0,
         ]
         do {
-            let resp = try await HTTPClient.post(url: endpoint, headers: authHeaders(), body: body, timeout: 10)
+            let resp = try await HTTPClient.post(url: endpoint, headers: authHeaders(), body: body, timeout: 30)
             if let content = extractContent(from: resp), !content.isEmpty {
                 return "Connected — model replied: \(content)"
             }
-            // HTTP 2xx but no parseable model reply — the endpoint is
-            // reachable but didn't produce content. Report this distinctly
-            // from a real connection so the UI doesn't mark an empty-reply
-            // endpoint as "connected" (the prior false positive). Include
-            // the response body so the user can see *why* — a server-side
-            // error JSON, a differently-shaped reply, or an empty body —
-            // instead of a blind "no model reply".
+            // No final `content`, but a thinking model may have produced
+            // `reasoning` (Ollama exposes it as `reasoning`/`reasoning_content`).
+            // That still proves the model is alive and responding — which is
+            // what a connection test checks — so report it as connected
+            // rather than "no model reply".
+            if let reasoning = extractReasoning(from: resp), !reasoning.isEmpty {
+                let snippet = reasoning.count > 80 ? String(reasoning.prefix(80)) + "…" : reasoning
+                return "Connected — model is a reasoning model (thinking): \(snippet)"
+            }
+            // HTTP 2xx but no parseable model reply at all — the endpoint is
+            // reachable but produced neither content nor reasoning. Report
+            // this distinctly from a real connection so the UI doesn't mark an
+            // empty-reply endpoint as "connected" (the prior false positive).
+            // Include the response body so the user can see *why* — a
+            // server-side error JSON, a differently-shaped reply, or an empty
+            // body — instead of a blind "no model reply".
             return "Reachable but no model reply (status \(resp.statusCode)). Response: \(resp.bodySnippet())"
         } catch {
             return "Failed: \(error.localizedDescription)"
@@ -296,6 +310,21 @@ struct OpenAICompatibleAdvisor: CleanAdvisor {
         if let blocks = message["content"] as? [[String: Any]] {
             return blocks.first(where: { $0["type"] as? String == "text" })?["text"] as? String
         }
+        return nil
+    }
+
+    /// Extracts chain-of-thought from a thinking model's reply. Ollama's
+    /// OpenAI-compatible endpoint exposes reasoning in a `reasoning` (or
+    /// `reasoning_content`) field, separate from `content`. Used only by
+    /// `testConnection` to recognize a live reasoning model whose `content`
+    /// is empty (e.g. truncated by max_tokens) as still "connected".
+    private func extractReasoning(from resp: HTTPClient.Response) -> String? {
+        guard let json = resp.json as? [String: Any],
+              let choices = json["choices"] as? [[String: Any]],
+              let choice = choices.first,
+              let message = choice["message"] as? [String: Any] else { return nil }
+        if let s = message["reasoning"] as? String { return s }
+        if let s = message["reasoning_content"] as? String { return s }
         return nil
     }
 
