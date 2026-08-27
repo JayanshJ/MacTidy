@@ -208,11 +208,15 @@ struct DirectoryExplorerView: View {
                 rescan()
             }
         }
-        // Gate on `isReviewingWithAI`, NOT `aiExplanation != nil`. The sheet
-        // must appear immediately so the "Asking the AI…" spinner shows while
-        // the advisor is thinking; gating on the explanation would hide the
-        // sheet until the response lands (so a slow/failed call shows nothing
-        // at all — the bug this fixed).
+        // Gate on `isReviewingWithAI`, NOT `aiExplanation != nil`. Two bugs to
+        // avoid: (1) gating on the explanation hides the sheet until the
+        // response lands, so a slow/failed call shows nothing at all — the
+        // sheet must open immediately to show the "Asking the AI…" spinner.
+        // (2) `isReviewingWithAI` is the *presentation* binding, so it must
+        // stay true after the verdict lands; clearing it on completion dismisses
+        // the sheet the instant the answer arrives and the user never sees it.
+        // The sheet closes only when the user taps Done, which fires `set` and
+        // clears all three state vars. See `reviewWithAI` above.
         .sheet(isPresented: Binding(
             get: { isReviewingWithAI },
             set: { if !$0 { aiExplanation = nil; aiReviewingItem = nil; isReviewingWithAI = false } }
@@ -304,8 +308,18 @@ struct DirectoryExplorerView: View {
         Task {
             let explanation = await state.explain(item: item)
             await MainActor.run {
+                // Fill in the verdict, but do NOT clear `isReviewingWithAI` —
+                // it is the sheet's presentation binding (see the `.sheet`
+                // above). Clearing it here would dismiss the sheet the instant
+                // the verdict lands, so the user never sees the answer (the
+                // "still doesn't work" bug). The sheet's spinner→verdict
+                // switch is driven by `explanation == nil` inside
+                // `AIReviewSheet`, not by this flag. The sheet closes only when
+                // the user taps Done, which fires the binding's `set` and
+                // clears all three state vars. `state.explain` always returns a
+                // non-nil ItemExplanation (error message on failure), so the
+                // spinner can never get stuck.
                 aiExplanation = explanation
-                isReviewingWithAI = false
             }
         }
     }
