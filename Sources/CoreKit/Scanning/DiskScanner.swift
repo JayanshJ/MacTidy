@@ -117,6 +117,7 @@ public enum DiskScanner {
                 ".git", "node_modules", "target", "build", ".build",
                 ".venv", "DerivedData", "__pycache__", "Pods",
                 ".next", ".nuxt", ".svelte-kit", ".turbo", ".output",
+                ".dart_tool", ".pytest_cache", ".tox", ".ipynb_checkpoints",
             ]
             var seen = 0
             while let url = enumerator.nextObject() as? URL {

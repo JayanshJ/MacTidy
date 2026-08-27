@@ -95,6 +95,18 @@ public struct CategoryScanner: Sendable {
             items = await xcodeArchives()
         case .mailDownloads:
             items = await mailDownloads()
+        case .mavenTarget:
+            items = buildDirs(named: "target", siblingMarkers: ["pom.xml"], category: .mavenTarget)
+        case .phpVendor:
+            items = buildDirs(named: "vendor", siblingMarkers: ["composer.json"], category: .phpVendor)
+        case .flutterDartTool:
+            items = buildDirs(named: ".dart_tool", siblingMarkers: ["pubspec.yaml"], category: .flutterDartTool)
+        case .unityLibrary:
+            items = unityLibrary()
+        case .androidSystemImages:
+            items = await androidSystemImages()
+        case .staleScreenshots:
+            items = staleScreenshots()
         case .oldInstallers:
             items = oldInstallers()
         case .iosBackups:
@@ -298,15 +310,18 @@ public struct CategoryScanner: Sendable {
     }
 
     /// Python bytecode caches and virtualenvs under the dev roots.
-    /// `__pycache__` is always included (regenerable, always safe). `.venv` is
-    /// included only when a sibling project marker (`pyproject.toml`,
-    /// `requirements.txt`, or `setup.py`) confirms it's a project virtualenv —
-    /// a random `.venv` without one is left alone. Skips `.git`, `node_modules`,
-    /// `target`, `build`, `.build`, `DerivedData` so it never re-walks trees
-    /// other categories already surface.
+    /// `__pycache__`, `.pytest_cache`, `.ipynb_checkpoints` are always included
+    /// (regenerable, always safe). `.tox` is included too (regenerable via
+    /// `tox`, but rebuilding runs the whole matrix — the category is
+    /// suggest-only anyway). `.venv` is included only when a sibling project
+    /// marker (`pyproject.toml`, `requirements.txt`, or `setup.py`) confirms
+    /// it's a project virtualenv — a random `.venv` without one is left alone.
+    /// Skips `.git`, `node_modules`, `target`, `build`, `.build`, `DerivedData`
+    /// so it never re-walks trees other categories already surface.
     private func pythonCaches() -> [ScanItem] {
         let fm = FileManager.default
         let venvMarkers = ["pyproject.toml", "requirements.txt", "setup.py"]
+        let alwaysInclude: Set<String> = ["__pycache__", ".pytest_cache", ".tox", ".ipynb_checkpoints"]
         let skipDirs: Set<String> = [".git", "node_modules", "target", "build", ".build", "DerivedData"]
         var results: [ScanItem] = []
         for root in devRoots {
@@ -332,7 +347,7 @@ public struct CategoryScanner: Sendable {
                     continue
                 }
 
-                if dirName == "__pycache__" {
+                if alwaysInclude.contains(dirName) {
                     results.append(ScanItem(
                         url: url,
                         sizeBytes: DiskScanner.allocatedSize(of: url),
@@ -452,5 +467,113 @@ public struct CategoryScanner: Sendable {
             }
         }
         return found.sorted { $0.sizeBytes > $1.sizeBytes }
+    }
+
+    /// Unity's imported-asset cache: a `Library/` dir under a Unity project,
+    /// gated on a sibling `ProjectSettings/` dir (the reliable Unity-project
+    /// signal — `Assets/` alone is too generic). Suggest-only: rebuilding
+    /// re-imports every asset, which can be slow.
+    private func unityLibrary() -> [ScanItem] {
+        let fm = FileManager.default
+        var results: [ScanItem] = []
+        for root in devRoots {
+            guard let enumerator = fm.enumerator(
+                at: root,
+                includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .contentModificationDateKey],
+                options: [.skipsPackageDescendants],
+                errorHandler: { _, _ in true }
+            ) else { continue }
+            while let url = enumerator.nextObject() as? URL {
+                guard let values = try? url.resourceValues(
+                    forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .contentModificationDateKey]
+                ) else { continue }
+                if values.isSymbolicLink == true {
+                    enumerator.skipDescendants()
+                    continue
+                }
+                guard values.isDirectory == true else { continue }
+                let dirName = url.lastPathComponent
+                if dirName == ".git" || enumerator.level > 12 {
+                    enumerator.skipDescendants()
+                    continue
+                }
+                guard dirName == "Library" else { continue }
+                let parent = url.deletingLastPathComponent()
+                // Gate on a sibling ProjectSettings dir — the reliable marker
+                // that this folder belongs to a Unity project (not a random
+                // folder named "Library").
+                guard fm.fileExists(atPath: parent.appending(path: "ProjectSettings").path) else {
+                    enumerator.skipDescendants()
+                    continue
+                }
+                enumerator.skipDescendants()
+                results.append(ScanItem(
+                    url: url,
+                    sizeBytes: DiskScanner.allocatedSize(of: url),
+                    isDirectory: true,
+                    category: .unityLibrary,
+                    detail: parent.lastPathComponent,
+                    lastModified: values.contentModificationDate
+                ))
+            }
+        }
+        return results.sorted { $0.sizeBytes > $1.sizeBytes }
+    }
+
+    /// Downloaded Android SDK system images:
+    /// `~/Library/Android/sdk/system-images/<abi>/<api>/<variant>`. Surfaced
+    /// at the leaf-variant granularity (the actual reclaimable unit), each is
+    /// needed by a specific AVD so the category is suggest-only.
+    private func androidSystemImages() async -> [ScanItem] {
+        let root = home.appending(path: "Library/Android/sdk/system-images")
+        guard FileManager.default.fileExists(atPath: root.path) else { return [] }
+        // The tree is abi/api/variant — three levels deep. Surface the
+        // variant-level dirs (the leaves a user would delete individually).
+        let fm = FileManager.default
+        var found: [ScanItem] = []
+        guard let abis = try? fm.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: [.isDirectoryKey]) else { return [] }
+        for abi in abis where (try? abi.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+            guard let apis = try? fm.contentsOfDirectory(
+                at: abi, includingPropertiesForKeys: [.isDirectoryKey]) else { continue }
+            for api in apis where (try? api.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+                let items = await DiskScanner.topLevelScan(root: api, category: .androidSystemImages)
+                for item in items where item.isDirectory {
+                    found.append(ScanItem(
+                        url: item.url,
+                        sizeBytes: item.sizeBytes,
+                        isDirectory: true,
+                        category: .androidSystemImages,
+                        detail: "\(abi.lastPathComponent)/\(api.lastPathComponent)/\(item.url.lastPathComponent)",
+                        lastModified: item.lastModified
+                    ))
+                }
+            }
+        }
+        return found.sorted { $0.sizeBytes > $1.sizeBytes }
+    }
+
+    /// Screenshot files on the Desktop older than 30 days. macOS names them
+    /// "Screenshot ..." or "Screen Shot ...". Suggest-only: these are user
+    /// files, not regenerable. Mirrors `oldInstallers`'s age-gated
+    /// `contentsOfDirectory` approach.
+    private func staleScreenshots() -> [ScanItem] {
+        let desktop = home.appending(path: "Desktop")
+        let cutoff = Date.now.addingTimeInterval(-30 * 86400)
+        let keys: Set<URLResourceKey> = [.contentModificationDateKey, .totalFileAllocatedSizeKey, .isRegularFileKey]
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: desktop, includingPropertiesForKeys: Array(keys)
+        ) else { return [] }
+        return entries.compactMap { url in
+            let name = url.lastPathComponent
+            guard name.hasPrefix("Screenshot ") || name.hasPrefix("Screen Shot ") else { return nil }
+            guard let values = try? url.resourceValues(forKeys: keys),
+                  values.isRegularFile == true,
+                  let modified = values.contentModificationDate, modified < cutoff else { return nil }
+            return ScanItem(url: url, sizeBytes: Int64(values.totalFileAllocatedSize ?? 0),
+                            isDirectory: false, category: .staleScreenshots,
+                            lastModified: modified)
+        }
+        .sorted { $0.sizeBytes > $1.sizeBytes }
     }
 }

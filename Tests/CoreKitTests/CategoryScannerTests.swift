@@ -314,6 +314,139 @@ struct CategoryScannerTests {
         #expect(result.items.count == 1)
         #expect(Category.mailDownloads.isPreselectable)
     }
+
+    // MARK: - 1.9 scopes: Maven, PHP, Flutter, Unity, Android images, screenshots, Python extras
+
+    @Test func mavenTargetFindsTargetWithPom() async throws {
+        let fm = FileManager.default
+        let (home, devRoot) = try makeFakeHomeWithDevRoot()
+        defer { try? fm.removeItem(at: home) }
+
+        let project = devRoot.appending(path: "MvnApp")
+        try seed(project.appending(path: "target/classes"))
+        try Data("x".utf8).write(to: project.appending(path: "pom.xml"))
+        // A `target` dir with no sibling pom.xml must NOT be listed.
+        let decoy = devRoot.appending(path: "Decoy")
+        try seed(decoy.appending(path: "target/output"))
+
+        let result = await CategoryScanner(home: home, devRoots: [devRoot]).scan(.mavenTarget)
+        #expect(result.items.count == 1)
+        #expect(result.items.first?.detail == "MvnApp")
+        #expect(Category.mavenTarget.isPreselectable)
+    }
+
+    @Test func phpVendorFindsVendorWithComposer() async throws {
+        let fm = FileManager.default
+        let (home, devRoot) = try makeFakeHomeWithDevRoot()
+        defer { try? fm.removeItem(at: home) }
+
+        let project = devRoot.appending(path: "PhpApp")
+        try seed(project.appending(path: "vendor/laravel"))
+        try Data("x".utf8).write(to: project.appending(path: "composer.json"))
+        let decoy = devRoot.appending(path: "Decoy")
+        try seed(decoy.appending(path: "vendor/generic"))
+
+        let result = await CategoryScanner(home: home, devRoots: [devRoot]).scan(.phpVendor)
+        #expect(result.items.count == 1)
+        #expect(result.items.first?.detail == "PhpApp")
+        #expect(Category.phpVendor.isPreselectable)
+    }
+
+    @Test func flutterDartToolFindsDartToolWithPubspec() async throws {
+        let fm = FileManager.default
+        let (home, devRoot) = try makeFakeHomeWithDevRoot()
+        defer { try? fm.removeItem(at: home) }
+
+        let project = devRoot.appending(path: "FlutterApp")
+        try seed(project.appending(path: ".dart_tool/build"))
+        try Data("x".utf8).write(to: project.appending(path: "pubspec.yaml"))
+        let decoy = devRoot.appending(path: "Decoy")
+        try seed(decoy.appending(path: ".dart_tool/build"))
+
+        let result = await CategoryScanner(home: home, devRoots: [devRoot]).scan(.flutterDartTool)
+        #expect(result.items.count == 1)
+        #expect(result.items.first?.detail == "FlutterApp")
+        #expect(Category.flutterDartTool.isPreselectable)
+    }
+
+    @Test func unityLibraryRequiresProjectSettingsSibling() async throws {
+        let fm = FileManager.default
+        let (home, devRoot) = try makeFakeHomeWithDevRoot()
+        defer { try? fm.removeItem(at: home) }
+
+        // Real Unity project: Library/ + sibling ProjectSettings/.
+        let unity = devRoot.appending(path: "UnityGame")
+        try seed(unity.appending(path: "Library/AssetCache"))
+        try fm.createDirectory(at: unity.appending(path: "ProjectSettings"),
+                               withIntermediateDirectories: true)
+        // A `Library` dir with no sibling ProjectSettings must NOT be listed.
+        let decoy = devRoot.appending(path: "Decoy")
+        try seed(decoy.appending(path: "Library/junk"))
+
+        let result = await CategoryScanner(home: home, devRoots: [devRoot]).scan(.unityLibrary)
+        #expect(result.items.count == 1)
+        #expect(result.items.first?.detail == "UnityGame")
+        #expect(!Category.unityLibrary.isPreselectable)
+    }
+
+    @Test func androidSystemImagesListsVariantLeaves() async throws {
+        let fm = FileManager.default
+        let home = try makeFakeHome()
+        defer { try? fm.removeItem(at: home) }
+
+        // sdk/system-images/<abi>/<api>/<variant>
+        let variant = home.appending(path: "Library/Android/sdk/system-images/arm64-v8a/android-34/google_apis")
+        try seed(variant.appending(path: "system.img"))
+
+        let result = await CategoryScanner(home: home).scan(.androidSystemImages)
+        #expect(result.items.count == 1)
+        #expect(result.items.first?.detail == "arm64-v8a/android-34/google_apis")
+        #expect(!Category.androidSystemImages.isPreselectable)
+    }
+
+    @Test func staleScreenshotsListsOldScreenshotsOnly() async throws {
+        let fm = FileManager.default
+        let home = try makeFakeHome()
+        defer { try? fm.removeItem(at: home) }
+
+        let desktop = home.appending(path: "Desktop")
+        try fm.createDirectory(at: desktop, withIntermediateDirectories: true)
+        // Old screenshot (>30 days) — listed.
+        let old = desktop.appending(path: "Screenshot 2026-01-01 at 12.00.00.png")
+        try Data(count: 4096).write(to: old)
+        try fm.setAttributes([.modificationDate: Date.now.addingTimeInterval(-40 * 86400)], ofItemAtPath: old.path)
+        // Recent screenshot (<30 days) — NOT listed.
+        let recent = desktop.appending(path: "Screen Shot 2026-08-26 at 09.00.00.png")
+        try Data(count: 4096).write(to: recent)
+        // Old non-screenshot — NOT listed.
+        let doc = desktop.appending(path: "notes.txt")
+        try Data(count: 4096).write(to: doc)
+        try fm.setAttributes([.modificationDate: Date.now.addingTimeInterval(-40 * 86400)], ofItemAtPath: doc.path)
+
+        let result = await CategoryScanner(home: home).scan(.staleScreenshots)
+        #expect(result.items.count == 1)
+        #expect(result.items.first?.url.lastPathComponent.hasPrefix("Screenshot") == true)
+        #expect(!Category.staleScreenshots.isPreselectable)
+    }
+
+    @Test func pythonCachesNowIncludesPytestToxIpynbCheckpoints() async throws {
+        let fm = FileManager.default
+        let (home, devRoot) = try makeFakeHomeWithDevRoot()
+        defer { try? fm.removeItem(at: home) }
+
+        let project = devRoot.appending(path: "PyProj")
+        try seed(project.appending(path: "src/__pycache__"))
+        try seed(project.appending(path: ".pytest_cache/v"))
+        try seed(project.appending(path: ".tox/py39"))
+        try seed(project.appending(path: "notebooks/.ipynb_checkpoints"))
+
+        let result = await CategoryScanner(home: home, devRoots: [devRoot]).scan(.pythonCaches)
+        // Four Python cache dirs, no marker needed for these.
+        #expect(result.items.count == 4)
+        #expect(result.items.allSatisfy { $0.category == .pythonCaches })
+        // Still suggest-only because of .venv.
+        #expect(!Category.pythonCaches.isPreselectable)
+    }
 }
 
 /// Time Machine snapshot parsing — `tmutil listlocalsnapshots` output comes
