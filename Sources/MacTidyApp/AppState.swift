@@ -291,6 +291,21 @@ final class AppState {
         return outcome
     }
 
+    /// Lightweight in-place refresh after an uninstall: drops the uninstalled
+    /// app from `flowApps`, prunes its leftover paths from the category scan
+    /// results, and rebuilds the flow queue — all without a phase change or
+    /// full rescan. Keeps the user on the dashboard (and on their current tab)
+    /// instead of bouncing them back through the scanning animation. The app
+    /// bundle itself was just trashed, so it won't reappear on the next real
+    /// scan either; this just makes the UI reflect the change immediately.
+    func refreshAfterUninstall(appID: String) {
+        // Remove the uninstalled app from the flow list.
+        flowApps.removeAll { $0.app.id == appID }
+        // Rebuild the action queue so the app's uninstall card is gone and
+        // the ranking reflects the now-smaller app list.
+        rebuildFlowQueue()
+    }
+
     /// Reset back to the welcome screen (e.g. after finishing).
     func resetFlow() {
         flowPhase = .welcome

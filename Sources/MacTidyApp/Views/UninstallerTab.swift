@@ -58,13 +58,18 @@ struct DashboardUninstaller: View {
         .onChange(of: selectedAppID) { Task { await loadLeftovers() } }
         .sheet(item: $sheetPlan) { plan in
             DeletionConfirmationSheet(title: "Uninstall \(selectedApp?.app.name ?? "app")?",
-                                      plan: plan,
-                                      kind: .uninstall,
-                                      uninstallActions: actions) { _ in
+                                       plan: plan,
+                                       kind: .uninstall,
+                                       uninstallActions: actions) { _ in
+                // Stay on the dashboard: drop the uninstalled app from the
+                // list and clear the detail pane instead of triggering a full
+                // rescan + phase change. The app bundle is already in the
+                // Trash, so a rescan would just re-list every category with
+                // the same data minus one app — wasteful and disorienting.
+                if let id = selectedAppID { state.refreshAfterUninstall(appID: id) }
                 selectedAppID = nil
                 leftovers = []
                 actions = []
-                Task { await state.startFlow() }
             }
         }
     }

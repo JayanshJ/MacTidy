@@ -32,6 +32,7 @@ struct DashboardView: View {
         case docker = "Docker"
         case duplicates = "Duplicates"
         case system = "System"
+        case devTerminal = "Dev Terminal"
         var id: String { rawValue }
         var icon: String {
             switch self {
@@ -43,6 +44,7 @@ struct DashboardView: View {
             case .docker: "cylinder.split.1x2"
             case .duplicates: "doc.on.doc"
             case .system: "internaldrive"
+            case .devTerminal: "terminal"
             }
         }
     }
@@ -50,13 +52,26 @@ struct DashboardView: View {
     var body: some View {
         VStack(spacing: 0) {
             tabBar
-            Divider()
+            // Non-blocking scan progress strip: shows while a background
+            // rescan is running without hiding the current tab. Previously the
+            // whole content was swapped for a "Scanning…" placeholder, which
+            // bounced the user out of whichever tab they were on every time a
+            // deletion triggered a rescan. Now the tab stays put and the
+            // progress bar slides in above the content.
             if state.isScanningCategories {
-                ContentUnavailableView("Scanning…", systemImage: "arrow.clockwise")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                content
+                HStack(spacing: Theme.Spacing.sm) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(state.scanProgress.isEmpty ? "Scanning…" : state.scanProgress)
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Spacer()
+                }
+                .padding(.horizontal, Theme.Spacing.lg)
+                .padding(.vertical, Theme.Spacing.xs)
+                .background(Theme.accent.opacity(0.06))
+                Divider()
             }
+            content
         }
         .sheet(item: $sheetPlan) { plan in
             DeletionConfirmationSheet(
@@ -65,6 +80,11 @@ struct DashboardView: View {
                 kind: sheetPlanKind
             ) { _ in
                 selection.removeAll()
+                // pruneDeleted (inside recordOutcome) already refreshed the
+                // category results immediately, so the grid reflects the
+                // deletion without a rescan. Kick off a background rescan to
+                // recompute accurate sizes, but don't block the UI — the tab
+                // content stays visible throughout.
                 Task { await state.rescanCategories() }
             }
         }
@@ -126,6 +146,7 @@ struct DashboardView: View {
         case .docker: DashboardDocker()
         case .duplicates: DuplicatesView()
         case .system: SystemTab()
+        case .devTerminal: DeveloperTerminalTab()
         }
     }
 
@@ -430,7 +451,7 @@ struct DashboardView: View {
             sheetPlanIsCleanAll ? "Clean all safe items?" : "Trash selected items?"
         case .byApp: "Trash selected items?"
         case .uninstaller: "Uninstall \(state.flowApps.first?.app.name ?? "app")?"
-        case .startup, .docker, .duplicates, .system: "Trash selected items?"
+        case .startup, .docker, .duplicates, .system, .devTerminal: "Trash selected items?"
         }
     }
 

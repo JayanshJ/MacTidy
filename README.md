@@ -12,7 +12,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/macOS-14%2B-000000?logo=apple&logoColor=white" alt="macOS 14+">
   <img src="https://img.shields.io/badge/Swift-SwiftUI%20%2B%20SwiftPM-F05138?logo=swift&logoColor=white" alt="Swift">
-  <img src="https://img.shields.io/badge/tests-36%20passing-30A14E" alt="36 tests passing">
+  <img src="https://img.shields.io/badge/tests-256%20passing-30A14E" alt="256 tests passing">
 </p>
 
 ---
@@ -24,6 +24,63 @@ tool, non-sandboxed, ad-hoc signed.
 Everything destructive flows through one path: a `DeletionPlan` validated by
 a hard `SafePathPolicy` denylist, executed as **move-to-Trash only** (never
 `rm`), with a dry-run mode that's on by default until you switch it off.
+
+## What it does
+
+### Cleanup
+Scans 27 categories of reclaimable disk space — caches, build artifacts, old
+installers, device backups, dev tool caches, and more. Multi-select items,
+review, and trash them. Everything goes to the Trash (never `rm`), so you can
+always undo.
+
+### Uninstaller
+Lists every installed app (non-Apple) with its orphaned data in `~/Library` —
+Application Support, Caches, Preferences, Saved Application State, Containers,
+Logs, Group Containers, and more. Uninstall trashes the app bundle + selected
+leftovers, revokes TCC privacy permissions (`tccutil`), and unregisters from
+LaunchServices (`lsregister`) — all in one confirmed action.
+
+### Startup Items
+Audits login items and launch agents/daemons across all three domains (user,
+system, global). Disable stale ones with an admin prompt; restore them later.
+
+### Duplicates
+Content-hash (SHA-256) duplicate finder with APFS clone awareness. Copies that
+already share storage are excluded from the wasted-space count. **Deduplicate**
+replaces extra copies with APFS clones — every path keeps working, the space
+comes back, and the swapped originals go to the Trash for undo.
+
+### Docker
+Structured Docker scanning — images, containers, Compose projects — with
+heuristic attribution. Remove images, tear down Compose projects, remove
+containers, and prune the BuildKit cache. MacTidy never runs
+`docker system prune` — only targeted per-item removals.
+
+### Developer Terminal
+A terminal-styled tab for dev-environment cleanup:
+
+- **Ports & Processes** — every TCP listening port, colorized by runtime
+  (Node.js, Python, JVM, Ruby, Go, Docker, Database). Each port has a
+  plain-language explanation of what the process is and whether it's safe to
+  kill. Per-port kill (SIGTERM) with confirmation.
+- **Package Manager Caches** — npm, Yarn, pnpm, Homebrew, and Cargo cache
+  sizes with one-click clean actions. Also deletes unavailable iOS Simulator
+  runtimes.
+- **Docker Volumes** — prunes unused Docker volumes.
+
+### System
+Time Machine local snapshot management — list, delete individually, or delete
+all. Runs `tmutil deletelocalsnapshots` directly (irreversible, no Trash).
+
+### AI Advisor (optional)
+Connect an OpenAI-compatible, Anthropic, or local Ollama model for:
+- **Insights** — proactive, context-aware cleanup suggestions
+- **Review with AI** — per-item Safe / Review / Keep verdicts on scan results
+- **Explain** — what a specific file or folder is and whether it's safe to trash
+- **Natural-language cleanup** — "clean up my dev caches" → AI builds a plan
+
+Works identically without AI — falls back to deterministic ranked
+recommendations.
 
 ## Install
 
@@ -84,7 +141,7 @@ Trash remains your undo, alongside the in-app **Recently Trashed** view.
 ## Development
 
 ```sh
-make test   # CoreKit safety/scanner suite — 36 tests, Swift Testing
+make test   # CoreKit safety/scanner suite — 256 tests, Swift Testing
 make clean
 ```
 
@@ -104,88 +161,66 @@ FDA grant and you must re-add the app after each rebuild.
 ```
 Sources/CoreKit/        # no-UI Swift package: scanning + safety, unit-tested
   Safety/               # Trasher, SafePathPolicy, DeletionPlan,
-                        # CloneDeduplicator (build FIRST), TrashLog + Restorer,
-                        # CleanupLog
+                        # CloneDeduplicator, ShellAction + ShellActionExecutor,
+                        # TrashLog + Restorer, CleanupLog,
+                        # DevTerminalActions (kill, cache clean, volume prune)
   Scanning/             # DiskScanner, CategoryScanner, AppUninstaller,
-                        # LaunchItemsAuditor, DuplicateFinder, DockerInfo
+                        # LaunchItemsAuditor, DuplicateFinder, DockerScanner,
+                        # PortScanner, DevToolScanner, ProcessScanner,
+                        # DockerBuilderCache, TimeMachineSnapshots,
+                        # Recommendations, ScanHistory
   FDA/                  # Full Disk Access probe + Settings deep-link
-Sources/MacTidyApp/     # SwiftUI app target (sidebar: Overview · Disk ·
-                        # Uninstaller · Startup Items · Duplicates ·
-                        # Recently Trashed)
-Tests/CoreKitTests/     # Swift Testing suite (36 tests)
+  AI/                   # CleanAdvisor protocol, OpenAI/Anthropic/Ollama adapters
+Sources/MacTidyApp/     # SwiftUI app target
+  Views/                # DashboardView, FlowView, DeveloperTerminalTab,
+                        # UninstallerTab, DockerTab, SystemTab, DuplicatesView,
+                        # SettingsView, TrashView, DiskView, etc.
+Tests/CoreKitTests/     # Swift Testing suite (256 tests)
 Support/Info.plist      # bundle plist used by `make app`
 ```
 
-## Deviations from the original spec (all in the "safer/better" direction)
+## Safety model
 
-1. **`SafePathPolicy` is deny-by-default**, not just a denylist. A candidate
-   must resolve *inside* an allowed root (home, `/Applications`,
-   `/usr/local`, `/opt/homebrew`, or a folder the user explicitly picked).
-   Symlinks are resolved before checking, so a link pointing at `/System`
-   is rejected wherever it sits. Critical dirs (`~`, `~/Library`,
-   `~/Library/Caches` itself, `~/Downloads` itself, …) can contain
-   deletable items but can never be trashed wholesale themselves.
-2. **The FDA probe opens the TCC database** instead of using
-   `isReadableFile` — `access(2)` can return stale answers under TCC;
-   `open(2)` is what TCC actually gates.
-3. **Per-item granularity for DerivedData and iOS DeviceSupport** (the spec
-   named the parent folders): you see and trash per-project / per-OS-version
-   entries instead of all-or-nothing.
-4. **Build-dir detection requires a sibling marker** — `node_modules` needs
-   `package.json`, `target` needs `Cargo.toml` (spec only required the
-   marker for Rust). Both stay suggest-only, showing owning project and
-   last-modified, and are never bulk-preselected.
-5. **Apple apps (`com.apple.*`) are listed but not uninstallable** in the
-   uninstaller; leftover matching by app *name* is exact-directory-name
-   only (substring name matching is how cleaners eat unrelated data).
-   Leftover sweep also covers `~/Library/HTTPStorages` and `~/Library/WebKit`.
-6. **Duplicate finder refuses to trash the last copy** — the trash button
-   disables if every copy in any set is selected.
-6a. **The duplicate finder is clone-aware.** Copies that already share
-   storage (APFS clones, hardlinks — detected via inode + `F_LOG2PHYS`
-   first-extent probing) are badged and *excluded* from the wasted-space
-   number, because reporting them as reclaimable would be a lie. And
-   instead of deleting copies, **Deduplicate** replaces extra copies with
-   APFS clones of the kept file (`clonefile` + atomic `RENAME_SWAP`): every
-   path keeps working with identical content, the space comes back, and the
-   replaced originals' bytes still go to the Trash for undo.
-6b. **Extra reclaim categories**: local iOS device backups (with device
-   name and last-backup date read from each backup's Info.plist,
-   suggest-only) and developer tool caches outside `~/Library/Caches`
-   (npm, pnpm store, Cargo registry, Gradle). Old installers now include
-   `.xip`/`.iso`.
-7. **Swift Testing instead of XCTest** — XCTest isn't available with bare
-   Command Line Tools; Swift Testing ships in the toolchain.
-8. Tests that exercise real trashing **clean up their Trash entries**
-   afterwards, so `make test` doesn't litter.
-9. **Partial-plan execution.** A policy violation skips only the offending
-   item (reported with the reason) instead of aborting the whole plan —
-   fail-closed *per item*. One bad path in a 200-item cleanup no longer
-   rejects all 200. `SafePathPolicy.classify` returns a `Result` per path;
-   the old throwing `validate` is kept for callers that want strict
-   all-or-nothing.
-10. **Visible undo.** Everything MacTidy trashes is logged
-    (`~/Library/Application Support/MacTidy/trash-log.json`) and shown in a
-    **Recently Trashed** view with one-click **Restore** (moves the item back
-    to its original path; collision-suffixed so nothing is ever overwritten)
-    plus a post-cleanup **Undo** toast. Restoring an item that's already been
-    emptied from the Trash fails gracefully with a clear message.
-11. **Reclaim-over-time history.** Every real (non-dry-run) cleanup is
-    recorded and summed on the Overview — "freed X across N cleanups" — the
-    honest, auditable counterpart to fake "speed boost" numbers.
-12. **More categories**: simulator runtimes, Application Support hoarders,
-    large files (>100 MB), and dev caches extended to Go / Maven / Yarn /
-    Terraform. Categories are kept non-overlapping so the reclaim total
-    never double-counts (e.g. `bigFiles` skips `node_modules`/`target`/`.git`;
-    `devCaches` only covers caches outside `~/Library/Caches`).
-13. **Disk map.** The Disk explorer has a List/Map toggle; Map renders a
-    treemap of the current directory's children, area proportional to
-    allocated size, click-to-drill-in. Read-only.
-14. **Cancellable scans with progress**, and the last scan is **persisted**
-    across relaunches so the app doesn't start blank and re-scan everything.
+Every destructive action flows through one of two pipelines:
 
-## Non-goals (kept from the spec)
+**Filesystem (Trash-undoable):**
+```
+ScanItem(s) → DeletionPlan → SafePathPolicy.classify (per item) → Trasher.trash (move-to-Trash only)
+```
 
-No RAM purging, no process killing, no timer-based "optimization",
-no registry-style cleaning. Docker usage is displayed read-only with the
-`docker system prune` command to copy — MacTidy never runs it.
+**Shell actions (irreversible, confirmed):**
+```
+ShellAction → ShellActionExecutor (per-item fail-closed) → CleanupLog
+```
+
+- `SafePathPolicy` is **deny-by-default**. A candidate must resolve inside an
+  allowed root, symlink-resolved before checking. A hard system denylist
+  (`/System`, `/bin`, `/usr`, etc.) that nothing overrides.
+- `Trasher` only ever calls `FileManager.trashItem` (with an
+  `NSWorkspace.recycle` fallback for root-owned bundles). Never `removeItem`,
+  never `rm`.
+- `ShellAction`s (Docker, Time Machine, dev tool cleanup) show their literal
+  command in the confirmation sheet. Per-item fail-closed: one failure doesn't
+  abort the batch.
+- Everything trashed is logged to `TrashLog` (undoable) and `CleanupLog`
+  (reclaim-over-time history).
+
+## Design principles
+
+1. **Honesty over theater.** No fake "speed boosts", no RAM purging, no
+   inflated reclaim numbers. Categories don't overlap (no double-counting).
+   Clone-aware duplicates don't count shared storage as wasted.
+2. **Trash, never delete.** Every filesystem deletion goes to the Trash. The
+   Trash is the undo button. Shell actions are the exception (Docker, tmutil)
+   and are clearly marked as irreversible.
+3. **Deny-by-default safety.** The path policy rejects anything it doesn't
+   explicitly recognize as safe. One bad path skips itself, not the whole plan.
+4. **Works without AI.** Every AI feature has a deterministic fallback. The
+   app is fully functional with no provider configured.
+5. **No sandbox, no helper, no notarization.** Non-sandboxed by design (FDA
+   scanning, `trashItem`, `clonefile` all require it). Ad-hoc/self-signed.
+   Admin commands use `osascript` prompts, not a privileged helper.
+
+## License
+
+Personal-use. See the repository for details.

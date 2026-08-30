@@ -101,13 +101,19 @@ struct DeletionConfirmationSheet: View {
     }
 
     private func execute() {
-        // Non-throwing: policy violations come back as per-item skipped
-        // records in the outcome rather than aborting the whole plan.
-        let result = state.execute(plan, extraAllowedRoots: extraAllowedRoots, kind: kind)
-        // Run the non-file uninstall actions (TCC reset, lsregister).
+        // Run the non-file uninstall actions (TCC reset, lsregister) BEFORE
+        // trashing the app bundle. lsregister needs to scan the bundle at its
+        // original path to unregister its file-type/UTI/Spotlight handlers —
+        // if the bundle is trashed first, lsregister fails with
+        // "failed to scan … -10814 from spotlight" because the path is gone.
+        // TCC reset keys off the bundle id (not the path) so order doesn't
+        // matter for it, but running both before the trash is cleanest.
         if !uninstallActions.isEmpty {
             actionOutcome = AppUninstaller.performActions(uninstallActions)
         }
+        // Non-throwing: policy violations come back as per-item skipped
+        // records in the outcome rather than aborting the whole plan.
+        let result = state.execute(plan, extraAllowedRoots: extraAllowedRoots, kind: kind)
         outcome = result
     }
 
