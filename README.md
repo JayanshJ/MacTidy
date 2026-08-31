@@ -93,23 +93,28 @@ release, so you build it yourself. It takes about a minute.
 - Xcode Command Line Tools — full Xcode is *not* required. If you don't have
   them: `xcode-select --install`
 
-**Steps**
+### One-command install (recommended)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/JayanshJ/MacTidy/main/install.sh | bash
+```
+
+This script clones the repo, creates a self-signed signing certificate (so Full
+Disk Access survives rebuilds), builds the release, installs to `/Applications`,
+strips the quarantine flag, and opens the Full Disk Access settings pane so you
+only need to visit System Settings **once** — just click **+** and add MacTidy.
+
+### Manual install
 
 ```sh
 git clone https://github.com/JayanshJ/MacTidy.git
 cd MacTidy
 make cert   # one-time: self-signed cert, so Full Disk Access survives rebuilds
 make app    # release build → dist/MacTidy.app
-```
-
-Then move `dist/MacTidy.app` to `/Applications` (optional, but do it *before*
-granting Full Disk Access below — the grant is tied to the app's location):
-
-```sh
 mv dist/MacTidy.app /Applications/
+xattr -dr com.apple.quarantine /Applications/MacTidy.app  # skip Gatekeeper dialog
+open /Applications/MacTidy.app
 ```
-
-Use `make run` instead of `make app` to build and launch in one step.
 
 **Grant Full Disk Access (required)**
 
