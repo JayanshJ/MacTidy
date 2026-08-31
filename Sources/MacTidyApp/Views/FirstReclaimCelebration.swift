@@ -43,9 +43,11 @@ struct FirstReclaimCelebration: View {
 
     private func dismiss() {
         withAnimation(.snappy) { dismissed = true }
-        // Clear the in-memory flag so a same-session second cleanup doesn't
-        // re-fire it. The persisted value stays as the "already celebrated"
-        // marker across relaunches.
+        // Clear BOTH the in-memory flag and the persisted value. If only the
+        // in-memory flag is cleared, the next launch re-reads the persisted
+        // milestone from UserDefaults and re-shows the celebration — the
+        // "pop-up on every launch" bug.
         state.firstReclaimMilestone = nil
+        UserDefaults.standard.removeObject(forKey: "MacTidy.firstReclaimMilestone")
     }
 }

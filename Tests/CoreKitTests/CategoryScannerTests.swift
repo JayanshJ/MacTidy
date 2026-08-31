@@ -447,6 +447,172 @@ struct CategoryScannerTests {
         // Still suggest-only because of .venv.
         #expect(!Category.pythonCaches.isPreselectable)
     }
+
+    // MARK: - 1.11 new devCaches entries (CocoaPods, Ollama, Colima, VS Code, etc.)
+
+    @Test func devCachesFindsCocoaPodsAndOllama() async throws {
+        let fm = FileManager.default
+        let home = try makeFakeHome()
+        defer { try? fm.removeItem(at: home) }
+
+        try fm.createDirectory(at: home.appending(path: ".cocoapods/repos"),
+                               withIntermediateDirectories: true)
+        try Data(count: 4096).write(to: home.appending(path: ".cocoapods/repos/specs.db"))
+        try fm.createDirectory(at: home.appending(path: ".ollama/models/manifests"),
+                               withIntermediateDirectories: true)
+        try Data(count: 50_000).write(to: home.appending(path: ".ollama/models/manifests/llama3"))
+
+        let result = await CategoryScanner(home: home).scan(.devCaches)
+        let labels = Set(result.items.compactMap(\.detail))
+        #expect(labels.contains("CocoaPods cache"))
+        #expect(labels.contains("Ollama models"))
+    }
+
+    @Test func devCachesFindsColimaAndLima() async throws {
+        let fm = FileManager.default
+        let home = try makeFakeHome()
+        defer { try? fm.removeItem(at: home) }
+
+        try fm.createDirectory(at: home.appending(path: ".colima/default"),
+                               withIntermediateDirectories: true)
+        try Data(count: 100_000).write(to: home.appending(path: ".colima/default/colima.img"))
+        try fm.createDirectory(at: home.appending(path: ".lima/default"),
+                               withIntermediateDirectories: true)
+        try Data(count: 80_000).write(to: home.appending(path: ".lima/default/disk.img"))
+
+        let result = await CategoryScanner(home: home).scan(.devCaches)
+        let labels = Set(result.items.compactMap(\.detail))
+        #expect(labels.contains("Colima VM disk"))
+        #expect(labels.contains("Lima VM disk"))
+    }
+
+    @Test func devCachesFindsVSCodeExtensions() async throws {
+        let fm = FileManager.default
+        let home = try makeFakeHome()
+        defer { try? fm.removeItem(at: home) }
+
+        try fm.createDirectory(at: home.appending(path: ".vscode/extensions/ms-python.python"),
+                               withIntermediateDirectories: true)
+        try Data(count: 40_000).write(to: home.appending(path: ".vscode/extensions/ms-python.python/extension.vsixmanifest"))
+
+        let result = await CategoryScanner(home: home).scan(.devCaches)
+        let labels = Set(result.items.compactMap(\.detail))
+        #expect(labels.contains("VS Code extensions"))
+    }
+
+    // MARK: - 1.11 new categories (simulatorDevices, systemLogs, crashReports, etc.)
+
+    @Test func simulatorDevicesListsPerDeviceData() async throws {
+        let fm = FileManager.default
+        let home = try makeFakeHome()
+        defer { try? fm.removeItem(at: home) }
+
+        let devices = home.appending(path: "Library/Developer/CoreSimulator/Devices")
+        let device = devices.appending(path: "00008101-000A1B2C3D4E5F/data")
+        try seed(device.appending(path: "Containers"))
+
+        let result = await CategoryScanner(home: home).scan(.simulatorDevices)
+        #expect(result.items.count == 1)
+        #expect(result.totalBytes > 0)
+        #expect(!Category.simulatorDevices.isPreselectable)
+    }
+
+    @Test func systemLogsListsPerAppLogFolders() async throws {
+        let fm = FileManager.default
+        let home = try makeFakeHome()
+        defer { try? fm.removeItem(at: home) }
+
+        let logs = home.appending(path: "Library/Logs")
+        try seed(logs.appending(path: "com.example.app"))
+        try seed(logs.appending(path: "AnotherApp"))
+
+        let result = await CategoryScanner(home: home).scan(.systemLogs)
+        #expect(result.items.count == 2)
+        #expect(result.totalBytes > 0)
+        #expect(!Category.systemLogs.isPreselectable)
+    }
+
+    @Test func crashReportsListsCrashLogs() async throws {
+        let fm = FileManager.default
+        let home = try makeFakeHome()
+        defer { try? fm.removeItem(at: home) }
+
+        let diag = home.appending(path: "Library/Logs/DiagnosticReports")
+        try fm.createDirectory(at: diag, withIntermediateDirectories: true)
+        try Data(count: 8192).write(to: diag.appending(path: "MyApp-2026-08-30-000000.ips"))
+
+        let result = await CategoryScanner(home: home).scan(.crashReports)
+        #expect(result.items.count == 1)
+        #expect(result.totalBytes > 0)
+        #expect(Category.crashReports.isPreselectable)
+    }
+
+    @Test func savedAppStateListsPerAppStateFiles() async throws {
+        let fm = FileManager.default
+        let home = try makeFakeHome()
+        defer { try? fm.removeItem(at: home) }
+
+        let state = home.appending(path: "Library/Saved Application State")
+        try fm.createDirectory(at: state, withIntermediateDirectories: true)
+        try Data(count: 4096).write(to: state.appending(path: "com.example.app.savedState"))
+
+        let result = await CategoryScanner(home: home).scan(.savedAppState)
+        #expect(result.items.count == 1)
+        #expect(result.totalBytes > 0)
+        #expect(Category.savedAppState.isPreselectable)
+    }
+
+    @Test func httpStoragesListsPerAppHTTPStorage() async throws {
+        let fm = FileManager.default
+        let home = try makeFakeHome()
+        defer { try? fm.removeItem(at: home) }
+
+        let http = home.appending(path: "Library/HTTPStorages")
+        try seed(http.appending(path: "com.example.app"))
+        try fm.createDirectory(at: http, withIntermediateDirectories: true)
+
+        let result = await CategoryScanner(home: home).scan(.httpStorages)
+        #expect(result.items.count == 1)
+        #expect(result.totalBytes > 0)
+        #expect(Category.httpStorages.isPreselectable)
+    }
+
+    @Test func groupContainersListsSharedAppData() async throws {
+        let fm = FileManager.default
+        let home = try makeFakeHome()
+        defer { try? fm.removeItem(at: home) }
+
+        let groups = home.appending(path: "Library/Group Containers")
+        try seed(groups.appending(path: "group.com.example.shared"))
+        try fm.createDirectory(at: groups, withIntermediateDirectories: true)
+
+        let result = await CategoryScanner(home: home).scan(.groupContainers)
+        #expect(result.items.count == 1)
+        #expect(result.totalBytes > 0)
+        #expect(!Category.groupContainers.isPreselectable)
+    }
+
+    @Test func devCachesFindsFastlaneAndAndroidAndXcodeUserData() async throws {
+        let fm = FileManager.default
+        let home = try makeFakeHome()
+        defer { try? fm.removeItem(at: home) }
+
+        try fm.createDirectory(at: home.appending(path: ".fastlane/caches"),
+                               withIntermediateDirectories: true)
+        try Data(count: 4096).write(to: home.appending(path: ".fastlane/caches/metadata.json"))
+        try fm.createDirectory(at: home.appending(path: ".android/avd/Pixel_6.avd"),
+                               withIntermediateDirectories: true)
+        try Data(count: 40_000).write(to: home.appending(path: ".android/avd/Pixel_6.avd/data.img"))
+        try fm.createDirectory(at: home.appending(path: "Library/Developer/Xcode/UserData/Breakpoints"),
+                               withIntermediateDirectories: true)
+        try Data(count: 2048).write(to: home.appending(path: "Library/Developer/Xcode/UserData/Breakpoints/bplist.plist"))
+
+        let result = await CategoryScanner(home: home).scan(.devCaches)
+        let labels = Set(result.items.compactMap(\.detail))
+        #expect(labels.contains("Fastlane cache"))
+        #expect(labels.contains("Android AVD data"))
+        #expect(labels.contains("Xcode UserData"))
+    }
 }
 
 /// Time Machine snapshot parsing — `tmutil listlocalsnapshots` output comes

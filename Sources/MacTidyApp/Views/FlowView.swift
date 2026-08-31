@@ -97,16 +97,22 @@ struct DiskSheetView: View {
 struct UndoToast: View {
     @Environment(AppState.self) private var state
     @State private var isRestoring = false
+    @State private var restoreErrors: [String] = []
 
     var body: some View {
         if let outcome = state.lastUndoableOutcome {
             HStack(spacing: Theme.Spacing.md) {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(Theme.Status.good)
+                Image(systemName: restoreErrors.isEmpty ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(restoreErrors.isEmpty ? Theme.Status.good : .orange)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(outcome.label).font(.callout.bold())
-                    Text("Undo moves it back from the Trash.")
-                        .font(.caption).foregroundStyle(.secondary)
+                    if restoreErrors.isEmpty {
+                        Text("Undo moves it back from the Trash.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        Text("Some items couldn't be restored: \(restoreErrors.joined(separator: ", "))")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
                 }
                 Spacer()
                 Button {
@@ -139,11 +145,20 @@ struct UndoToast: View {
 
     private func restoreAll(_ records: [TrashRecord]) {
         isRestoring = true
+        restoreErrors = []
         Task {
-            for record in records { _ = try? state.restore(record) }
+            var errors: [String] = []
+            for record in records {
+                do {
+                    _ = try state.restore(record)
+                } catch {
+                    errors.append(record.original.lastPathComponent)
+                }
+            }
             await MainActor.run {
                 isRestoring = false
-                state.clearUndoToast()
+                restoreErrors = errors
+                if errors.isEmpty { state.clearUndoToast() }
             }
         }
     }

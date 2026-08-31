@@ -72,6 +72,8 @@ public enum Recommendations {
         case .appSupport: nil   // real app state — never recommended, only listed
         case .staleScreenshots: .bigFile   // user files — ranked like large files, not as caches
         case .bigFiles: .bigFile
+        case .simulatorDevices, .systemLogs, .groupContainers: nil  // suggest-only, never auto-recommended
+        case .crashReports, .savedAppState, .httpStorages: .safeCache  // regenerable — safe to trash
         }
     }
 

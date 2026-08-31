@@ -17,11 +17,18 @@ struct StorageByAppTab: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            appList.frame(minWidth: 300, idealWidth: 340)
+            appList.frame(minWidth: 300, idealWidth: 340, maxHeight: .infinity)
             Divider()
             detail.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .task { if attributions.isEmpty { await load() } }
+        .task {
+            // Use preloaded data from AppState if available.
+            if !state.appAttributions.isEmpty {
+                attributions = state.appAttributions
+            } else if attributions.isEmpty {
+                await load()
+            }
+        }
         .sheet(item: $sheetPlan) { plan in
             DeletionConfirmationSheet(
                 title: "Trash caches for \(selected?.app.name ?? "app")?",
@@ -42,9 +49,24 @@ struct StorageByAppTab: View {
                     else { Image(systemName: "arrow.clockwise") }
                 }
                 .buttonStyle(.borderless)
+                .disabled(isLoading)
             }
             .padding(.horizontal, Theme.Spacing.md).padding(.vertical, Theme.Spacing.sm)
             Divider()
+            // Non-blocking loading strip — keeps the existing list visible
+            // while a refresh is running instead of collapsing it into an
+            // empty state (the "everything shrinks downward" bug).
+            if isLoading && !attributions.isEmpty {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.mini)
+                    Text("Refreshing…")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, Theme.Spacing.md).padding(.vertical, 4)
+                .background(Theme.accent.opacity(0.06))
+                Divider()
+            }
             if attributions.isEmpty {
                 ContentUnavailableView(
                     isLoading ? "Scanning…" : "No app data found",
@@ -53,6 +75,7 @@ struct StorageByAppTab: View {
                         ? "Matching ~/Library folders to your apps."
                         : "No app-attributable library data. Run a rescan from the Cleanup tab first.")
                 )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(attributions, id: \.app.id, selection: $selectedAppID) { entry in
                     HStack {
@@ -65,6 +88,7 @@ struct StorageByAppTab: View {
                 }
             }
         }
+        .frame(maxHeight: .infinity)
     }
 
     @ViewBuilder

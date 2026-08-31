@@ -29,7 +29,8 @@ struct DockerActionsTests {
             image(id: "sha256:1", repo: "web", tag: "latest", bytes: 100)
         ], running: true)
         let action = DockerComposeDownAction(project: project, removeVolumes: false)
-        #expect(action.commandSummary == "docker compose -p myapp down --rmi all")
+        // compose down + explicit rmi per image (in case containers are gone).
+        #expect(action.commandSummary == "docker compose -p myapp down --rmi all && docker rmi -f sha256:1")
         #expect(action.estimatedBytes == 100)
         #expect(action.displayName == "Compose project myapp")
     }
@@ -37,6 +38,17 @@ struct DockerActionsTests {
     @Test func composeDownWithVolumesAppendsFlag() {
         let project = DockerComposeProject(name: "myapp", images: [], running: false)
         let action = DockerComposeDownAction(project: project, removeVolumes: true)
+        // No images → no rmi suffix, just compose down with --volumes.
         #expect(action.commandSummary == "docker compose -p myapp down --rmi all --volumes")
+    }
+
+    @Test func composeDownWithMultipleImagesRemovesEach() {
+        let project = DockerComposeProject(name: "webapp", images: [
+            image(id: "sha256:1", repo: "web", tag: "latest", bytes: 100),
+            image(id: "sha256:2", repo: "db", tag: "15", bytes: 200),
+        ], running: false)
+        let action = DockerComposeDownAction(project: project, removeVolumes: false)
+        #expect(action.commandSummary == "docker compose -p webapp down --rmi all && docker rmi -f sha256:1 && docker rmi -f sha256:2")
+        #expect(action.estimatedBytes == 300)
     }
 }

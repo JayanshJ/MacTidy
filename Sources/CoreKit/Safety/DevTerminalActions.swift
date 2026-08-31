@@ -181,3 +181,28 @@ public struct SimctlDeleteUnavailableAction: ShellAction {
         return Shell.run(xcrun, ["simctl", "delete", "unavailable"])
     }
 }
+
+/// Runs `npm prune --prefix <dir>` — removes orphaned packages (declared in
+/// package.json but no longer installed) from a project's node_modules while
+/// keeping the dependency tree intact. Safe; the project keeps working.
+/// Reversible via `npm install`.
+public struct NpmPruneAction: ShellAction {
+    public let id = UUID()
+    public let projectDir: URL
+    public let orphanedCount: Int
+    public var displayName: String { "npm prune (\(projectDir.lastPathComponent))" }
+    public var commandSummary: String { "npm prune --prefix \(projectDir.path)" }
+    public var reversible: Bool { false }
+    public var estimatedBytes: Int64 { 0 }
+
+    public init(projectDir: URL, orphanedCount: Int = 0) {
+        self.projectDir = projectDir
+        self.orphanedCount = orphanedCount
+    }
+
+    public func run() -> Shell.Output? {
+        let npm = Shell.find("npm") ?? "/usr/local/bin/npm"
+        guard FileManager.default.isExecutableFile(atPath: npm) else { return nil }
+        return Shell.run(npm, ["prune", "--prefix", projectDir.path])
+    }
+}

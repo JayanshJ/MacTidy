@@ -14,17 +14,22 @@ public struct RunningProcess: Identifiable, Sendable, Hashable {
     /// CPU percent (0–100 * one core), averaged; 0 when idle.
     public let cpuPercent: Double
     /// Seconds since the process last became frontmost / was used, when
-    /// available (0 means unknown or active). Drives "idle" classification.
+    /// available (0 means unknown or active). Kept for future frontmost-
+    /// tracking; currently unused by `isSafeToQuit` which gates on CPU.
     public let idleSeconds: Double
 
     public var id: Int32 { pid }
 
     /// Whether the process is safe to suggest quitting: a user app (has a
-    /// bundle path), not in the system denylist, and currently idle.
+    /// bundle path), not in the system denylist, and currently CPU-quiet
+    /// (below the idle CPU threshold). We use CPU-quietness as the idle
+    /// proxy because frontmost-tracking (`idleSeconds`) is not yet wired up
+    /// — it's always 0, so the old `idleSeconds >= threshold` check never
+    /// fired. A process under 1% CPU is almost certainly not actively in use.
     public var isSafeToQuit: Bool {
         appBundlePath != nil
             && !ProcessDenylist.isDenied(name)
-            && idleSeconds >= ProcessScanner.idleThresholdSeconds
+            && cpuPercent < ProcessScanner.idleCpuThreshold
     }
 
     public var isSystemEssential: Bool {
@@ -60,9 +65,15 @@ public enum ProcessDenylist {
 /// gracefully: a `ps` failure yields an empty list, never a crash.
 public enum ProcessScanner {
     /// A process is considered "idle" if it hasn't been frontmost for this
-    /// long. Used to decide whether quitting it is likely safe (you weren't
-    /// using it) vs disruptive (you're actively in it).
+    /// long. Currently unused by `isSafeToQuit` (which gates on CPU), but
+    /// kept for future frontmost-tracking implementation.
     public static let idleThresholdSeconds: Double = 300
+
+    /// A process is considered CPU-quiet (and thus a candidate for "idle")
+    /// if its CPU usage is below this percentage. 1% is a conservative bar —
+    /// it catches background helpers and parked apps while excluding
+    /// actively-running dev servers, builds, and media playback.
+    public static let idleCpuThreshold: Double = 1.0
 
     public struct MemorySummary: Sendable {
         public let totalBytes: Int64
@@ -103,7 +114,7 @@ public enum ProcessScanner {
     /// Turns a `ps` comm path into (display name, .app bundle path). If the
     /// executable is inside `Foo.app/Contents/...`, attributes to Foo.app so
     /// helper/renderer processes roll up to their parent app.
-    private static func attribute(comm: String) -> (String, String?) {
+    static func attribute(comm: String) -> (name: String, bundlePath: String?) {
         var url = URL(fileURLWithPath: comm)
         for _ in 0..<8 {
             if url.pathExtension == "app" {

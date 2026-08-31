@@ -100,6 +100,22 @@ final class AppState {
     /// until the queue is rebuilt.
     private var flowSkipped: Set<String> = []
 
+    // MARK: - Preloaded tab data (persists across tab switches so tabs don't
+    // reload every time you switch back to them)
+
+    /// Docker state — preloaded in `startFlow` so the Docker tab doesn't
+    /// reload on every visit. Nil when Docker isn't available.
+    var dockerState: DockerState?
+    var dockerAvailability: DockerScanner.Availability?
+    var dockerDfTable: String?
+    var dockerBuilderCacheBytes: Int64?
+    /// Dev Terminal data — preloaded in `startFlow`.
+    var devPorts: [PortEntry] = []
+    var devTools: [DevToolInfo] = []
+    var devSnapshots: [TMSnapshot] = []
+    /// Storage-by-App attributions — preloaded in `startFlow`.
+    var appAttributions: [AppFootprint] = []
+
     /// The scan task, kept so the UI can cancel an in-flight scan.
     private var scanTask: Task<Void, Never>?
 
@@ -220,13 +236,22 @@ final class AppState {
     func startFlow() async {
         flowSkipped.removeAll()
         flowPhase = .scanning
-        await rescanCategories()
-        // Scan apps and launch items in parallel so the dashboard's
-        // Uninstaller / Startup tabs have data ready immediately.
+        // Run all scans concurrently — category scan, app/launch audit, and
+        // all tab-specific preloads (Docker, Dev Terminal, Storage by App).
+        // This way every tab has data ready the moment the dashboard appears,
+        // with no reload on tab switch.
+        async let categories = rescanCategories()
         async let apps = scanUninstallCandidates()
         async let launch = Task.detached { LaunchItemsAuditor.audit() }.value
+        async let docker = preloadDocker()
+        async let dev = preloadDevTerminal()
+        async let attributions = preloadAppAttributions()
+        _ = await categories
         flowApps = await apps
         flowLaunchItems = await launch
+        _ = await docker
+        _ = await dev
+        appAttributions = await attributions
         rebuildFlowQueue()
         flowIndex = 0
         if flowQueue.isEmpty {
@@ -236,17 +261,54 @@ final class AppState {
         }
     }
 
+    // MARK: - Tab preloads
+
+    /// Preloads Docker state so the Docker tab doesn't reload on every visit.
+    private func preloadDocker() async {
+        let avail = DockerScanner.availability()
+        dockerAvailability = avail
+        guard avail == .available else { dockerState = nil; return }
+        dockerState = DockerScanner.scan()
+        dockerDfTable = DockerScanner.systemDFTable()
+        dockerBuilderCacheBytes = DockerBuilderCache.reclaimableBytes()
+    }
+
+    /// Preloads Dev Terminal data (ports, dev tool caches, TM snapshots).
+    private func preloadDevTerminal() async {
+        async let ports = Task.detached { PortScanner.scan() }.value
+        async let tools = DevToolScanner.scan()
+        async let snaps = Task.detached { TimeMachineScanner.listSnapshots() }.value
+        devPorts = await ports
+        devTools = await tools
+        devSnapshots = await snaps
+    }
+
+    /// Preloads Storage-by-App attributions.
+    private func preloadAppAttributions() async -> [AppFootprint] {
+        let apps = await AppUninstaller.installedApps()
+        return await AppStorageAttribution.scan(apps: apps)
+    }
+
     /// Scans installed apps and their leftovers, keeping only non-Apple apps
     /// with meaningful size, for the uninstall action cards.
     private func scanUninstallCandidates() async -> [(app: InstalledApp, leftovers: [ScanItem])] {
         let apps = await AppUninstaller.installedApps()
-        var result: [(InstalledApp, [ScanItem])] = []
-        for app in apps where !app.isApple && app.sizeBytes > 50 * 1024 * 1024 {
-            let leftovers = await AppUninstaller.leftovers(for: app)
-            result.append((app, leftovers))
+        let candidates = apps.filter { !$0.isApple && $0.sizeBytes > 50 * 1024 * 1024 }
+        // Scan all apps' leftovers in parallel — each app's candidates are
+        // independent, and the old sequential loop was a serial bottleneck
+        // (30 apps × ~15 path stats each = 450 serial calls).
+        let results = await withTaskGroup(of: (InstalledApp, [ScanItem]).self) { group in
+            for app in candidates {
+                group.addTask {
+                    let leftovers = await AppUninstaller.leftovers(for: app)
+                    return (app, leftovers)
+                }
+            }
+            var combined: [(InstalledApp, [ScanItem])] = []
+            for await entry in group { combined.append(entry) }
+            return combined
         }
-        // Largest first.
-        return result.sorted { $0.0.sizeBytes > $1.0.sizeBytes }
+        return results.sorted { $0.0.sizeBytes > $1.0.sizeBytes }
     }
 
     /// Rebuilds the ranked action queue from the current scan results plus
@@ -284,9 +346,9 @@ final class AppState {
 
     /// Applies the current trash action via the destructive gateway.
     @discardableResult
-    func flowApplyTrash(_ items: [ScanItem]) -> DeletionOutcome {
+    func flowApplyTrash(_ items: [ScanItem]) async -> DeletionOutcome {
         let plan = DeletionPlan(items: items)
-        let outcome = execute(plan, kind: .deletion)
+        let outcome = await execute(plan, kind: .deletion)
         flowLastOutcome = outcome
         return outcome
     }
@@ -350,16 +412,21 @@ final class AppState {
 
     /// The single gateway the UI uses for every deletion. Non-throwing: policy
     /// violations are reported per-item as skipped (see DeletionExecutor).
+    /// Runs the trashing loop on a background thread so the main thread stays
+    /// responsive during large cleanups — `trashItem` and `NSLog` per item are
+    /// blocking, and doing that on `@MainActor` freezes the UI.
     @discardableResult
     func execute(
         _ plan: DeletionPlan,
         extraAllowedRoots: [URL] = [],
         kind: TrashRecord.Kind = .deletion
-    ) -> DeletionOutcome {
+    ) async -> DeletionOutcome {
         let executor = DeletionExecutor(
             policy: SafePathPolicy(extraAllowedRoots: extraAllowedRoots)
         )
-        let outcome = executor.execute(plan)
+        let outcome = await Task.detached(priority: .userInitiated) {
+            executor.execute(plan)
+        }.value
         recordOutcome(outcome, plan: plan, kind: kind)
         return outcome
     }
@@ -418,15 +485,21 @@ final class AppState {
             jobs: jobs,
             now: now,
             scan: { categories in
-                // Scan only the requested categories (one per category in the
-                // union of due jobs) — cheaper than a full scanAll when the
-                // schedule touches just a few categories.
-                var results: [CategoryResult] = []
-                for category in Category.allCases where categories.contains(category) {
-                    if Task.isCancelled { break }
-                    results.append(await scanner.scan(category))
+                // Scan the requested categories in parallel — the old code
+                // scanned them sequentially, which was slow for multi-category
+                // scheduled jobs.
+                await withTaskGroup(of: CategoryResult.self) { group in
+                    for category in Category.allCases where categories.contains(category) {
+                        if Task.isCancelled { break }
+                        group.addTask {
+                            if Task.isCancelled { return CategoryResult(category: category, items: []) }
+                            return await scanner.scan(category)
+                        }
+                    }
+                    var results: [CategoryResult] = []
+                    for await result in group { results.append(result) }
+                    return results
                 }
-                return results
             },
             executor: executor
         )
@@ -516,24 +589,23 @@ final class AppState {
     /// is configured or the call fails — so the Insights panel is useful even
     /// without AI. Never throws.
     func generateInsights() async -> [Insight] {
-        let processes = ProcessScanner.scan()
-        let memory = ProcessScanner.memorySummary()
-        // Sync the AI context to the live filesystem: drop any scanned item
-        // whose file no longer exists (trashed via the app, via Finder, or
-        // the Trash was emptied) so the AI can't recommend deleting a file
-        // that's already gone. `pruneDeleted` handles app-trashed items at
-        // trash time; this catches the rest before the AI sees them.
+        // Run the snapshot-gathering work off the main thread — ProcessScanner
+        // stats ~500 processes, DiskPressure reads sysctl, and LaunchItemsAuditor
+        // walks plist dirs. The old code ran all of this on @MainActor.
         let freshCategories = prunedForMissingFiles(categoryResults)
-        // Enrich the snapshot with boot-volume pressure + login items so the
-        // advisor (and deterministic fallback) can surface "disk almost full"
-        // and "heavy startup" insights. Both are read-only and nil-safe.
-        let snapshot = SystemSnapshot(
-            categories: freshCategories,
-            memory: memory,
-            processes: processes,
-            diskPressure: DiskPressure.current(),
-            launchItems: LaunchItemsAuditor.audit()
-        )
+        let snapshot = await Task.detached {
+            let processes = await Task.detached { ProcessScanner.scan() }.value
+            let memory = await Task.detached { ProcessScanner.memorySummary() }.value
+            let pressure = await Task.detached { DiskPressure.current() }.value
+            let launch = await Task.detached { LaunchItemsAuditor.audit() }.value
+            return SystemSnapshot(
+                categories: freshCategories,
+                memory: memory,
+                processes: processes,
+                diskPressure: pressure,
+                launchItems: launch
+            )
+        }.value
         if let advisor = advisor {
             do {
                 let result = try await advisor.insights(for: snapshot, config: aiConfig)
@@ -546,16 +618,19 @@ final class AppState {
     }
 
     /// Gateway for clone-based dedup — same policy as deletion, but
-    /// content-preserving (copies become APFS clones).
+    /// content-preserving (copies become APFS clones). Runs the clone+swap
+    /// loop on a background thread so the main thread stays responsive.
     @discardableResult
     func deduplicate(
         _ set: DuplicateSet,
         extraAllowedRoots: [URL] = []
-    ) -> CloneDeduplicator.Outcome {
-        let outcome = CloneDeduplicator.deduplicate(
-            set,
-            policy: SafePathPolicy(extraAllowedRoots: extraAllowedRoots)
-        )
+    ) async -> CloneDeduplicator.Outcome {
+        let outcome = await Task.detached(priority: .userInitiated) {
+            CloneDeduplicator.deduplicate(
+                set,
+                policy: SafePathPolicy(extraAllowedRoots: extraAllowedRoots)
+            )
+        }.value
         recordDedupOutcome(outcome, set: set)
         return outcome
     }
@@ -726,15 +801,22 @@ final class AppState {
         let trashed = Set(urls.map { $0.resolvingSymlinksInPath().standardizedFileURL.path })
         guard !trashed.isEmpty else { return }
         let before = categoryResults
+        // Run the per-item fileExists checks on a background thread to avoid
+        // blocking the main thread with potentially thousands of stat+realpath
+        // calls. The result is applied back on the main actor.
+        let resultsToPrune = categoryResults
         let fm = FileManager.default
-        categoryResults = OutcomeRecorder.pruneDeleted(
-            categoryResults,
-            trashedPaths: trashed,
-            dropMissing: true,
-            fileExists: { fm.fileExists(atPath: $0.resolvingSymlinksInPath().path) }
-        )
-        if categoryResults != before {
-            persistLastScan(categoryResults)
+        Task { @MainActor in
+            let pruned = await Task.detached(priority: .userInitiated) {
+                OutcomeRecorder.pruneDeleted(
+                    resultsToPrune, trashedPaths: trashed, dropMissing: true,
+                    fileExists: { fm.fileExists(atPath: $0.resolvingSymlinksInPath().path) }
+                )
+            }.value
+            categoryResults = pruned
+            if categoryResults != before {
+                persistLastScan(categoryResults)
+            }
         }
     }
 

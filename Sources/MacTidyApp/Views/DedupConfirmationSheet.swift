@@ -81,15 +81,16 @@ struct DedupConfirmationSheet: View {
     }
 
     private func execute() {
-        // Non-throwing: per-set policy violations come back as skipped records.
         var result = Summary()
-        for set in sets {
-            let outcome = state.deduplicate(set, extraAllowedRoots: extraAllowedRoots)
-            result.deduplicated += outcome.deduplicated
-            result.skipped += outcome.skipped
-            result.reclaimedBytes += outcome.reclaimedBytes
+        Task { @MainActor in
+            for set in sets {
+                let outcome = await state.deduplicate(set, extraAllowedRoots: extraAllowedRoots)
+                result.deduplicated += outcome.deduplicated
+                result.skipped += outcome.skipped
+                result.reclaimedBytes += outcome.reclaimedBytes
+            }
+            summary = result
         }
-        summary = result
     }
 
     @ViewBuilder

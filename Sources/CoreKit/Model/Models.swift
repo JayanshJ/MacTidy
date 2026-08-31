@@ -31,6 +31,12 @@ public enum Category: String, CaseIterable, Codable, Sendable, Identifiable {
     case devCaches
     case appSupport
     case bigFiles
+    case simulatorDevices
+    case systemLogs
+    case crashReports
+    case savedAppState
+    case httpStorages
+    case groupContainers
 
     public var id: String { rawValue }
 
@@ -63,6 +69,12 @@ public enum Category: String, CaseIterable, Codable, Sendable, Identifiable {
         case .devCaches: "Developer tool caches"
         case .appSupport: "Application Support hoarders"
         case .bigFiles: "Large files"
+        case .simulatorDevices: "Simulator devices"
+        case .systemLogs: "System logs"
+        case .crashReports: "Crash reports"
+        case .savedAppState: "Saved app state"
+        case .httpStorages: "HTTP storage"
+        case .groupContainers: "Group containers"
         }
     }
 
@@ -117,11 +129,23 @@ public enum Category: String, CaseIterable, Codable, Sendable, Identifiable {
         case .iosBackups:
             "Local iPhone/iPad backups from Finder syncing. Suggest-only: make sure the device is backed up elsewhere (or no longer yours) first."
         case .devCaches:
-            "npm, pnpm, Cargo, Gradle, Go, Maven, Yarn, and Terraform caches outside ~/Library/Caches. All re-download on demand."
+            "npm, pnpm, Cargo, Gradle, Go, Maven, Yarn, Terraform, sbt, CocoaPods, Ollama, VS Code, Colima, and Lima caches outside ~/Library/Caches. All re-download on demand."
         case .appSupport:
             "Per-app data folders in ~/Library/Application Support, largest first. Suggest-only: these hold real app state (config, databases, messages); trashing resets the app, so check what each is before deleting."
         case .bigFiles:
             "Individual files over 100 MB anywhere under your home. Suggest-only: large files aren't necessarily junk — review each before trashing."
+        case .simulatorDevices:
+            "Per-simulator data containers in ~/Library/Developer/CoreSimulator/Devices. Each holds an installed-app set for a simulator. Suggest-only: recreating a simulator means re-installing its apps."
+        case .systemLogs:
+            "Per-app log folders in ~/Library/Logs. Apps recreate logs as they run. Suggest-only: some apps keep useful crash histories here."
+        case .crashReports:
+            "Crash logs and diagnostic reports in ~/Library/Logs/DiagnosticReports. macOS and apps recreate these when a crash happens. Safe to trash old ones."
+        case .savedAppState:
+            "Per-app saved-window-state files in ~/Library/Saved Application State. Apps recreate these on next launch (you lose window positions/restoration)."
+        case .httpStorages:
+            "Per-app HTTP storage and cookies in ~/Library/HTTPStorages. Apps recreate these; you may get logged out of some web views."
+        case .groupContainers:
+            "Shared app data in ~/Library/Group Containers (e.g. shared between an app and its extension). Suggest-only: trashing resets the app group — check what each is before deleting."
         }
     }
 
@@ -132,7 +156,8 @@ public enum Category: String, CaseIterable, Codable, Sendable, Identifiable {
         switch self {
         case .nodeModules, .rustTargets, .iosBackups, .simulatorRuntimes,
              .appSupport, .bigFiles, .pythonCaches, .xcodeArchives,
-             .unityLibrary, .androidSystemImages, .staleScreenshots:
+             .unityLibrary, .androidSystemImages, .staleScreenshots,
+             .simulatorDevices, .systemLogs, .groupContainers:
             false
         default:
             true

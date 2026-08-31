@@ -1,8 +1,8 @@
 import Foundation
 
-/// Structured Docker state for the Docker cleanup tab. Distinct from
-/// `DockerInfo`, which only exposes the raw `docker system df` table — this
-/// parses images/containers into models the UI can group and act on.
+/// Structured Docker state for the Docker cleanup tab. Parses images/
+/// containers into models the UI can group and act on. Also exposes the raw
+/// `docker system df` table via `systemDFTable()`.
 public struct DockerImage: Identifiable, Sendable, Hashable {
     public let id: String
     public let repository: String
@@ -178,9 +178,16 @@ public enum DockerScanner {
         return DockerState(images: images, containers: containers, attributions: attributions)
     }
 
-    /// Raw `docker system df` table for the secondary detail view. Delegates
-    /// to the existing DockerInfo usage() but returns the string directly.
-    public static func systemDFTable() -> String? { DockerInfo.usage()?.table }
+    /// Raw `docker system df` table for the secondary detail view. Returns
+    /// the stdout verbatim, or nil when Docker isn't installed/running.
+    public static func systemDFTable() -> String? {
+        guard let docker = Shell.find("docker"),
+              let output = Shell.run(docker, ["system", "df"]),
+              output.succeeded,
+              !output.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        return output.stdout
+    }
 
     // MARK: - Parsers (pure, testable without docker)
 

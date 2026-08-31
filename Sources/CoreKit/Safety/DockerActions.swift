@@ -21,8 +21,14 @@ public struct DockerImageRemoveAction: ShellAction {
 }
 
 /// Tears down a whole Compose project: stops its containers and removes its
-/// images (`--rmi all`). Volumes are preserved by default; pass
-/// `removeVolumes: true` to also remove named volumes (destructive for DBs).
+/// images. Runs `docker compose -p <name> down --rmi all` first (which removes
+/// containers + images that compose knows about), then explicitly `docker rmi -f`
+/// for each remaining project image — because `compose down --rmi all` only
+/// removes images when their containers still exist. If the containers were
+/// already removed (the common "project won't delete" bug), compose down is a
+/// no-op and the images would survive without the explicit rmi pass.
+/// Volumes are preserved by default; pass `removeVolumes: true` to also remove
+/// named volumes (destructive for DBs).
 public struct DockerComposeDownAction: ShellAction {
     public let id = UUID()
     public let project: DockerComposeProject
@@ -31,6 +37,10 @@ public struct DockerComposeDownAction: ShellAction {
     public var commandSummary: String {
         var cmd = "docker compose -p \(project.name) down --rmi all"
         if removeVolumes { cmd += " --volumes" }
+        // Show the per-image rmi commands too so the user sees the full plan.
+        for img in project.images {
+            cmd += " && docker rmi -f \(img.id)"
+        }
         return cmd
     }
     public var reversible: Bool { false }
@@ -43,9 +53,31 @@ public struct DockerComposeDownAction: ShellAction {
 
     public func run() -> Shell.Output? {
         guard let docker = Shell.find("docker") else { return nil }
+        // 1. compose down — stops containers, removes them, and removes images
+        //    that compose can see (only when containers exist for them).
         var args = ["compose", "-p", project.name, "down", "--rmi", "all"]
         if removeVolumes { args.append("--volumes") }
-        return Shell.run(docker, args)
+        let downResult = Shell.run(docker, args)
+        // 2. Explicitly rmi each project image. compose down leaves images
+        //    behind when their containers are already gone (the "project won't
+        //    delete" bug). This pass guarantees the images are removed.
+        var combinedStdout = downResult?.stdout ?? ""
+        var combinedStderr = downResult?.stderr ?? ""
+        var anyFailed = false
+        for img in project.images {
+            let rmiResult = Shell.run(docker, ["rmi", "-f", img.id])
+            if let r = rmiResult {
+                if !r.stdout.isEmpty { combinedStdout += r.stdout }
+                if !r.stderr.isEmpty { combinedStderr += r.stderr }
+                if !r.succeeded { anyFailed = true }
+            }
+        }
+        // compose down's exit code is 0 even when it's a no-op; the rmi pass
+        // is the real indicator of success. If any rmi failed but compose down
+        // succeeded, report partial success (exit 0) only when images were
+        // actually removed.
+        let exitCode: Int32 = anyFailed ? 1 : 0
+        return Shell.Output(stdout: combinedStdout, stderr: combinedStderr, exitCode: exitCode)
     }
 }
 

@@ -68,7 +68,7 @@ struct MemoryCard: View {
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .disabled(isPurging || (pressure.map { $0 < .warning } ?? true))
-                .help(pressure != nil && pressure! >= .warning
+                .help(pressure.map { $0 >= .warning } ?? false
                       ? "Drops file caches so inactive memory shows as free. Needs an admin prompt."
                       : "Only useful under memory pressure.")
             }

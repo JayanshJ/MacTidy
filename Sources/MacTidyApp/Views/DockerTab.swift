@@ -12,8 +12,8 @@ struct DashboardDocker: View {
     @State private var availability: DockerScanner.Availability?
     @State private var isLoading = false
     @State private var dfTable: String?
-    @State private var pendingActions: [any ShellAction] = []
-    @State private var showSheet = false
+    @State private var sheetTrigger: SheetTrigger?
+    @State private var builderPruneTrigger: BuilderPruneTrigger?
     @State private var removeVolumes = false
     /// Set while we're waiting for Docker Desktop's daemon to come up after
     /// the user clicked "Open Docker". Drives the "Waiting for Docker…"
@@ -31,7 +31,6 @@ struct DashboardDocker: View {
     /// `docker builder df`. Drives the "Prune builder cache" card. Nil until
     /// the first scan reads it (or if Docker is unavailable).
     @State private var builderCacheBytes: Int64?
-    @State private var showBuilderPruneSheet = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -39,19 +38,20 @@ struct DashboardDocker: View {
             Divider()
             content
         }
-        .sheet(isPresented: $showSheet) {
+        .sheet(item: $sheetTrigger) { trigger in
             DockerActionConfirmationSheet(
-                actions: pendingActions,
+                actions: trigger.actions,
                 removeVolumes: $removeVolumes,
                 onCompleted: {
                     // Batch removal just ran — clear the selection and rescan.
                     selectedContainerIDs.removeAll()
                     selectingContainers = false
+                    sheetTrigger = nil
                     Task { await scan() }
                 }
             )
         }
-        .sheet(isPresented: $showBuilderPruneSheet) {
+        .sheet(item: $builderPruneTrigger) { _ in
             ShellActionConfirmationSheet(
                 title: "Prune the Docker builder cache?",
                 actions: [DockerBuilderPruneAction(estimatedBytes: builderCacheBytes ?? 0)],
@@ -60,7 +60,18 @@ struct DashboardDocker: View {
                 onCompleted: { Task { await scan() } }
             )
         }
-        .task { if availability == nil { await scan() } }
+        .task {
+            // Use preloaded data from AppState if available (loaded during
+            // startFlow), so the tab appears instantly without re-scanning.
+            if let avail = state.dockerAvailability {
+                availability = avail
+                dockerState = state.dockerState
+                dfTable = state.dockerDfTable
+                builderCacheBytes = state.dockerBuilderCacheBytes
+            } else if availability == nil {
+                await scan()
+            }
+        }
         // Catch the case where Docker was started from Spotlight/Finder
         // while the app was in the background: re-check availability when
         // the user returns to the app, and refresh the list if it's now up.
@@ -184,8 +195,8 @@ struct DashboardDocker: View {
                 }
             }
         }
-        }
         .listStyle(.inset)
+    }
     }
 
     /// The BuildKit (builder) cache reclaim card. `docker builder prune -f`
@@ -205,7 +216,7 @@ struct DashboardDocker: View {
             }
             Spacer()
             Button("Prune") {
-                showBuilderPruneSheet = true
+                builderPruneTrigger = BuilderPruneTrigger()
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
@@ -263,8 +274,7 @@ struct DashboardDocker: View {
     private func removeSelectedContainers(_ ds: DockerState) {
         let chosen = ds.containers.filter { selectedContainerIDs.contains($0.id) }
         guard !chosen.isEmpty else { return }
-        pendingActions = chosen.map { DockerContainerRemoveAction(container: $0) }
-        showSheet = true
+        sheetTrigger = SheetTrigger(actions: chosen.map { DockerContainerRemoveAction(container: $0) })
     }
 
     @ViewBuilder
@@ -279,8 +289,7 @@ struct DashboardDocker: View {
             Badge(text: project.running ? "running" : "stopped",
                   tint: project.running ? Theme.Status.good : Theme.Status.caution)
             Button {
-                pendingActions = [DockerComposeDownAction(project: project, removeVolumes: removeVolumes)]
-                showSheet = true
+                sheetTrigger = SheetTrigger(actions: [DockerComposeDownAction(project: project, removeVolumes: removeVolumes)])
             } label: {
                 Label("Remove project", systemImage: "trash")
             }
@@ -316,8 +325,7 @@ struct DashboardDocker: View {
                     .help("No container references this image. Safe to remove unless you're about to run it.")
             }
             Button {
-                pendingActions = [DockerImageRemoveAction(image: img)]
-                showSheet = true
+                sheetTrigger = SheetTrigger(actions: [DockerImageRemoveAction(image: img)])
             } label: {
                 Label("Remove", systemImage: "trash")
             }
@@ -349,8 +357,7 @@ struct DashboardDocker: View {
                   tint: c.running ? Theme.Status.good : Theme.Status.caution)
             if !selectingContainers {
                 Button {
-                    pendingActions = [DockerContainerRemoveAction(container: c)]
-                    showSheet = true
+                    sheetTrigger = SheetTrigger(actions: [DockerContainerRemoveAction(container: c)])
                 } label: {
                     Label("Remove", systemImage: "trash")
                 }
@@ -520,4 +527,20 @@ struct DockerActionConfirmationSheet: View {
             Button("Done") { onCompleted(); dismiss() }.keyboardShortcut(.defaultAction)
         }
     }
+}
+
+/// Identifiable wrapper for the Docker action sheet. Using `.sheet(item:)`
+/// instead of `.sheet(isPresented:)` + a separate state variable avoids the
+/// race where the sheet's content closure captures stale (empty) actions
+/// when both are set in the same render cycle.
+struct SheetTrigger: Identifiable {
+    let id = UUID()
+    let actions: [any ShellAction]
+}
+
+/// Trigger for the builder-prune sheet (no payload needed — the action is
+/// built from `builderCacheBytes` at sheet-creation time). Exists only to
+/// drive `.sheet(item:)` instead of `.sheet(isPresented:)`.
+struct BuilderPruneTrigger: Identifiable {
+    let id = UUID()
 }

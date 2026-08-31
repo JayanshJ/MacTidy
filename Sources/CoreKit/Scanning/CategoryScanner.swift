@@ -42,13 +42,18 @@ public struct CategoryScanner: Sendable {
         progress: (@Sendable (Category) -> Void)? = nil,
         completed: (@Sendable (CategoryResult) -> Void)? = nil
     ) async -> [CategoryResult] {
-        await withTaskGroup(of: CategoryResult.self) { group in
+        // Run the single-pass dev-roots walk ONCE before dispatching
+        // categories to parallel tasks. This eliminates the 7+ redundant
+        // full-tree walks the old per-category approach did.
+        let cache = devRootsScan()
+        return await withTaskGroup(of: CategoryResult.self) { group in
             for category in Category.allCases {
                 if Task.isCancelled { break }
+                let cacheRef = cache
                 group.addTask {
                     if Task.isCancelled { return CategoryResult(category: category, items: []) }
                     progress?(category)
-                    return await scan(category)
+                    return await scanCached(category, devRootsCache: cacheRef)
                 }
             }
             var results: [CategoryResult] = []
@@ -61,6 +66,14 @@ public struct CategoryScanner: Sendable {
     }
 
     public func scan(_ category: Category) async -> CategoryResult {
+        await scanCached(category, devRootsCache: [:])
+    }
+
+    /// The real scan method. `devRootsCache` carries pre-computed results
+    /// from a single-pass dev-roots walk (populated by `scanAll`). When
+    /// empty (e.g. when scanning a single category), the build-dir categories
+    /// fall back to the old per-category walks.
+    private func scanCached(_ category: Category, devRootsCache: [Category: [ScanItem]]) async -> CategoryResult {
         let items: [ScanItem]
         switch category {
         case .xcodeDerivedData:
@@ -76,19 +89,19 @@ public struct CategoryScanner: Sendable {
         case .homebrewCache:
             items = homebrewCache()
         case .nodeModules:
-            items = buildDirs(named: "node_modules", siblingMarkers: ["package.json"], category: .nodeModules)
+            items = devRootsCache[.nodeModules] ?? buildDirs(named: "node_modules", siblingMarkers: ["package.json"], category: .nodeModules)
         case .rustTargets:
-            items = buildDirs(named: "target", siblingMarkers: ["Cargo.toml"], category: .rustTargets)
+            items = devRootsCache[.rustTargets] ?? buildDirs(named: "target", siblingMarkers: ["Cargo.toml"], category: .rustTargets)
         case .podDirs:
-            items = buildDirs(named: "Pods", siblingMarkers: ["Podfile"], category: .podDirs)
+            items = devRootsCache[.podDirs] ?? buildDirs(named: "Pods", siblingMarkers: ["Podfile"], category: .podDirs)
         case .swiftBuildDirs:
-            items = buildDirs(named: ".build", siblingMarkers: ["Package.swift"], category: .swiftBuildDirs)
+            items = devRootsCache[.swiftBuildDirs] ?? buildDirs(named: ".build", siblingMarkers: ["Package.swift"], category: .swiftBuildDirs)
         case .gradleBuildDirs:
-            items = buildDirs(named: "build", siblingMarkers: ["build.gradle", "build.gradle.kts"], category: .gradleBuildDirs)
+            items = devRootsCache[.gradleBuildDirs] ?? buildDirs(named: "build", siblingMarkers: ["build.gradle", "build.gradle.kts"], category: .gradleBuildDirs)
         case .pythonCaches:
-            items = pythonCaches()
+            items = devRootsCache[.pythonCaches] ?? pythonCaches()
         case .jsBuildDirs:
-            items = jsBuildDirs()
+            items = devRootsCache[.jsBuildDirs] ?? jsBuildDirs()
         case .containerCaches:
             items = await containerCaches()
         case .xcodeArchives:
@@ -96,13 +109,13 @@ public struct CategoryScanner: Sendable {
         case .mailDownloads:
             items = await mailDownloads()
         case .mavenTarget:
-            items = buildDirs(named: "target", siblingMarkers: ["pom.xml"], category: .mavenTarget)
+            items = devRootsCache[.mavenTarget] ?? buildDirs(named: "target", siblingMarkers: ["pom.xml"], category: .mavenTarget)
         case .phpVendor:
-            items = buildDirs(named: "vendor", siblingMarkers: ["composer.json"], category: .phpVendor)
+            items = devRootsCache[.phpVendor] ?? buildDirs(named: "vendor", siblingMarkers: ["composer.json"], category: .phpVendor)
         case .flutterDartTool:
-            items = buildDirs(named: ".dart_tool", siblingMarkers: ["pubspec.yaml"], category: .flutterDartTool)
+            items = devRootsCache[.flutterDartTool] ?? buildDirs(named: ".dart_tool", siblingMarkers: ["pubspec.yaml"], category: .flutterDartTool)
         case .unityLibrary:
-            items = unityLibrary()
+            items = devRootsCache[.unityLibrary] ?? unityLibrary()
         case .androidSystemImages:
             items = await androidSystemImages()
         case .staleScreenshots:
@@ -117,6 +130,18 @@ public struct CategoryScanner: Sendable {
             items = await appSupportHoarders()
         case .bigFiles:
             items = await bigFiles()
+        case .simulatorDevices:
+            items = await children(of: "Library/Developer/CoreSimulator/Devices", category)
+        case .systemLogs:
+            items = await children(of: "Library/Logs", category)
+        case .crashReports:
+            items = await children(of: "Library/Logs/DiagnosticReports", category)
+        case .savedAppState:
+            items = await children(of: "Library/Saved Application State", category)
+        case .httpStorages:
+            items = await children(of: "Library/HTTPStorages", category)
+        case .groupContainers:
+            items = await children(of: "Library/Group Containers", category)
         }
         return CategoryResult(category: category, items: items)
     }
@@ -191,22 +216,54 @@ public struct CategoryScanner: Sendable {
             (".npm", "npm cache"),
             (".cargo/registry", "Cargo registry"),
             (".gradle/caches", "Gradle caches"),
+            // Gradle wrapper distributions — downloaded Gradle runtimes, one
+            // per version. Often 100+ MB each; regenerable on next build.
+            (".gradle/wrapper/dists", "Gradle wrapper distributions"),
             ("Library/pnpm/store", "pnpm store"),
             ("go/pkg/mod", "Go module cache"),
             (".m2/repository", "Maven repository"),
             (".yarn/cache", "Yarn cache"),
             (".terraform.d/plugin-cache", "Terraform plugin cache"),
+            // sbt's Coursier/Ivy cache (Scala builds). Can be several GB.
+            (".sbt", "sbt cache"),
+            // Coursier cache (modern Scala, distinct from .sbt).
+            (".coursier/cache", "Coursier cache"),
             // Bun package cache (home-rooted; not under ~/Library/Caches so
             // no overlap with the userCaches category).
             (".bun/install/cache", "Bun cache"),
             // XDG cache dir — pip, mypy, pytest, pre-commit, httpie, etc. all
-            // live under here. Counted once at the root so we don't double-
+            // live here. Counted once at the root so we don't double-
             // count its children individually.
             (".cache", "XDG cache (~/.cache)"),
             // Deno's cache directory (home-rooted variant; the
             // ~/Library/Caches/deno location, if present, is covered by
             // userCaches).
             (".deno", "Deno cache"),
+            // iOS device sync logs — per-device crash/sync logs, safe to trash,
+            // Xcode recreates on next device connect.
+            ("Library/Developer/Xcode/iOS DeviceLogs", "iOS Device Logs"),
+            // CocoaPods global spec/config cache. Regenerable via `pod install`.
+            (".cocoapods", "CocoaPods cache"),
+            // Fastlane cache (build artifacts, downloaded metadata). Regenerable.
+            (".fastlane", "Fastlane cache"),
+            // Ollama model weights — can be many GB. Removing means re-pulling
+            // the model via `ollama pull <model>`.
+            (".ollama/models", "Ollama models"),
+            // Colima Docker VM disk image. Removing means re-provisioning on
+            // next `colima start`.
+            (".colima", "Colima VM disk"),
+            // Lima VM disk images (Colima's backend). Same reclaim story.
+            (".lima", "Lima VM disk"),
+            // VS Code extensions. Regenerable — reinstall from the Extensions panel.
+            (".vscode/extensions", "VS Code extensions"),
+            // Android AVD data (emulator devices). Regenerable — recreate via
+            // Android Studio AVD Manager.
+            (".android/avd", "Android AVD data"),
+            // Android SDK cache (downloads, temp). Regenerable.
+            (".android/cache", "Android SDK cache"),
+            // Xcode user data (breakpoints, snapshots, schemes). Safe to clear
+            // but may lose custom schemes — labeled so the user can judge.
+            ("Library/Developer/Xcode/UserData", "Xcode UserData"),
         ]
         let home = self.home
         return await withTaskGroup(of: ScanItem?.self) { group in
@@ -249,6 +306,147 @@ public struct CategoryScanner: Sendable {
         return await Task.detached {
             DiskScanner.largeFiles(under: roots, minSize: 100 * 1024 * 1024)
         }.value
+    }
+
+    /// Single-pass walk of all dev roots that classifies every directory
+    /// against ALL build-dir + Python-cache + Unity patterns in one enumeration.
+    /// Returns a dictionary keyed by category, so the individual `scan(_:)`
+    /// cases for nodeModules, rustTargets, podDirs, swiftBuildDirs,
+    /// gradleBuildDirs, mavenTarget, phpVendor, flutterDartTool, jsBuildDirs,
+    /// pythonCaches, and unityLibrary all share one walk instead of each
+    /// re-walking the entire tree (the old code did 7+ redundant full walks).
+    private func devRootsScan() -> [Category: [ScanItem]] {
+
+        // Build-dir targets: (dirName, markers, category).
+        let buildTargets: [(String, [String], Category)] = [
+            ("node_modules", ["package.json"], .nodeModules),
+            ("target", ["Cargo.toml"], .rustTargets),
+            ("Pods", ["Podfile"], .podDirs),
+            (".build", ["Package.swift"], .swiftBuildDirs),
+            ("build", ["build.gradle", "build.gradle.kts"], .gradleBuildDirs),
+            ("target", ["pom.xml"], .mavenTarget),  // same name as Rust, different marker
+            ("vendor", ["composer.json"], .phpVendor),
+            (".dart_tool", ["pubspec.yaml"], .flutterDartTool),
+            (".next", ["package.json"], .jsBuildDirs),
+            (".nuxt", ["package.json"], .jsBuildDirs),
+            (".svelte-kit", ["package.json"], .jsBuildDirs),
+            (".turbo", ["package.json"], .jsBuildDirs),
+            (".output", ["package.json"], .jsBuildDirs),
+        ]
+        // Python cache dirs: always included (no marker needed).
+        let pyAlwaysInclude: Set<String> = ["__pycache__", ".pytest_cache", ".tox", ".ipynb_checkpoints"]
+        let venvMarkers = ["pyproject.toml", "requirements.txt", "setup.py"]
+        let skipDirs: Set<String> = [".git", "node_modules", "target", "build", ".build", "DerivedData"]
+
+        var results: [Category: [ScanItem]] = [:]
+        let fm = FileManager.default
+
+        for root in devRoots {
+            guard let enumerator = fm.enumerator(
+                at: root,
+                includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .contentModificationDateKey],
+                options: [.skipsPackageDescendants],
+                errorHandler: { _, _ in true }
+            ) else { continue }
+
+            while let url = enumerator.nextObject() as? URL {
+                guard let values = try? url.resourceValues(
+                    forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .contentModificationDateKey]
+                ) else { continue }
+                if values.isSymbolicLink == true {
+                    enumerator.skipDescendants()
+                    continue
+                }
+                guard values.isDirectory == true else { continue }
+                let dirName = url.lastPathComponent
+                if dirName == ".git" || enumerator.level > 12 {
+                    enumerator.skipDescendants()
+                    continue
+                }
+
+                // Check build-dir targets.
+                var matched = false
+                for (name, markers, cat) in buildTargets where dirName == name {
+                    let parent = url.deletingLastPathComponent()
+                    let hasMarker = markers.contains { fm.fileExists(atPath: parent.appending(path: $0).path) }
+                    if hasMarker {
+                        enumerator.skipDescendants()
+                        results[cat, default: []].append(ScanItem(
+                            url: url,
+                            sizeBytes: DiskScanner.allocatedSize(of: url),
+                            isDirectory: true,
+                            category: cat,
+                            detail: parent.lastPathComponent,
+                            lastModified: values.contentModificationDate
+                        ))
+                        matched = true
+                        break
+                    } else if name == "node_modules" {
+                        enumerator.skipDescendants()
+                        matched = true
+                        break
+                    }
+                }
+                if matched { continue }
+
+                // Python caches.
+                if pyAlwaysInclude.contains(dirName) {
+                    enumerator.skipDescendants()
+                    results[.pythonCaches, default: []].append(ScanItem(
+                        url: url,
+                        sizeBytes: DiskScanner.allocatedSize(of: url),
+                        isDirectory: true,
+                        category: .pythonCaches,
+                        detail: url.deletingLastPathComponent().lastPathComponent,
+                        lastModified: values.contentModificationDate
+                    ))
+                    continue
+                }
+                if dirName == ".venv" {
+                    let parent = url.deletingLastPathComponent()
+                    let hasMarker = venvMarkers.contains { fm.fileExists(atPath: parent.appending(path: $0).path) }
+                    if hasMarker {
+                        enumerator.skipDescendants()
+                        results[.pythonCaches, default: []].append(ScanItem(
+                            url: url,
+                            sizeBytes: DiskScanner.allocatedSize(of: url),
+                            isDirectory: true,
+                            category: .pythonCaches,
+                            detail: parent.lastPathComponent,
+                            lastModified: values.contentModificationDate
+                        ))
+                        continue
+                    }
+                }
+
+                // Unity Library (gated on sibling ProjectSettings dir).
+                if dirName == "Library" {
+                    let parent = url.deletingLastPathComponent()
+                    if fm.fileExists(atPath: parent.appending(path: "ProjectSettings").path) {
+                        enumerator.skipDescendants()
+                        results[.unityLibrary, default: []].append(ScanItem(
+                            url: url,
+                            sizeBytes: DiskScanner.allocatedSize(of: url),
+                            isDirectory: true,
+                            category: .unityLibrary,
+                            detail: parent.lastPathComponent,
+                            lastModified: values.contentModificationDate
+                        ))
+                    }
+                }
+
+                // Python caches skip dirs so it doesn't re-walk other categories' trees.
+                if skipDirs.contains(dirName) {
+                    enumerator.skipDescendants()
+                }
+            }
+        }
+
+        // Sort each category's items by size descending.
+        for (cat, items) in results {
+            results[cat] = items.sorted { $0.sizeBytes > $1.sizeBytes }
+        }
+        return results
     }
 
     /// Finds build directories (node_modules, Rust target/, Pods/, .build/,
@@ -401,28 +599,28 @@ public struct CategoryScanner: Sendable {
         let root = home.appending(path: "Library/Containers")
         let fm = FileManager.default
         guard fm.fileExists(atPath: root.path) else { return [] }
-        var results: [ScanItem] = []
         guard let containers = try? fm.contentsOfDirectory(
             at: root, includingPropertiesForKeys: nil) else { return [] }
-        for container in containers {
-            let cachesDir = container
-                .appending(path: "Data/Library/Caches")
-            let containerID = container.lastPathComponent
-            // Mail's attachment cache is surfaced by `mailDownloads` instead.
-            if containerID == "com.apple.Mail" { continue }
-            let items = await DiskScanner.topLevelScan(root: cachesDir, category: .containerCaches)
-            // Tag each with the owning container id for detail so the grid
-            // reads "com.example.app / Cache.db" rather than a bare name.
-            for item in items {
-                results.append(ScanItem(
-                    url: item.url,
-                    sizeBytes: item.sizeBytes,
-                    isDirectory: item.isDirectory,
-                    category: .containerCaches,
-                    detail: containerID,
-                    lastModified: item.lastModified
-                ))
+        // Scan all containers' caches in parallel — the old code scanned
+        // each container sequentially, which was slow with many containers.
+        let results = await withTaskGroup(of: [ScanItem].self) { group in
+            for container in containers {
+                let containerID = container.lastPathComponent
+                if containerID == "com.apple.Mail" { continue }
+                let cachesDir = container.appending(path: "Data/Library/Caches")
+                group.addTask {
+                    let items = await DiskScanner.topLevelScan(root: cachesDir, category: .containerCaches)
+                    return items.map { item in
+                        ScanItem(
+                            url: item.url, sizeBytes: item.sizeBytes, isDirectory: item.isDirectory,
+                            category: .containerCaches, detail: containerID,
+                            lastModified: item.lastModified)
+                    }
+                }
             }
+            var combined: [ScanItem] = []
+            for await items in group { combined.append(contentsOf: items) }
+            return combined
         }
         return results.sorted { $0.sizeBytes > $1.sizeBytes }
     }

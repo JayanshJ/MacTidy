@@ -41,6 +41,9 @@ public enum DevRuntime: String, Sendable, Hashable, CaseIterable {
     case java
     case ruby
     case go
+    case php
+    case dotnet
+    case webserver
     case docker
     case database
     case other
@@ -52,6 +55,9 @@ public enum DevRuntime: String, Sendable, Hashable, CaseIterable {
         case .java: "JVM"
         case .ruby: "Ruby"
         case .go: "Go"
+        case .php: "PHP"
+        case .dotnet: ".NET"
+        case .webserver: "Web Server"
         case .docker: "Docker"
         case .database: "Database"
         case .other: "Other"
@@ -65,6 +71,9 @@ public enum DevRuntime: String, Sendable, Hashable, CaseIterable {
         case .java: "cup.and.saucer.fill"
         case .ruby: "diamond.fill"
         case .go: "building.2.fill"
+        case .php: "elephant.fill"
+        case .dotnet: "square.grid.3x1.fill.below.line.grid.1x2"
+        case .webserver: "globe"
         case .docker: "cylinder.split.1x2"
         case .database: "cylinder"
         case .other: "questionmark"
@@ -80,6 +89,9 @@ public enum DevRuntime: String, Sendable, Hashable, CaseIterable {
         case .java: "orange"
         case .ruby: "red"
         case .go: "cyan"
+        case .php: "indigo"
+        case .dotnet: "purple"
+        case .webserver: "teal"
         case .docker: "blue"
         case .database: "purple"
         case .other: "gray"
@@ -111,8 +123,14 @@ public enum DevRuntime: String, Sendable, Hashable, CaseIterable {
             "spring-boot", "tomcat", "jetty"].contains(name) { return .java }
         if ["ruby", "rails", "puma", "sidekiq", "bundle"].contains(name) { return .ruby }
         if ["go", "air", "dlv", "golangci-lint", "cobra"].contains(name) { return .go }
+        // PHP — php-fpm, artisan, composer, php.
+        if name.hasPrefix("php") || ["artisan", "composer", "php-fpm"].contains(name) { return .php }
+        // .NET — dotnet, aspnet.
+        if name.hasPrefix("dotnet") || name.hasPrefix("aspnet") { return .dotnet }
+        // Web servers — nginx, caddy, httpd, apache, lighttpd, traefik.
+        if ["nginx", "caddy", "httpd", "apache2", "apache", "lighttpd",
+            "traefik", "haproxy", "varnish"].contains(name) { return .webserver }
         // Docker: lsof shows "com.docke" (truncated), ProcessScanner shows "Docker".
-        // Also match the full backend binary name and VPN/helper names.
         if name == "docker" || name.hasPrefix("com.docker")
             || name == "com.docke" { return .docker }
         // Databases commonly used in dev — postgres, redis, mysql, mongod.
@@ -302,6 +320,24 @@ enum PortExplanation {
             "com.docke": "Docker Desktop's backend process (lsof truncates the name). Manages containers and port forwarding. Killing it shuts down Docker.",
             "ipnextension": "Tailscale VPN. This port is its local coordination service. Killing it disconnects your Tailscale VPN.",
             "ipn": "Tailscale VPN. This port is its local coordination service. Killing it disconnects your Tailscale VPN.",
+            // Web servers.
+            "nginx": "Nginx — a high-performance web server and reverse proxy. Commonly used to serve static sites or proxy to a backend. Safe to kill; restart it from your terminal or service manager.",
+            "caddy": "Caddy — a modern web server with automatic HTTPS. Often used as a reverse proxy in dev. Safe to kill; restart it from your terminal.",
+            "httpd": "Apache HTTP Server (httpd). The classic web server. Safe to kill; restart it from your terminal or `apachectl start`.",
+            "apache2": "Apache HTTP Server. The classic web server. Safe to kill; restart it from your terminal or service manager.",
+            "traefik": "Traefik — a cloud-native reverse proxy and load balancer. Commonly used with Docker Compose. Safe to kill; restart it from your terminal.",
+            "haproxy": "HAProxy — a TCP/HTTP load balancer. Safe to kill; restart it from your terminal.",
+            // PHP / .NET.
+            "php": "PHP — a server-side language commonly used with Apache or Nginx. Likely running a Laravel or WordPress site. Safe to kill; restart it from your terminal.",
+            "php-fpm": "PHP-FPM — the FastCGI process manager for PHP. Handles PHP requests from Nginx or Apache. Safe to kill; restart it from your service manager.",
+            "artisan": "Laravel Artisan — the PHP Laravel development server. Safe to kill; restart it with `php artisan serve`.",
+            "dotnet": ".NET — a Microsoft development platform. Likely running an ASP.NET web app or API. Safe to kill; restart it from your IDE or terminal.",
+            // Message queues / search engines.
+            "beam.smp": "RabbitMQ (Erlang runtime). A message broker used for queuing background jobs. Killing it stops any apps sending messages through it.",
+            "epmd": "Erlang Port Mapper Daemon — part of RabbitMQ's runtime. Killing it disrupts RabbitMQ's clustering.",
+            "elasticsearch": "Elasticsearch — a distributed search and analytics engine. Killing it stops any apps querying it. Often runs under Java.",
+            "kafka": "Apache Kafka — a distributed event streaming platform. Killing it stops any apps producing or consuming streams.",
+            "zookeeper": "Apache ZooKeeper — a coordination service used by Kafka and others. Killing it may disrupt Kafka clusters.",
         ]
 
         if let entry = apps[key] { return entry }
@@ -363,6 +399,12 @@ enum PortExplanation {
             return "A Ruby process (likely Rails or Puma web server). Safe to kill — restart it from your terminal."
         case .go:
             return "A Go process (likely a compiled web server or CLI tool). Safe to kill — restart it from your terminal."
+        case .php:
+            return "A PHP process (likely a Laravel or WordPress site). Safe to kill — restart it from your terminal or service manager."
+        case .dotnet:
+            return "A .NET process (likely an ASP.NET web app or API). Safe to kill — restart it from your IDE or terminal."
+        case .webserver:
+            return "A web server (Nginx, Caddy, Apache, or similar). It's serving or proxying HTTP traffic. Safe to kill; restart it from your terminal."
         case .docker:
             return "Docker is forwarding this port to a container. Killing the process stops the container's published port. Manage containers from the Docker tab."
         case .database:

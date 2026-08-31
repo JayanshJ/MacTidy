@@ -11,6 +11,8 @@ struct NodePackagesInspector: View {
     @State private var analyses: [NodeProjectAnalysis] = []
     @State private var isLoading = false
     @State private var sheetPlan: DeletionPlan?
+    @State private var pendingPrune: [any ShellAction] = []
+    @State private var showPruneSheet = false
     @State private var pruneStatus: [String: String] = [:]
 
     private var devRoots: [URL] { CategoryScanner.defaultDevRoots }
@@ -52,6 +54,18 @@ struct NodePackagesInspector: View {
             DeletionConfirmationSheet(title: "Trash node_modules?", plan: plan) { _ in
                 Task { await scan() }
             }
+        }
+        .sheet(isPresented: $showPruneSheet) {
+            ShellActionConfirmationSheet(
+                title: "Run npm prune?",
+                actions: pendingPrune,
+                kind: .devTerminal,
+                note: "Removes orphaned packages — those listed in package.json but no longer installed. The project keeps working. Reversible via npm install.",
+                onCompleted: {
+                    // Record the status per-project so the row shows the result.
+                    Task { await scan() }
+                }
+            )
         }
     }
 
@@ -99,7 +113,11 @@ struct NodePackagesInspector: View {
                 .help("Move the whole node_modules to Trash. Restore with `npm install`.")
             } else {
                 Button {
-                    Task { await runPrune(in: analysis.projectDir) }
+                    pendingPrune = [NpmPruneAction(
+                        projectDir: analysis.projectDir,
+                        orphanedCount: analysis.orphaned.count
+                    )]
+                    showPruneSheet = true
                 } label: {
                     Text("Clean").frame(minWidth: 56)
                 }
@@ -122,28 +140,5 @@ struct NodePackagesInspector: View {
         }
         analyses = results.sorted { $0.nodeModulesBytes > $1.nodeModulesBytes }
         isLoading = false
-    }
-
-    /// Runs `npm prune` in the project dir. This is the safe reclaim action —
-    /// it removes orphaned packages while keeping the declared dependency
-    /// tree intact and the project working. Uses the user's npm via Shell.
-    private func runPrune(in dir: URL) async {
-        let key = dir.path
-        let npm = Shell.find("npm") ?? "/usr/local/bin/npm"
-        guard FileManager.default.isExecutableFile(atPath: npm) else {
-            await MainActor.run { pruneStatus[key] = "npm not found." }
-            return
-        }
-        let out = Shell.run(npm, ["prune", "--prefix", dir.path])
-        await MainActor.run {
-            pruneStatus[key] = out?.succeeded == true
-                ? "Done — orphaned packages removed."
-                : "npm prune failed: \(out?.stderr ?? "unknown")"
-        }
-        // Refresh this project's row so the button flips Clean → Trash.
-        if let updated = NodePackageAnalyzer.analyze(dir),
-           let idx = analyses.firstIndex(where: { $0.id == updated.id }) {
-            await MainActor.run { analyses[idx] = updated }
-        }
     }
 }

@@ -26,13 +26,12 @@ struct DashboardView: View {
     enum DashboardTab: String, CaseIterable, Identifiable {
         case insights = "Insights"
         case cleanup = "Cleanup"
-        case byApp = "Storage by App"
-        case uninstaller = "Uninstaller"
+        case byApp = "By App"
+        case uninstaller = "Uninstall"
         case startup = "Startup"
         case docker = "Docker"
-        case duplicates = "Duplicates"
-        case system = "System"
-        case devTerminal = "Dev Terminal"
+        case duplicates = "Dupes"
+        case devTerminal = "Dev"
         var id: String { rawValue }
         var icon: String {
             switch self {
@@ -43,7 +42,6 @@ struct DashboardView: View {
             case .startup: "power"
             case .docker: "cylinder.split.1x2"
             case .duplicates: "doc.on.doc"
-            case .system: "internaldrive"
             case .devTerminal: "terminal"
             }
         }
@@ -145,7 +143,6 @@ struct DashboardView: View {
         case .startup: DashboardStartup()
         case .docker: DashboardDocker()
         case .duplicates: DuplicatesView()
-        case .system: SystemTab()
         case .devTerminal: DeveloperTerminalTab()
         }
     }
@@ -451,7 +448,7 @@ struct DashboardView: View {
             sheetPlanIsCleanAll ? "Clean all safe items?" : "Trash selected items?"
         case .byApp: "Trash selected items?"
         case .uninstaller: "Uninstall \(state.flowApps.first?.app.name ?? "app")?"
-        case .startup, .docker, .duplicates, .system, .devTerminal: "Trash selected items?"
+        case .startup, .docker, .duplicates, .devTerminal: "Trash selected items?"
         }
     }
 

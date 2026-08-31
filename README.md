@@ -12,7 +12,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/macOS-14%2B-000000?logo=apple&logoColor=white" alt="macOS 14+">
   <img src="https://img.shields.io/badge/Swift-SwiftUI%20%2B%20SwiftPM-F05138?logo=swift&logoColor=white" alt="Swift">
-  <img src="https://img.shields.io/badge/tests-256%20passing-30A14E" alt="256 tests passing">
+  <img src="https://img.shields.io/badge/tests-277%20passing-30A14E" alt="277 tests passing">
 </p>
 
 ---
@@ -141,7 +141,7 @@ Trash remains your undo, alongside the in-app **Recently Trashed** view.
 ## Development
 
 ```sh
-make test   # CoreKit safety/scanner suite — 256 tests, Swift Testing
+make test   # CoreKit safety/scanner suite — 277 tests, Swift Testing
 make clean
 ```
 

@@ -6,13 +6,15 @@ import CoreKit
 /// user wants a developer-focused tool that feels like home, not a generic
 /// settings panel.
 ///
-/// Three sections:
+/// Four sections:
 /// 1. **Ports & Processes** — every TCP listening port, colorized by runtime
 ///    (Node=green, Python=yellow, Java=orange, Docker=blue, Database=purple,
 ///    Other=gray). Per-port Kill button (SIGTERM).
 /// 2. **Package Manager Caches** — npm/yarn/pnpm/brew/cargo/simctl cache sizes
 ///    with one-click clean actions.
 /// 3. **Docker Volumes** — prunes unused Docker volumes.
+/// 4. **System** — Time Machine local snapshots (merged from the former System
+///    tab so all shell-action cleanup lives in one place).
 ///
 /// All destructive actions are `ShellAction`s routed through
 /// `ShellActionConfirmationSheet` — irreversible, command shown verbatim.
@@ -20,12 +22,13 @@ struct DeveloperTerminalTab: View {
     @Environment(AppState.self) private var state
     @State private var ports: [PortEntry] = []
     @State private var devTools: [DevToolInfo] = []
+    @State private var snapshots: [TMSnapshot] = []
     @State private var isLoading = false
-    @State private var pending: [any ShellAction] = []
-    @State private var showSheet = false
-    @State private var sheetTitle = "Developer Terminal actions"
+    /// Drives the action sheet via `.sheet(item:)` — avoids the race where
+    /// `.sheet(isPresented:)` captures stale state (the "small rounded square"
+    /// bug). The trigger carries everything the sheet needs.
+    @State private var actionTrigger: DevActionTrigger?
     @State private var infoEntry: PortEntry?
-    @State private var showInfo = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -36,26 +39,42 @@ struct DeveloperTerminalTab: View {
                     portsSection
                     cachesSection
                     dockerVolumeSection
+                    systemSection
                 }
                 .padding(Theme.Spacing.xl)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .sheet(isPresented: $showSheet) {
+        .sheet(item: $actionTrigger) { trigger in
             ShellActionConfirmationSheet(
-                title: sheetTitle,
-                actions: pending,
-                kind: .devTerminal,
-                note: "These commands run directly — they don't go through the Trash. Package caches rebuild on demand, but make sure you're not mid-build before cleaning.",
+                title: trigger.title,
+                actions: trigger.actions,
+                kind: trigger.kind,
+                note: trigger.note,
                 onCompleted: { Task { await load() } }
             )
         }
-        .sheet(isPresented: $showInfo) {
-            if let entry = infoEntry {
-                PortInfoSheet(entry: entry) { showInfo = false }
+        .sheet(item: $infoEntry) { entry in
+            PortInfoSheet(entry: entry) { infoEntry = nil }
+        }
+        .task {
+            // Use preloaded data from AppState if available (loaded during
+            // startFlow), so the tab appears instantly without re-scanning.
+            if !state.devPorts.isEmpty || !state.devTools.isEmpty || !state.devSnapshots.isEmpty {
+                ports = state.devPorts
+                devTools = state.devTools
+                snapshots = state.devSnapshots
+            } else {
+                await load()
             }
         }
-        .task { await load() }
+        .task(id: "auto-refresh") {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(30))
+                guard !Task.isCancelled else { break }
+                await load()
+            }
+        }
     }
 
     // MARK: - Header (terminal-style title bar)
@@ -194,7 +213,6 @@ struct DeveloperTerminalTab: View {
                 if !entry.explanation.isEmpty {
                     Button {
                         infoEntry = entry
-                        showInfo = true
                     } label: {
                         Image(systemName: "info.circle")
                             .font(.caption2.monospaced())
@@ -204,14 +222,15 @@ struct DeveloperTerminalTab: View {
                     .help("What is this?")
                 }
                 Button("kill") {
-                    pending = [KillProcessAction(pid: entry.pid, name: entry.processName, port: entry.port)]
-                    sheetTitle = "Kill process?"
-                    showSheet = true
+                    actionTrigger = DevActionTrigger(
+                        title: "Kill process?",
+                        actions: [KillProcessAction(pid: entry.pid, name: entry.processName, port: entry.port)],
+                        kind: .devTerminal, note: nil)
                 }
                 .buttonStyle(.bordered)
-                .controlSize(.mini)
+                .controlSize(.small)
                 .tint(.red)
-                .font(.caption2.monospaced())
+                .font(.caption.monospaced())
             }
             .frame(width: 80)
         }
@@ -250,6 +269,9 @@ struct DeveloperTerminalTab: View {
         case .java: .orange
         case .ruby: .red
         case .go: .cyan
+        case .php: .indigo
+        case .dotnet: .purple
+        case .webserver: .teal
         case .docker: .blue
         case .database: .purple
         case .other: .gray
@@ -303,9 +325,10 @@ struct DeveloperTerminalTab: View {
                 HStack {
                     Spacer()
                     Button {
-                        pending = devTools.compactMap { actionForTool($0) }
-                        sheetTitle = "Clean all developer caches?"
-                        showSheet = true
+                        actionTrigger = DevActionTrigger(
+                            title: "Clean all developer caches?",
+                            actions: devTools.compactMap { actionForTool($0) },
+                            kind: .devTerminal, note: nil)
                     } label: {
                         Text("clean --all")
                             .font(.callout.monospaced().bold())
@@ -405,9 +428,10 @@ struct DeveloperTerminalTab: View {
                     HStack {
                         Spacer()
                         Button {
-                            pending = [DockerVolumePruneAction()]
-                            sheetTitle = "Prune unused Docker volumes?"
-                            showSheet = true
+                            actionTrigger = DevActionTrigger(
+                                title: "Prune unused Docker volumes?",
+                                actions: [DockerVolumePruneAction()],
+                                kind: .devTerminal, note: nil)
                         } label: {
                             Text("prune --volumes")
                                 .font(.callout.monospaced().bold())
@@ -428,13 +452,103 @@ struct DeveloperTerminalTab: View {
         }
     }
 
+    // MARK: - System (Time Machine snapshots, merged from the former System tab)
+
+    @ViewBuilder
+    private var systemSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.callout.monospaced())
+                Text("$ tmutil listlocalsnapshots /")
+                    .font(.callout.monospaced())
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if !snapshots.isEmpty {
+                    Text("\(snapshots.count) snapshots")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(Color.black.opacity(0.06))
+
+            if isLoading && snapshots.isEmpty {
+                HStack { Spacer(); ProgressView("Checking snapshots…"); Spacer() }
+                    .frame(maxWidth: .infinity, minHeight: 60)
+            } else if snapshots.isEmpty {
+                Text("● No local snapshots.")
+                    .font(.callout.monospaced())
+                    .foregroundStyle(.secondary)
+                    .padding(12)
+            } else {
+                VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                    Text("Local snapshots live on your startup volume and can tie up tens of GB. macOS creates and expires them automatically; deleting one frees space immediately and TM recreates snapshots on its next run.")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 12).padding(.top, 8)
+
+                    ForEach(snapshots) { snap in
+                        HStack(spacing: 8) {
+                            Image(systemName: "clock")
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                                .frame(width: 20)
+                            Text(snap.date)
+                                .font(.callout.monospaced())
+                            Spacer()
+                            Button("delete") {
+                                actionTrigger = DevActionTrigger(
+                                    title: "Delete Time Machine snapshot?",
+                                    actions: [DeleteSnapshotAction(snapshot: snap)],
+                                    kind: .timeMachine,
+                                    note: "Local snapshots are deleted immediately — this cannot be undone. macOS recreates them on their own backup schedule.")
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.mini)
+                            .tint(.red)
+                            .font(.caption2.monospaced())
+                        }
+                        .padding(.horizontal, 12).padding(.vertical, 3)
+                        Divider().opacity(0.3).padding(.horizontal, 12)
+                    }
+
+                    HStack {
+                        Spacer()
+                        Button {
+                            actionTrigger = DevActionTrigger(
+                                title: "Delete all \(snapshots.count) Time Machine snapshots?",
+                                actions: snapshots.map { DeleteSnapshotAction(snapshot: $0) },
+                                kind: .timeMachine,
+                                note: "Local snapshots are deleted immediately — this cannot be undone. macOS recreates them on their own backup schedule, so the space is reclaimed now and refilled as TM runs.")
+                        } label: {
+                            Text("delete --all")
+                                .font(.callout.monospaced().bold())
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.red)
+                        .controlSize(.small)
+                        .padding(.trailing, 12).padding(.bottom, 8)
+                    }
+                }
+            }
+        }
+        .background(Color.black.opacity(0.03))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(Color.black.opacity(0.1), lineWidth: 1)
+        )
+    }
+
     // MARK: - Actions
 
     private func cleanTool(_ info: DevToolInfo) {
         guard let action = actionForTool(info) else { return }
-        pending = [action]
-        sheetTitle = "Clean \(info.tool.displayName)?"
-        showSheet = true
+        actionTrigger = DevActionTrigger(
+            title: "Clean \(info.tool.displayName)?",
+            actions: [action],
+            kind: .devTerminal, note: nil)
     }
 
     private func actionForTool(_ info: DevToolInfo) -> (any ShellAction)? {
@@ -452,10 +566,12 @@ struct DeveloperTerminalTab: View {
         isLoading = true
         async let portScan = Task.detached { PortScanner.scan() }.value
         async let toolScan = DevToolScanner.scan()
-        let (p, t) = await (portScan, toolScan)
+        async let snapScan = Task.detached { TimeMachineScanner.listSnapshots() }.value
+        let (p, t, s) = await (portScan, toolScan, snapScan)
         await MainActor.run {
             ports = p
             devTools = t
+            snapshots = s
             isLoading = false
         }
     }
@@ -530,6 +646,9 @@ struct PortInfoSheet: View {
         case .java: .orange
         case .ruby: .red
         case .go: .cyan
+        case .php: .indigo
+        case .dotnet: .purple
+        case .webserver: .teal
         case .docker: .blue
         case .database: .purple
         case .other: .gray
@@ -548,4 +667,15 @@ struct PortInfoSheet: View {
             Spacer()
         }
     }
+}
+
+/// Identifiable trigger for the Dev Terminal action sheet. Using `.sheet(item:)`
+/// avoids the race where `.sheet(isPresented:)` captures stale state — the
+/// "small rounded square window" bug that requires Escape + re-click.
+struct DevActionTrigger: Identifiable {
+    let id = UUID()
+    let title: String
+    let actions: [any ShellAction]
+    let kind: CleanupEntry.Kind
+    let note: String?
 }
