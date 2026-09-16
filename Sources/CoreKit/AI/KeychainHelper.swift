@@ -18,8 +18,15 @@ public enum KeychainHelper {
         let account = provider.rawValue
         let data = Data(key.utf8)
         // Delete any existing item first so `add` doesn't fail with
-        // errSecDuplicateItem when replacing.
-        try? delete(for: provider)
+        // errSecDuplicateItem when replacing. Only swallow "item not found";
+        // re-throw real failures.
+        do {
+            try delete(for: provider)
+        } catch KeychainError.deleteFailed(let status) where status == errSecItemNotFound {
+            // Nothing stored yet — fine.
+        } catch {
+            throw error
+        }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: serviceName,

@@ -57,6 +57,29 @@ public enum Recommendations {
         Set(recs.filter { $0.item.category?.isPreselectable == true }.map { $0.item.id })
     }
 
+    /// The categories that are suggest-only — never auto-recommended, always
+    /// require explicit user opt-in before trashing.
+    public static let suggestOnlyCategories: Set<Category> = [
+        .xcodeArchives, .simulatorDevices, .systemLogs,
+        .groupContainers, .unityLibrary, .androidSystemImages,
+        .appSupport, .bigFiles, .staleScreenshots, .iosBackups,
+    ]
+
+    /// Ranked list of suggest-only items — surfaces large items from
+    /// categories that require the user to review before trashing.
+    /// These are never auto-selected but appear in the flow queue as
+    /// explicit opt-in cards (no safety regression — the user must
+    /// choose them). Items are ranked purely by bytes.
+    public static func suggestOnly(from results: [CategoryResult], limit: Int = 20) -> [Recommendation] {
+        var recs: [Recommendation] = []
+        for result in results where suggestOnlyCategories.contains(result.category) {
+            for item in result.items {
+                recs.append(Recommendation(item: item, reason: .bigFile, score: Double(item.sizeBytes)))
+            }
+        }
+        return recs.sorted { $0.score > $1.score }.prefix(limit).map { $0 }
+    }
+
     private static func reason(for item: ScanItem, in category: Category) -> Recommendation.Reason? {
         switch category {
         case .xcodeDerivedData, .xcodeDeviceSupport, .simulatorCaches,

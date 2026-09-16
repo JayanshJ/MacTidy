@@ -23,6 +23,29 @@ final class AppState {
         didSet { persistExtraAllowedRoots() }
     }
 
+    /// Custom dev roots the user has added in Settings, scanned for build
+    /// artifacts (node_modules, target/, .build/) alongside standard dev roots.
+    var customDevRoots: [URL] {
+        didSet { persistCustomDevRoots() }
+    }
+
+    /// Days after which installers in ~/Downloads and ~/Desktop are considered stale.
+    var installerMinAgeDays: Int {
+        didSet { UserDefaults.standard.set(installerMinAgeDays, forKey: "MacTidy.installerMinAgeDays") }
+    }
+
+    /// Days after which screenshot files on ~/Desktop are considered stale.
+    var screenshotMinAgeDays: Int {
+        didSet { UserDefaults.standard.set(screenshotMinAgeDays, forKey: "MacTidy.screenshotMinAgeDays") }
+    }
+
+    /// Cached AI batch verdicts keyed by item UUID, persisted across tab switches (IMP-15).
+    var batchVerdicts: [UUID: BatchVerdict] = [:]
+    var batchVerdictsCategory: CoreKit.Category?
+
+    /// The date of the most recent category scan (IMP-10).
+    var lastScanDate: Date?
+
     /// Rescan the cleanup categories automatically when the app launches.
     var autoScanOnLaunch: Bool {
         didSet { UserDefaults.standard.set(autoScanOnLaunch, forKey: "MacTidy.autoScanOnLaunch") }
@@ -145,9 +168,15 @@ final class AppState {
         self.lastScanURL = support.appending(path: "last-scan.json")
         self.schedules = scheduleStore.load()
         self.extraAllowedRoots = Self.loadExtraAllowedRoots()
+        self.customDevRoots = Self.loadCustomDevRoots()
         self.autoScanOnLaunch = UserDefaults.standard.object(forKey: "MacTidy.autoScanOnLaunch") as? Bool ?? false
         self.logRetentionDays = UserDefaults.standard.object(forKey: "MacTidy.logRetentionDays") as? Int ?? 0
+        self.installerMinAgeDays = UserDefaults.standard.object(forKey: "MacTidy.installerMinAgeDays") as? Int ?? 30
+        self.screenshotMinAgeDays = UserDefaults.standard.object(forKey: "MacTidy.screenshotMinAgeDays") as? Int ?? 30
         self.aiConfig = Self.loadAIConfig()
+        if let ts = UserDefaults.standard.object(forKey: "MacTidy.lastScanDate") as? Double {
+            self.lastScanDate = Date(timeIntervalSince1970: ts)
+        }
 
         // Restore persisted state so relaunch isn't a blank screen + full rescan.
         self.recentTrashed = trashLog.load()
@@ -177,18 +206,16 @@ final class AppState {
         scanTask?.cancel()
         isScanningCategories = true
         scanProgress = "Starting…"
-        scanTotal = Category.allCases.count
+        scanTotal = CoreKit.Category.allCases.count
         scanCompleted = 0
+        let scanner = makeCategoryScanner()
         let task = Task {
-            let scanner = CategoryScanner()
-            var completed = 0
             let results = await scanner.scanAll(
                 progress: { category in
                     Task { @MainActor in self.scanProgress = "Scanning \(category.displayName)…" }
                 },
                 completed: { _ in
-                    completed += 1
-                    Task { @MainActor in self.scanCompleted = completed }
+                    Task { @MainActor in self.scanCompleted += 1 }
                 }
             )
             if Task.isCancelled {
@@ -201,6 +228,8 @@ final class AppState {
                 scanProgress = ""
                 scanCompleted = scanTotal
                 scanStatus = "Last scan: \(Date.now.formatted(date: .omitted, time: .shortened))"
+                lastScanDate = Date.now
+                UserDefaults.standard.set(Date.now.timeIntervalSince1970, forKey: "MacTidy.lastScanDate")
                 persistLastScan(results)
                 let snapshot = ScanSnapshot(
                     reclaimableBytes: results.reduce(0) { $0 + $1.totalBytes },
@@ -324,6 +353,16 @@ final class AppState {
                 items: [rec.item],
                 title: rec.item.url.lastPathComponent,
                 why: why(for: rec),
+                icon: icon(for: rec)
+            ))
+        }
+
+        let suggestRecs = Recommendations.suggestOnly(from: categoryResults, limit: 20)
+        for rec in suggestRecs where !flowSkipped.contains(rec.item.id.uuidString) {
+            queue.append(.trash(
+                items: [rec.item],
+                title: rec.item.url.lastPathComponent,
+                why: "⚠️ Suggest-only — " + why(for: rec),
                 icon: icon(for: rec)
             ))
         }
@@ -477,7 +516,7 @@ final class AppState {
         // Re-read from disk in case a Settings edit landed since init.
         let jobs = scheduleStore.load()
         guard !jobs.isEmpty else { return nil }
-        let scanner = CategoryScanner()
+        let scanner = makeCategoryScanner()
         let executor = DeletionExecutor(
             policy: SafePathPolicy(extraAllowedRoots: extraAllowedRoots)
         )
@@ -485,15 +524,15 @@ final class AppState {
             jobs: jobs,
             now: now,
             scan: { categories in
-                // Scan the requested categories in parallel — the old code
-                // scanned them sequentially, which was slow for multi-category
-                // scheduled jobs.
-                await withTaskGroup(of: CategoryResult.self) { group in
-                    for category in Category.allCases where categories.contains(category) {
+                // Scan the requested categories in parallel with a shared dev-roots cache.
+                let devRootsCache = await scanner.precomputeDevRootsCache()
+                return await withTaskGroup(of: CategoryResult.self) { group in
+                    for category in CoreKit.Category.allCases where categories.contains(category) {
                         if Task.isCancelled { break }
+                        let cacheRef = devRootsCache
                         group.addTask {
                             if Task.isCancelled { return CategoryResult(category: category, items: []) }
-                            return await scanner.scan(category)
+                            return await scanner.scan(category, devRootsCache: cacheRef)
                         }
                     }
                     var results: [CategoryResult] = []
@@ -888,5 +927,37 @@ final class AppState {
 
     func removeExtraAllowedRoot(_ url: URL) {
         extraAllowedRoots.removeAll { $0 == url.resolvingSymlinksInPath() }
+    }
+
+    // MARK: - Custom dev roots persistence
+
+    private static let customDevRootsKey = "MacTidy.customDevRoots"
+
+    private func persistCustomDevRoots() {
+        let paths = customDevRoots.map(\.path)
+        UserDefaults.standard.set(paths, forKey: Self.customDevRootsKey)
+    }
+
+    private static func loadCustomDevRoots() -> [URL] {
+        let paths = UserDefaults.standard.stringArray(forKey: customDevRootsKey) ?? []
+        return paths.map { URL(fileURLWithPath: $0) }
+    }
+
+    func addCustomDevRoot(_ url: URL) {
+        let resolved = url.resolvingSymlinksInPath()
+        guard !customDevRoots.contains(where: { $0 == resolved }) else { return }
+        customDevRoots.append(resolved)
+    }
+
+    func removeCustomDevRoot(_ url: URL) {
+        customDevRoots.removeAll { $0 == url.resolvingSymlinksInPath() }
+    }
+
+    func makeCategoryScanner() -> CategoryScanner {
+        CategoryScanner(
+            devRoots: CategoryScanner.defaultDevRoots + customDevRoots,
+            installerMinAgeDays: installerMinAgeDays,
+            screenshotMinAgeDays: screenshotMinAgeDays
+        )
     }
 }

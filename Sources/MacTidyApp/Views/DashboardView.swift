@@ -14,10 +14,7 @@ struct DashboardView: View {
     @State private var sheetPlanIsCleanAll = false
     @State private var selection = Set<UUID>()
     @State private var showNodeInspector = false
-    /// Per-item AI batch verdicts keyed by `ScanItem.id`, populated by the
-    /// "Review with AI" button on the category drill-in header. Rendered inline
-    /// on `ScanItemRow` — no new popup surface.
-    @State private var batchVerdicts: [UUID: BatchVerdict] = [:]
+    @State private var safeCache: (items: [ScanItem], bytes: Int64) = ([], 0)
     @State private var reviewAll = false
     /// Surfaces why a "Review with AI" batch pass failed, so it isn't a silent
     /// no-op (spinner stops, nothing renders). Mirrors CategoryCleanupView.
@@ -89,6 +86,14 @@ struct DashboardView: View {
         .sheet(isPresented: $showNodeInspector) {
             NodePackagesInspector()
         }
+        .onChange(of: state.categoryResults) { _, results in
+            let items = results.filter { $0.category.isPreselectable }.flatMap(\.items)
+            safeCache = (items, items.reduce(0) { $0 + $1.sizeBytes })
+        }
+        .onAppear {
+            let items = state.categoryResults.filter { $0.category.isPreselectable }.flatMap(\.items)
+            safeCache = (items, items.reduce(0) { $0 + $1.sizeBytes })
+        }
     }
 
     /// Segmented tab bar with icons + labels, teal-tinted selection.
@@ -111,7 +116,6 @@ struct DashboardView: View {
                 tab = t
                 drilledCategory = nil
                 selection.removeAll()
-                batchVerdicts.removeAll()
                 reviewError = nil
             }
         } label: {
@@ -126,6 +130,9 @@ struct DashboardView: View {
                 )
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(t.rawValue)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityHint(selected ? "Currently selected" : "")
     }
 
     @ViewBuilder
@@ -195,6 +202,18 @@ struct DashboardView: View {
                 .foregroundStyle(Theme.accent)
             Text("reclaimable")
                 .font(.title3).foregroundStyle(.secondary)
+            if let date = state.lastScanDate {
+                let age = Date.now.timeIntervalSince(date)
+                let label = age < 60 ? "Just now"
+                            : age < 3600 ? "\(Int(age / 60))m ago"
+                            : age < 86400 ? "\(Int(age / 3600))h ago"
+                            : "\(Int(age / 86400))d ago"
+                let isStale = age > 86400
+                Label(label, systemImage: "clock")
+                    .font(.caption)
+                    .foregroundStyle(isStale ? Color.orange : Color.secondary)
+                    .help(isStale ? "Scan results are over 24 hours old — rescan for accurate numbers." : "")
+            }
             Spacer()
             Button { Task { await state.rescanCategories() } } label: {
                 Label("Rescan", systemImage: "arrow.clockwise")
@@ -231,16 +250,13 @@ struct DashboardView: View {
     /// `isPreselectable` categories. Suggest-only categories (Downloads,
     /// large files, app support, device backups) are deliberately excluded
     /// so one click never trashes something the user should review first.
-    /// The plan still flows through SafePathPolicy + Trasher, so per-item
-    /// safety is enforced on top of this.
+    /// Cached to avoid redundant traversals on every redraw.
     private var allSafeItems: [ScanItem] {
-        state.categoryResults
-            .filter { $0.category.isPreselectable }
-            .flatMap(\.items)
+        safeCache.items
     }
 
     private var allSafeBytes: Int64 {
-        allSafeItems.reduce(0) { $0 + $1.sizeBytes }
+        safeCache.bytes
     }
 
     private func categoryCard(_ result: CategoryResult) -> some View {
@@ -285,7 +301,6 @@ struct DashboardView: View {
             HStack {
                 Button {
                     withAnimation(.snappy) { drilledCategory = nil }
-                    batchVerdicts.removeAll()
                     reviewError = nil
                 } label: {
                     Label("Categories", systemImage: "chevron.left")
@@ -372,7 +387,7 @@ struct DashboardView: View {
             ForEach(groups, id: \.key) { projectName, groupItems in
                 Section {
                     ForEach(groupItems.sorted { $0.sizeBytes > $1.sizeBytes }) { item in
-                        ScanItemRow(item: item, selection: $selection, batchVerdict: batchVerdicts[item.id])
+                        ScanItemRow(item: item, selection: $selection, batchVerdict: state.batchVerdicts[item.id])
                     }
                 } header: {
                     HStack {
@@ -408,7 +423,7 @@ struct DashboardView: View {
                     Text("Nothing found").foregroundStyle(.tertiary)
                 }
                 ForEach(items) { item in
-                    ScanItemRow(item: item, selection: $selection, batchVerdict: batchVerdicts[item.id])
+                    ScanItemRow(item: item, selection: $selection, batchVerdict: state.batchVerdicts[item.id])
                 }
             } footer: {
                 Text(category.explanation)
@@ -430,7 +445,8 @@ struct DashboardView: View {
             let verdicts = try await state.explainBatchThrowing(items: items)
             var map: [UUID: BatchVerdict] = [:]
             for v in verdicts { map[v.id] = v }
-            batchVerdicts = map
+            state.batchVerdicts = map
+            state.batchVerdictsCategory = drilledCategory
             if verdicts.isEmpty {
                 reviewError = "The model returned no verdicts."
             } else if verdicts.allSatisfy({ $0.verdict == nil && $0.summary.isEmpty }) {
@@ -438,7 +454,8 @@ struct DashboardView: View {
             }
         } catch {
             reviewError = error.localizedDescription
-            batchVerdicts = [:]
+            state.batchVerdicts = [:]
+            state.batchVerdictsCategory = nil
         }
     }
 

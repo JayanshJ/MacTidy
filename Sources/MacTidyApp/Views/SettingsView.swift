@@ -7,6 +7,8 @@ struct SettingsView: View {
     @Environment(AppState.self) private var state
     @Environment(\.dismiss) private var dismiss
     @State private var showRootPicker = false
+    @State private var showDevRootPicker = false
+    @State private var showCleanupHistory = false
     @State private var apiKeyInput = ""
     @State private var keyStatus: String?
     @State private var keyStatusGood = false
@@ -92,10 +94,40 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section {
+                ForEach(state.customDevRoots, id: \.self) { root in
+                    HStack {
+                        Image(systemName: "folder.badge.gearshape").foregroundStyle(.secondary)
+                        Text(root.path).lineLimit(1).truncationMode(.head)
+                        Spacer()
+                        Button(role: .destructive) {
+                            state.removeCustomDevRoot(root)
+                        } label: {
+                            Image(systemName: "minus.circle")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Remove from dev folders")
+                    }
+                }
+                Button {
+                    showDevRootPicker = true
+                } label: {
+                    Label("Add Folder…", systemImage: "plus")
+                }
+            } header: {
+                Text("Developer folders")
+            } footer: {
+                Text("MacTidy scans these folders for build artifacts, node_modules, Rust targets, etc. Add any folder where you keep code.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Scanning") {
                 @Bindable var state = state
                 Toggle("Scan automatically on launch", isOn: $state.autoScanOnLaunch)
                     .help("Run a category scan when the app opens, if nothing is cached.")
+                Stepper("Old installers cutoff: \(state.installerMinAgeDays) days", value: $state.installerMinAgeDays, in: 7...365, step: 7)
+                Stepper("Stale screenshots cutoff: \(state.screenshotMinAgeDays) days", value: $state.screenshotMinAgeDays, in: 7...365, step: 7)
             }
 
             UpdateSettingsSection()
@@ -122,7 +154,7 @@ struct SettingsView: View {
             } header: {
                 Text("Menu bar & alerts")
             } footer: {
-                Text("MacTidy keeps a menu bar icon with a live quick check. The quick check covers fast categories (caches, DerivedData, old installers) — open the app for the full scan.")
+                Text("MacTidy keeps a menu bar icon with a live quick check. The quick check covers fast categories (user caches, DerivedData, old installers, crash reports, HTTP storage) — open the app for the full scan.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -257,8 +289,13 @@ struct SettingsView: View {
                     Text("90 days").tag(90)
                     Text("1 year").tag(365)
                 }
+                Button {
+                    showCleanupHistory = true
+                } label: {
+                    Label("View Cleanup History…", systemImage: "clock.arrow.circlepath")
+                }
             } header: {
-                Text("Log retention")
+                Text("Log retention & history")
             } footer: {
                 Text("Old entries are pruned from the Recently Trashed list and reclaim history. Trashed items themselves stay in the Trash until you empty it.")
                     .font(.caption)
@@ -276,6 +313,17 @@ struct SettingsView: View {
                 state.addExtraAllowedRoot(url)
             }
         }
+        .fileImporter(
+            isPresented: $showDevRootPicker,
+            allowedContentTypes: [.folder]
+        ) { result in
+            if case .success(let url) = result {
+                state.addCustomDevRoot(url)
+            }
+        }
+        .sheet(isPresented: $showCleanupHistory) {
+            CleanupHistoryView()
+        }
         }
         .frame(minWidth: 480, idealWidth: 560, minHeight: 520, idealHeight: 640)
         .onAppear {
@@ -288,14 +336,6 @@ struct SettingsView: View {
             revealKey = false
             refreshStoredKeyStatus()
         }
-    }
-
-    private var bundledAppIcon: NSImage? {
-        let bundle = Bundle.main
-        let url = bundle.url(forResource: "AppIcon", withExtension: "icns")
-            ?? bundle.url(forResource: "AppIcon", withExtension: "png")
-        guard let url else { return nil }
-        return NSImage(contentsOf: url)
     }
 
     // MARK: - Scheduled cleanup

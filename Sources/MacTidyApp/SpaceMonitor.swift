@@ -19,6 +19,7 @@ final class SpaceMonitor {
     static let fastCategories: [CoreKit.Category] = [
         .oldInstallers, .xcodeDerivedData, .xcodeDeviceSupport,
         .simulatorCaches, .homebrewCache,
+        .userCaches, .crashReports, .savedAppState, .httpStorages,
     ]
 
     static let intervalHours: Int = 6
@@ -88,12 +89,18 @@ final class SpaceMonitor {
         defer { isChecking = false }
 
         let scanner = CategoryScanner()
-        var results: [CategoryResult] = []
-        for category in Self.fastCategories {
-            if Task.isCancelled { return }
-            let result = await scanner.scan(category)
-            if !result.items.isEmpty { results.append(result) }
+        let results: [CategoryResult] = await withTaskGroup(of: CategoryResult.self) { group in
+            for category in Self.fastCategories {
+                guard !Task.isCancelled else { break }
+                group.addTask { await scanner.scan(category) }
+            }
+            var collected: [CategoryResult] = []
+            for await result in group where !result.items.isEmpty {
+                collected.append(result)
+            }
+            return collected
         }
+        guard !Task.isCancelled else { return }
         let total = results.reduce(0) { $0 + $1.totalBytes }
         latestResults = results.sorted { $0.totalBytes > $1.totalBytes }
         reclaimableBytes = total

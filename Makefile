@@ -52,6 +52,11 @@ clean:
 # app, zips it as MacTidy.app.zip (the asset name UpdateChecker looks for),
 # and creates a release tagged vX.Y from the version in Info.plist.
 #
+# IMPORTANT: uses `ditto -c -k` (not `zip`) so that AppleDouble resource forks
+# and extended attributes are preserved. The updater extracts with `ditto -x -k`
+# and then runs `codesign -v`; a zip built with plain `zip -r` loses these
+# attributes and the signature check fails ("sealed resource missing/invalid").
+#
 #   make release                # uses the version in Support/Info.plist
 #   make release NOTES=path     # attach release notes from a file
 #
@@ -64,7 +69,7 @@ release: app
 	TAG="v$$V"; \
 	echo "Releasing $$TAG to $$GH_REPO…"; \
 	rm -f $(ZIP); \
-	cd dist && zip -r -q MacTidy.app.zip MacTidy.app && cd ..; \
+	ditto -c -k --keepParent dist/MacTidy.app $(ZIP); \
 	if [ -n "$(NOTES)" ] && [ -f "$(NOTES)" ]; then \
 	  gh release create "$$TAG" $(ZIP) --repo $$GH_REPO --title "MacTidy $$V" -F "$(NOTES)"; \
 	else \

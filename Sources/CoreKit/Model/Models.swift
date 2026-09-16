@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// A curated cleanup category. Categories marked `isPreselectable == false`
 /// are suggest-only: build artifacts of possibly-active projects that the
@@ -125,7 +126,7 @@ public enum Category: String, CaseIterable, Codable, Sendable, Identifiable {
         case .staleScreenshots:
             "Screenshot files on your Desktop older than 30 days. Suggest-only: these are your files, not regenerable — review before trashing."
         case .oldInstallers:
-            "Disk images and installer packages in ~/Downloads you probably already installed."
+            "Disk images and installer packages in ~/Downloads and ~/Desktop you probably already installed."
         case .iosBackups:
             "Local iPhone/iPad backups from Finder syncing. Suggest-only: make sure the device is backed up elsewhere (or no longer yours) first."
         case .devCaches:
@@ -178,6 +179,7 @@ public struct ScanItem: Identifiable, Hashable, Sendable, Codable {
     public let lastModified: Date?
 
     public init(
+        id: UUID? = nil,
         url: URL,
         sizeBytes: Int64,
         isDirectory: Bool,
@@ -185,13 +187,31 @@ public struct ScanItem: Identifiable, Hashable, Sendable, Codable {
         detail: String? = nil,
         lastModified: Date? = nil
     ) {
-        self.id = UUID()
+        self.id = id ?? ScanItem.deterministicID(for: url)
         self.url = url
         self.sizeBytes = sizeBytes
         self.isDirectory = isDirectory
         self.category = category
         self.detail = detail
         self.lastModified = lastModified
+    }
+
+    /// Returns a deterministic UUID derived from the symlink-resolved canonical
+    /// path. Using UUID v5 semantics (SHA-1 name-based) so the same file
+    /// always produces the same ID across rescans — enables stable skip-
+    /// suppression and AI verdict caching.
+    public static func deterministicID(for url: URL) -> UUID {
+        let canonical = url.resolvingSymlinksInPath().standardizedFileURL.path
+        let data = Data(canonical.utf8)
+        let hash = Insecure.SHA1.hash(data: data)
+        var b = Array(hash.prefix(16))
+        // Version 5 (SHA-1), variant RFC 4122.
+        b[6] = (b[6] & 0x0F) | 0x50
+        b[8] = (b[8] & 0x3F) | 0x80
+        return UUID(uuid: (b[0],  b[1],  b[2],  b[3],
+                           b[4],  b[5],  b[6],  b[7],
+                           b[8],  b[9],  b[10], b[11],
+                           b[12], b[13], b[14], b[15]))
     }
 
     /// Codable with a stable key list so persisted scans survive enum reorders.
