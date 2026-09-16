@@ -67,12 +67,12 @@ release: app
 	@command -v gh >/dev/null 2>&1 || { echo "gh CLI not found — install from https://cli.github.com and run 'gh auth login'."; exit 1; }
 	@V=$$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Support/Info.plist); \
 	TAG="v$$V"; \
-	echo "Releasing $$TAG to $$GH_REPO…"; \
+	echo "Releasing $$TAG to $(GH_REPO)…"; \
 	rm -f $(ZIP); \
 	ditto -c -k --keepParent dist/MacTidy.app $(ZIP); \
 	if [ -n "$(NOTES)" ] && [ -f "$(NOTES)" ]; then \
-	  gh release create "$$TAG" $(ZIP) --repo $$GH_REPO --title "MacTidy $$V" -F "$(NOTES)"; \
+	  gh release create "$$TAG" $(ZIP) --repo $(GH_REPO) --title "MacTidy $$V" -F "$(NOTES)"; \
 	else \
-	  gh release create "$$TAG" $(ZIP) --repo $$GH_REPO --title "MacTidy $$V" --generate-notes; \
+	  gh release create "$$TAG" $(ZIP) --repo $(GH_REPO) --title "MacTidy $$V" --generate-notes; \
 	fi
 	@echo "Released v$$V. The in-app updater will pick it up on the next check."
