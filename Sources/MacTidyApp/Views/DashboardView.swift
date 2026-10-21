@@ -87,11 +87,11 @@ struct DashboardView: View {
             NodePackagesInspector()
         }
         .onChange(of: state.categoryResults) { _, results in
-            let items = results.filter { $0.category.isPreselectable }.flatMap(\.items)
+            let items = results.flatMap(\.items).filter(\.isPreselectable)
             safeCache = (items, items.reduce(0) { $0 + $1.sizeBytes })
         }
         .onAppear {
-            let items = state.categoryResults.filter { $0.category.isPreselectable }.flatMap(\.items)
+            let items = state.categoryResults.flatMap(\.items).filter(\.isPreselectable)
             safeCache = (items, items.reduce(0) { $0 + $1.sizeBytes })
         }
     }

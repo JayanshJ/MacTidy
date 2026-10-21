@@ -462,10 +462,13 @@ struct CategoryScannerTests {
                                withIntermediateDirectories: true)
         try Data(count: 50_000).write(to: home.appending(path: ".ollama/models/manifests/llama3"))
 
-        let result = await CategoryScanner(home: home).scan(.devCaches)
-        let labels = Set(result.items.compactMap(\.detail))
-        #expect(labels.contains("CocoaPods cache"))
-        #expect(labels.contains("Ollama models"))
+        let dev = await CategoryScanner(home: home).scan(.devCaches)
+        #expect(dev.items.compactMap(\.detail).contains("CocoaPods cache"))
+        // Ollama moved to AI agents, marked Caution (re-pull is slow).
+        let ai = await CategoryScanner(home: home).scan(.aiAgents)
+        let ollama = try #require(ai.items.first { $0.url.lastPathComponent == "models" })
+        #expect(ollama.risk == .caution)
+        #expect(!ollama.isPreselectable)
     }
 
     @Test func devCachesFindsColimaAndLima() async throws {
@@ -481,9 +484,9 @@ struct CategoryScannerTests {
         try Data(count: 80_000).write(to: home.appending(path: ".lima/default/disk.img"))
 
         let result = await CategoryScanner(home: home).scan(.devCaches)
-        let labels = Set(result.items.compactMap(\.detail))
-        #expect(labels.contains("Colima VM disk"))
-        #expect(labels.contains("Lima VM disk"))
+        #expect(result.items.count == 2)
+        // VM disks hold every container and image: listed, never preselected.
+        #expect(result.items.allSatisfy { $0.risk == .danger && !$0.isPreselectable })
     }
 
     @Test func devCachesFindsVSCodeExtensions() async throws {

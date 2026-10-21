@@ -10,7 +10,12 @@ public enum DeterministicInsights {
         var insights: [Insight] = []
 
         // 1. Biggest safe disk category — the headline reclaim.
-        let safe = snapshot.categories.filter { $0.category.isPreselectable && !$0.items.isEmpty }
+        // Per-item gate: Caution/Danger registry items (VM disks, models) never
+        // ride along in a "safe to clear" action.
+        let safe = snapshot.categories
+            .filter { $0.category.isPreselectable }
+            .map { CategoryResult(category: $0.category, items: $0.items.filter { $0.risk == .safe }) }
+            .filter { !$0.items.isEmpty }
         if let biggest = safe.max(by: { $0.totalBytes < $1.totalBytes }), biggest.totalBytes > 100 * 1024 * 1024 {
             insights.append(Insight(
                 kind: .disk,

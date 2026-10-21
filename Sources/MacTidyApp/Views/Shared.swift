@@ -60,8 +60,15 @@ struct ScanItemRow: View {
             .labelsHidden()
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(item.url.lastPathComponent)
-                    .lineLimit(1)
+                HStack(spacing: Theme.Spacing.xs) {
+                    Text(item.url.lastPathComponent)
+                        .lineLimit(1)
+                    if item.risk != .safe {
+                        Badge(text: item.risk.label,
+                              tint: item.risk == .danger ? Theme.Status.blocked : Theme.Status.caution)
+                            .help("Never preselected. \(item.detail ?? "")")
+                    }
+                }
                 if let subtitle {
                     Text(subtitle)
                         .font(.caption)

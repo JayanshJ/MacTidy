@@ -16,9 +16,11 @@ public struct SafePathPolicy: Sendable {
         case criticalDirectory(String)
         case protectedUserFolder(String)
         case outsideAllowedRoots(String)
+        case credentialPath(String)
 
         public var description: String {
             switch self {
+            case .credentialPath(let p): "Refusing to touch credentials or settings, or a folder holding them: \(p)"
             case .deniedSystemPath(let p): "Refusing to touch system path: \(p)"
             case .criticalDirectory(let p): "Refusing to delete critical directory itself: \(p)"
             case .protectedUserFolder(let p): "Refusing to touch protected personal folder: \(p)"
@@ -39,7 +41,11 @@ public struct SafePathPolicy: Sendable {
     ) {
         self.home = home
         self.extraAllowedRoots = extraAllowedRoots
+        self.secrets = Self.credentialPaths.map { Self.canonical(home.appending(path: $0)) }
     }
+
+    /// `credentialPaths` resolved against `home`, symlinks followed, once.
+    private let secrets: [String]
 
     /// Validates every URL and throws on the first violation. Use this when
     /// you want strict all-or-nothing semantics (e.g. a single atomic
@@ -89,6 +95,15 @@ public struct SafePathPolicy: Sendable {
         ]
         if critical.contains(path) { return .failure(.criticalDirectory(path)) }
 
+        // 2b. Credentials and agent settings. Also denies any *ancestor*, so
+        //     trashing ~/.claude or ~/.ssh wholesale is impossible. Secrets are
+        //     symlink-resolved too (dotfile managers link them elsewhere).
+        //     Checked before user-picked roots: nothing overrides this.
+        for secret in secrets
+        where Self.path(path, isSameOrUnder: secret) || secret.hasPrefix(path + "/") {
+            return .failure(.credentialPath(path))
+        }
+
         // 3. User-picked roots unlock personal folders (duplicate finder),
         //    checked after the denylist so they can't unlock system paths.
         if extras.contains(where: { Self.path(path, isSameOrUnder: $0) }) {
@@ -108,6 +123,20 @@ public struct SafePathPolicy: Sendable {
         }
         return .success(url)
     }
+
+    /// Home-relative files and folders holding logins, keys, tokens or agent
+    /// settings. Losing one means re-authenticating or re-configuring, and a
+    /// trashed key is one Finder "Empty Trash" away from gone.
+    static let credentialPaths = [
+        ".ssh", ".gnupg", ".aws", ".netrc", ".git-credentials", ".npmrc",
+        ".docker/config.json", ".kube/config", ".config/gh",
+        "Library/Keychains",
+        ".claude.json", ".claude/.credentials.json",
+        ".claude/settings.json", ".claude/settings.local.json",
+        ".codex/auth.json", ".codex/config.toml",
+        ".gemini/oauth_creds.json", ".gemini/settings.json",
+        ".cache/huggingface/token",
+    ]
 
     /// Symlink-resolved, standardized absolute path. Resolving first means a
     /// symlink at an allowed location pointing somewhere protected is judged

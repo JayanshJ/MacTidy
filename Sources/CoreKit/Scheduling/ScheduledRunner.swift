@@ -54,6 +54,9 @@ public enum ScheduledRunner {
         // so filter to be precise.
         let items = results.filter { categories.contains($0.category) }
             .flatMap(\.items)
+            // Per-item gate: a safe category can still hold Caution/Danger
+            // registry items (VM disks, models); automated runs never touch them.
+            .filter(\.isPreselectable)
 
         let plan = DeletionPlan(items: items)
         let outcome = executor.execute(plan)

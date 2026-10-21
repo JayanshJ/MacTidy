@@ -82,6 +82,27 @@ bypass the policy, never call `removeItem`, never `rm`. The one exception is
 `LaunchItemsAuditor`'s system-domain disable/restore, which moves plists (not
 user data) via an `osascript` admin prompt — see below.
 
+### Cleanup source registry
+
+`Sources/CoreKit/Model/CleanSource.swift` is the declarative table behind
+the `devCaches` and `aiAgents` categories: home-relative path, category,
+`Risk` (`safe` / `caution` / `danger`), and `whole` vs per-`children`
+listing. Adding a home-rooted cache is one line there. Item-level gating:
+`ScanItem.isPreselectable` = category preselectable **and** item risk
+`.safe`. Bulk "select safe", scheduled runs, auto-selected recommendations
+and the "safe to clear" insight all use it, so Caution/Danger items (VM
+disks, models, transcripts, worktrees, installed plugins) are listed but
+never preselected. Tests enforce: every source passes `SafePathPolicy`,
+paths are unique, and a source may only nest inside a `.children` source
+(children owned by another source are skipped, so bytes never double-count).
+
+`SafePathPolicy.credentialPaths` is a hard denylist (SSH/GPG/AWS keys,
+`gh` tokens, `~/.claude.json`, Claude/Codex/Gemini auth and settings, the
+Hugging Face token…). It also denies every **ancestor** of a secret, so
+`~/.claude` or `~/.ssh` can never be trashed wholesale, and it resolves
+symlinks so dotfile-managed secrets are protected at their target. Checked
+before user-picked roots; nothing overrides it.
+
 ### Scanning (read-only)
 
 `Sources/CoreKit/Scanning/`: `DiskScanner` (shared engine, `.totalFileAllocatedSize`

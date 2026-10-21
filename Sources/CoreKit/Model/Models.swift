@@ -30,6 +30,7 @@ public enum Category: String, CaseIterable, Codable, Sendable, Identifiable {
     case oldInstallers
     case iosBackups
     case devCaches
+    case aiAgents
     case appSupport
     case bigFiles
     case simulatorDevices
@@ -68,6 +69,7 @@ public enum Category: String, CaseIterable, Codable, Sendable, Identifiable {
         case .oldInstallers: "Old installers"
         case .iosBackups: "iOS device backups"
         case .devCaches: "Developer tool caches"
+        case .aiAgents: "AI coding agents"
         case .appSupport: "Application Support hoarders"
         case .bigFiles: "Large files"
         case .simulatorDevices: "Simulator devices"
@@ -130,7 +132,9 @@ public enum Category: String, CaseIterable, Codable, Sendable, Identifiable {
         case .iosBackups:
             "Local iPhone/iPad backups from Finder syncing. Suggest-only: make sure the device is backed up elsewhere (or no longer yours) first."
         case .devCaches:
-            "npm, pnpm, Cargo, Gradle, Go, Maven, Yarn, Terraform, sbt, CocoaPods, Ollama, VS Code, Colima, and Lima caches outside ~/Library/Caches. All re-download on demand."
+            "npm, pnpm, Cargo, Gradle, Go, Maven, Yarn, Terraform, sbt, CocoaPods, VS Code, Colima, and Lima caches outside ~/Library/Caches. Caches re-download on demand; VM disks and extensions are marked and never preselected."
+        case .aiAgents:
+            "Claude Code, Codex, Cursor, Gemini, Continue and Aider logs, transcripts, worktrees and plugins, plus local model stores (Ollama, Hugging Face, LM Studio). Only logs and caches are preselected; transcripts, worktrees, plugins and models are marked Caution. Credentials and settings are never touched."
         case .appSupport:
             "Per-app data folders in ~/Library/Application Support, largest first. Suggest-only: these hold real app state (config, databases, messages); trashing resets the app, so check what each is before deleting."
         case .bigFiles:

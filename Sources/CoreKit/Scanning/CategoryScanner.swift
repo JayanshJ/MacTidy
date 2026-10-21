@@ -134,8 +134,8 @@ public struct CategoryScanner: Sendable {
             items = oldInstallers()
         case .iosBackups:
             items = await iosBackups()
-        case .devCaches:
-            items = await devCaches()
+        case .devCaches, .aiAgents:
+            items = await registryItems(category)
         case .appSupport:
             items = await appSupportHoarders()
         case .bigFiles:

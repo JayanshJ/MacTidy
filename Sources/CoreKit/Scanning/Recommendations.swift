@@ -54,7 +54,7 @@ public enum Recommendations {
     /// preselectable categories. Suggest-only items are surfaced but require
     /// the user to opt in.
     public static func autoSelectableIDs(from recs: [Recommendation]) -> Set<UUID> {
-        Set(recs.filter { $0.item.category?.isPreselectable == true }.map { $0.item.id })
+        Set(recs.filter { $0.item.isPreselectable }.map { $0.item.id })
     }
 
     /// The categories that are suggest-only — never auto-recommended, always
@@ -69,11 +69,13 @@ public enum Recommendations {
     /// categories that require the user to review before trashing.
     /// These are never auto-selected but appear in the flow queue as
     /// explicit opt-in cards (no safety regression — the user must
-    /// choose them). Items are ranked purely by bytes.
+    /// choose them). Items are ranked purely by bytes. Caution/Danger
+    /// registry items (models, transcripts, VM disks) land here too.
     public static func suggestOnly(from results: [CategoryResult], limit: Int = 20) -> [Recommendation] {
         var recs: [Recommendation] = []
-        for result in results where suggestOnlyCategories.contains(result.category) {
-            for item in result.items {
+        for result in results {
+            for item in result.items
+            where suggestOnlyCategories.contains(result.category) || item.risk != .safe {
                 recs.append(Recommendation(item: item, reason: .bigFile, score: Double(item.sizeBytes)))
             }
         }
@@ -81,9 +83,11 @@ public enum Recommendations {
     }
 
     private static func reason(for item: ScanItem, in category: Category) -> Recommendation.Reason? {
-        switch category {
+        // Caution/Danger registry items are surfaced by suggestOnly, never here.
+        guard item.risk == .safe else { return nil }
+        return switch category {
         case .xcodeDerivedData, .xcodeDeviceSupport, .simulatorCaches,
-             .simulatorRuntimes, .userCaches, .homebrewCache, .devCaches,
+             .simulatorRuntimes, .userCaches, .homebrewCache, .devCaches, .aiAgents,
              .jsBuildDirs, .containerCaches, .mailDownloads:
             .safeCache
         case .oldInstallers: .staleInstaller

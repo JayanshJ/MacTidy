@@ -70,8 +70,8 @@ struct CategoryCleanupView: View {
                     Button("Select All Safe") {
                         selection = Set(
                             state.categoryResults
-                                .filter(\.category.isPreselectable)
                                 .flatMap(\.items)
+                                .filter(\.isPreselectable)
                                 .map(\.id)
                         )
                     }
