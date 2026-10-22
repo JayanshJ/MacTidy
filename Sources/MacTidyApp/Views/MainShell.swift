@@ -256,6 +256,7 @@ struct OverviewView: View {
                 hero(safeBytes: safeBytes, safeCount: safe.count, reviewBytes: reviewBytes)
                 if let pressure, pressure.isAvailable { capacity(pressure, safe: safeBytes, review: reviewBytes) }
                 if state.trashBytes >= TrashNudgeCard.threshold { TrashNudgeCard() }
+                growing
                 if !ranked.isEmpty { breakdown(ranked) }
                 footerStat
             }
@@ -345,6 +346,41 @@ struct OverviewView: View {
                 Spacer()
                 Text("\(p.totalBytes.formattedBytes) disk")
                     .font(Theme.Font.caption).foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    /// Categories that grew since a scan at least a day older.
+    @ViewBuilder
+    private var growing: some View {
+        let growth = ScanHistory.growers(in: state.scanHistory)
+        if !growth.isEmpty {
+            SurfaceSection("Growing", footer: "Compared with your scan from \(growth[0].since.formatted(.relative(presentation: .named))).") {
+                ForEach(Array(growth.enumerated()), id: \.element.id) { index, g in
+                    if index > 0 { RowDivider(inset: 48) }
+                    Button {
+                        state.section = .cleanup
+                        state.drilledCategory = g.category
+                    } label: {
+                        HStack(spacing: Theme.Spacing.md) {
+                            Image(systemName: g.category.symbol)
+                                .font(.system(size: 14)).foregroundStyle(.secondary).frame(width: 20)
+                            Text(g.category.displayName).font(Theme.Font.bodyStrong)
+                            Spacer()
+                            Text("+\(g.delta.formattedBytes)")
+                                .font(Theme.Font.bodyStrong.monospacedDigit())
+                                .foregroundStyle(Theme.Status.caution)
+                            Text("now \(g.current.formattedBytes)")
+                                .font(Theme.Font.caption.monospacedDigit()).foregroundStyle(.secondary)
+                                .frame(width: 90, alignment: .trailing)
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 10, weight: .semibold)).foregroundStyle(.tertiary)
+                        }
+                        .padding(.horizontal, Theme.Spacing.lg)
+                        .padding(.vertical, Theme.Spacing.md)
+                    }
+                    .buttonStyle(RowButtonStyle())
+                }
             }
         }
     }

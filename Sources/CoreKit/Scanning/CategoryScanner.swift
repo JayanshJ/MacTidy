@@ -20,13 +20,17 @@ public struct CategoryScanner: Sendable {
     public var devRoots: [URL]
     public var installerMinAgeDays: Int
     public var screenshotMinAgeDays: Int
+    /// Paths the user asked never to see again; applied to every result.
+    public var ignore: IgnoreList
 
     public init(
         home: URL = FileManager.default.homeDirectoryForCurrentUser,
         devRoots: [URL] = CategoryScanner.defaultDevRoots,
         installerMinAgeDays: Int = 30,
-        screenshotMinAgeDays: Int = 30
+        screenshotMinAgeDays: Int = 30,
+        ignore: IgnoreList = .load()
     ) {
+        self.ignore = ignore
         self.home = home
         self.devRoots = devRoots
         self.installerMinAgeDays = installerMinAgeDays
@@ -95,7 +99,7 @@ public struct CategoryScanner: Sendable {
         case .simulatorRuntimes:
             items = await children(of: "Library/Developer/CoreSimulator/Images", category)
         case .userCaches:
-            items = await children(of: "Library/Caches", category)
+            items = await registryItems(category)
         case .homebrewCache:
             items = homebrewCache()
         case .nodeModules:
@@ -153,6 +157,6 @@ public struct CategoryScanner: Sendable {
         case .groupContainers:
             items = await children(of: "Library/Group Containers", category)
         }
-        return CategoryResult(category: category, items: items)
+        return CategoryResult(category: category, items: items.filter { !ignore.contains($0.url) })
     }
 }

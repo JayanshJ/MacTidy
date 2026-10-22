@@ -103,6 +103,7 @@ struct ScanItemRow: View {
         .padding(.vertical, Theme.Spacing.xs)
         .contextMenu {
             Button("Show in Finder") { showInFinder(item.url) }
+            Button("Never Suggest This") { state.ignore(item.url) }
             if item.category != nil {
                 Button("Why is this suggested?") { showSafetyNote = true }
             }

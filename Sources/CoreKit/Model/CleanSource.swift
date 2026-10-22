@@ -53,7 +53,13 @@ public struct CleanSource: Sendable {
 }
 
 extension CleanSource {
-    public static let all: [CleanSource] = devCaches + aiAgents
+    public static let all: [CleanSource] = userCaches + devCaches + aiAgents
+
+    /// ~/Library/Caches, one item per app. Children claimed by a more specific
+    /// source below (SwiftPM, pip, Playwright…) are skipped here.
+    static let userCaches: [CleanSource] = [
+        .init(.userCaches, "Library/Caches", "", .safe, .children),
+    ]
 
     /// Package-manager and tool caches outside ~/Library/Caches (that folder
     /// is the userCaches category; listing its children here would double-count).
@@ -82,7 +88,45 @@ extension CleanSource {
         .init(.devCaches, ".vscode/extensions", "VS Code extensions", .caution),
         .init(.devCaches, ".android/avd", "Android AVD data", .caution),
         .init(.devCaches, ".android/cache", "Android SDK cache"),
-        .init(.devCaches, "Library/Developer/Xcode/UserData", "Xcode UserData", .caution),
+        // Per child, so Previews (regenerable, often GBs) is listed on its own
+        // while schemes, snippets and key bindings stay Caution.
+        .init(.devCaches, "Library/Developer/Xcode/UserData", "Xcode UserData", .caution, .children),
+
+        // Xcode and Apple platforms
+        .init(.devCaches, "Library/Developer/Xcode/UserData/Previews", "SwiftUI preview simulators"),
+        .init(.devCaches, "Library/Developer/Xcode/Products", "Xcode build products"),
+        .init(.devCaches, "Library/Developer/Xcode/watchOS DeviceSupport", "watchOS device symbols", .safe, .children),
+        .init(.devCaches, "Library/Developer/Xcode/tvOS DeviceSupport", "tvOS device symbols", .safe, .children),
+        .init(.devCaches, "Library/Developer/Xcode/visionOS DeviceSupport", "visionOS device symbols", .safe, .children),
+        .init(.devCaches, "Library/Caches/org.swift.swiftpm", "Swift Package Manager cache"),
+        .init(.devCaches, "Library/Caches/CocoaPods", "CocoaPods download cache"),
+        .init(.devCaches, "Library/Caches/org.carthage.CarthageKit", "Carthage cache"),
+
+        // Python
+        .init(.devCaches, "Library/Caches/pip", "pip cache"),
+        .init(.devCaches, ".cache/pip", "pip cache"),
+        .init(.devCaches, ".cache/uv", "uv cache"),
+        .init(.devCaches, "Library/Caches/pypoetry", "Poetry cache"),
+        .init(.devCaches, ".conda/pkgs", "conda package cache"),
+        .init(.devCaches, "miniconda3/pkgs", "conda package cache"),
+        .init(.devCaches, "anaconda3/pkgs", "conda package cache"),
+        .init(.devCaches, ".pyenv/versions", "pyenv Python version (reinstall needed)", .caution, .children),
+
+        // Go, Rust, Dart, JS
+        .init(.devCaches, "Library/Caches/go-build", "Go build cache"),
+        .init(.devCaches, ".cargo/git", "Cargo git checkouts"),
+        .init(.devCaches, ".rustup/toolchains", "Rust toolchain (reinstall needed)", .caution, .children),
+        .init(.devCaches, ".pub-cache", "Dart and Flutter package cache"),
+        .init(.devCaches, "Library/Caches/Yarn", "Yarn cache"),
+        .init(.devCaches, ".nvm/.cache", "nvm download cache"),
+        .init(.devCaches, ".cache/node-gyp", "node-gyp headers"),
+        .init(.devCaches, "Library/Caches/electron", "Electron downloads"),
+
+        // Test browsers and IDEs
+        .init(.devCaches, "Library/Caches/ms-playwright", "Playwright browser", .safe, .children),
+        .init(.devCaches, ".cache/puppeteer", "Puppeteer browsers"),
+        .init(.devCaches, "Library/Caches/Cypress", "Cypress binary", .safe, .children),
+        .init(.devCaches, "Library/Caches/JetBrains", "JetBrains IDE cache (re-indexes on open)", .safe, .children),
     ]
 
     /// AI coding agents and local model stores. Credentials and settings in
@@ -125,13 +169,16 @@ extension CleanSource {
     public static func source(for item: ScanItem) -> CleanSource? {
         let path = item.url.path
         let parent = item.url.deletingLastPathComponent().path
-        return all.first { source in
+        // Most specific wins: Xcode/UserData/Previews (its own source) beats
+        // the per-child Xcode/UserData source that also matches it.
+        return all.filter { source in
             let tail = "/" + source.path
             switch source.locate {
             case .whole: return path.hasSuffix(tail)
             case .children: return item.category == source.category && parent.hasSuffix(tail)
             }
         }
+        .max { $0.path.count < $1.path.count }
     }
 }
 
@@ -174,7 +221,7 @@ extension CategoryScanner {
             let modified = try? url.resourceValues(forKeys: [.contentModificationDateKey])
                 .contentModificationDate
             return [ScanItem(url: url, sizeBytes: size, isDirectory: true,
-                             category: source.category, detail: source.label,
+                             category: source.category, detail: source.label.isEmpty ? nil : source.label,
                              lastModified: modified)]
         case .children:
             return await DiskScanner.topLevelScan(root: url, category: source.category)
@@ -184,7 +231,7 @@ extension CategoryScanner {
                         && !allRoots.contains { $0 == p || $0.hasPrefix(p + "/") }
                 }
                 .map { ScanItem(url: $0.url, sizeBytes: $0.sizeBytes, isDirectory: $0.isDirectory,
-                                category: source.category, detail: source.label,
+                                category: source.category, detail: source.label.isEmpty ? nil : source.label,
                                 lastModified: $0.lastModified) }
         }
     }

@@ -221,7 +221,7 @@ final class AppState {
         // Drop log entries older than the retention window before showing them.
         applyLogRetention()
         if let results = Self.loadLastScan(from: lastScanURL) {
-            self.categoryResults = results
+            self.categoryResults = IgnoreList.load().filter(results)
             self.scanStatus = "Last scan restored from previous session"
         }
     }
@@ -267,10 +267,7 @@ final class AppState {
                 lastScanDate = Date.now
                 UserDefaults.standard.set(Date.now.timeIntervalSince1970, forKey: "MacTidy.lastScanDate")
                 persistLastScan(results)
-                let snapshot = ScanSnapshot(
-                    reclaimableBytes: results.reduce(0) { $0 + $1.totalBytes },
-                    itemCount: results.reduce(0) { $0 + $1.items.count }
-                )
+                let snapshot = ScanSnapshot(results: results)
                 scanHistoryStore.append(snapshot)
                 scanHistory = scanHistoryStore.load()
             }
@@ -352,6 +349,26 @@ final class AppState {
     private func preloadAppAttributions() async -> [AppFootprint] {
         let apps = await AppUninstaller.installedApps()
         return await AppStorageAttribution.scan(apps: apps)
+    }
+
+    // MARK: - Ignore list
+
+    /// Paths never to suggest again. Every `CategoryScanner` reads the same
+    /// stored list, so scans, scheduled runs and the quick check all honor it.
+    var ignoreList = IgnoreList.load()
+
+    func ignore(_ url: URL) {
+        ignoreList.add(url)
+        ignoreList.save()
+        categoryResults = ignoreList.filter(categoryResults)
+        persistLastScan(categoryResults)
+        if !projects.isEmpty { Task { await refreshProjects() } }
+    }
+
+    /// Takes effect on the next scan.
+    func unignore(_ path: String) {
+        ignoreList.remove(path)
+        ignoreList.save()
     }
 
     // MARK: - Projects

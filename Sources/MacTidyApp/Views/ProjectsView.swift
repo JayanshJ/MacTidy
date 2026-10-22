@@ -69,6 +69,10 @@ struct ProjectsView: View {
                 ProjectRow(project: project, largest: largest)
             }
             .buttonStyle(RowButtonStyle())
+            .contextMenu {
+                Button("Show in Finder") { showInFinder(project.url) }
+                Button("Never Suggest This Project") { state.ignore(project.url) }
+            }
         }
     }
 }
@@ -214,6 +218,15 @@ private struct ProjectDetail: View {
             Spacer()
             Button { showInFinder(project.url) } label: { Label("Finder", systemImage: "folder") }
             Button { openInTerminal() } label: { Label("Terminal", systemImage: "terminal") }
+            Menu {
+                Button("Never Suggest This Project") {
+                    state.ignore(project.url)
+                    onBack()
+                }
+            } label: { Image(systemName: "ellipsis.circle") }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
         }
     }
 

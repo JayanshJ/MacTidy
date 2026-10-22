@@ -8,17 +8,60 @@ public struct ScanSnapshot: Identifiable, Sendable, Codable, Hashable {
     public let date: Date
     public let reclaimableBytes: Int64
     public let itemCount: Int
+    /// Bytes per category (keyed by `Category.rawValue`). Nil in snapshots
+    /// written before growth tracking existed.
+    public let categories: [String: Int64]?
 
     public init(
         id: UUID = UUID(),
         date: Date = Date(),
         reclaimableBytes: Int64,
-        itemCount: Int
+        itemCount: Int,
+        categories: [String: Int64]? = nil
     ) {
         self.id = id
         self.date = date
         self.reclaimableBytes = reclaimableBytes
         self.itemCount = itemCount
+        self.categories = categories
+    }
+
+    public init(results: [CategoryResult], date: Date = Date()) {
+        self.init(date: date,
+                  reclaimableBytes: results.reduce(0) { $0 + $1.totalBytes },
+                  itemCount: results.reduce(0) { $0 + $1.items.count },
+                  categories: Dictionary(results.map { ($0.category.rawValue, $0.totalBytes) },
+                                         uniquingKeysWith: +))
+    }
+}
+
+/// A category that grew between two scans.
+public struct CategoryGrowth: Identifiable, Sendable, Equatable {
+    public let category: Category
+    public let delta: Int64
+    public let current: Int64
+    public let since: Date
+    public var id: Category { category }
+}
+
+extension ScanHistory {
+    /// Categories that grew by at least `minimumDelta` since the newest scan
+    /// that is at least `minimumGap` older than the latest one. Biggest first.
+    public static func growers(in history: [ScanSnapshot],
+                               minimumDelta: Int64 = 100_000_000,
+                               minimumGap: TimeInterval = 20 * 3600,
+                               limit: Int = 4) -> [CategoryGrowth] {
+        let tracked = history.filter { $0.categories != nil }.sorted { $0.date > $1.date }
+        guard let latest = tracked.first, let now = latest.categories,
+              let base = tracked.first(where: { latest.date.timeIntervalSince($0.date) >= minimumGap }),
+              let before = base.categories else { return [] }
+        return now.compactMap { key, bytes -> CategoryGrowth? in
+            guard let category = Category(rawValue: key) else { return nil }
+            let delta = bytes - (before[key] ?? 0)
+            return delta >= minimumDelta ? CategoryGrowth(category: category, delta: delta, current: bytes, since: base.date) : nil
+        }
+        .sorted { $0.delta > $1.delta }
+        .prefix(limit).map { $0 }
     }
 }
 

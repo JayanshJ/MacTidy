@@ -72,7 +72,7 @@ struct CategoryScannerTests {
         let result = await CategoryScanner(home: home).scan(.devCaches)
         let labels = Set(result.items.compactMap(\.detail))
         #expect(labels.contains("Bun cache"))
-        #expect(labels.contains("XDG cache (~/.cache)"))
+        #expect(labels.contains("pip cache"))   // ~/.cache/pip has its own source now
         #expect(labels.contains("Deno cache"))
         // ~8KB across three caches (XDG is counted at its root, so its child
         // wheel bytes are rolled into the XDG entry — not double-listed).

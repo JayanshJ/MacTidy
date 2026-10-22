@@ -40,6 +40,7 @@ struct SettingsView: View {
                 safetySection
                 allowedFoldersSection
                 devFoldersSection
+                ignoredSection
             }
             .formStyle(.grouped)
             .tabItem { Label("Folders", systemImage: "folder") }
@@ -161,6 +162,31 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+    }
+
+    private var ignoredSection: some View {
+        Section {
+            if state.ignoreList.isEmpty {
+                Text("Nothing yet. Right-click any item or project and choose Never Suggest This.")
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(state.ignoreList.paths, id: \.self) { path in
+                HStack {
+                    Image(systemName: "eye.slash").foregroundStyle(.secondary)
+                    Text(path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
+                        .lineLimit(1).truncationMode(.head)
+                    Spacer()
+                    Button(role: .destructive) { state.unignore(path) } label: { Image(systemName: "minus.circle") }
+                        .buttonStyle(.borderless)
+                        .help("Suggest again from the next scan")
+                }
+            }
+        } header: {
+            Text("Never suggested")
+        } footer: {
+            Text("These paths and everything inside them are left out of scans, schedules and the menu bar check.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
     }
 
     @ViewBuilder

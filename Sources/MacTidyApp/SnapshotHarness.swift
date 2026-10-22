@@ -35,6 +35,16 @@ enum SnapshotHarness {
                                 signing: SigningInfo(identifier: "com.jayansh.mactidy", cdhash: nil, isAdHoc: false))
         let results = Fixtures.results()
         state.projects = Fixtures.projects(results)
+        // Two scans a few days apart so Overview shows what's growing.
+        var older = results
+        older = older.map { r in
+            let shrink: Double = r.category == .aiAgents ? 0.55 : (r.category == .nodeModules ? 0.7 : 1)
+            return CategoryResult(category: r.category, items: r.items.map {
+                ScanItem(url: $0.url, sizeBytes: Int64(Double($0.sizeBytes) * shrink), isDirectory: true, category: $0.category)
+            })
+        }
+        state.scanHistory = [ScanSnapshot(results: results),
+                             ScanSnapshot(results: older, date: Date().addingTimeInterval(-4 * 86_400))]
         func main(_ section: SidebarItem, drill: CoreKit.Category? = nil, project: String? = nil) -> () -> Void {
             {
                 state.selectedProjectID = project

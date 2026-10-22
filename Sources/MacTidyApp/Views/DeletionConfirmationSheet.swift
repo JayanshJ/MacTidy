@@ -22,6 +22,7 @@ struct DeletionConfirmationSheet: View {
 
     @State private var outcome: DeletionOutcome?
     @State private var actionOutcome: UninstallActionOutcome?
+    @State private var conflicts: [RunningAppConflict] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
@@ -34,6 +35,19 @@ struct DeletionConfirmationSheet: View {
         .padding(Theme.Spacing.xl)
         .frame(width: 600, height: 540)
         .background(Theme.canvas)
+        .task {
+            // Re-check while the sheet is open so quitting the app clears the warning.
+            while !Task.isCancelled, outcome == nil {
+                let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
+                let found = RunningAppGuard.conflicts(for: plan.candidates.map(\.url), runningBundleIDs: running)
+                if found != conflicts { conflicts = found }
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+    }
+
+    private func quit(_ bundleID: String) {
+        NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).forEach { $0.terminate() }
     }
 
     @ViewBuilder
@@ -54,6 +68,21 @@ struct DeletionConfirmationSheet: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(Theme.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
+        }
+
+        ForEach(conflicts) { conflict in
+            HStack(alignment: .top, spacing: Theme.Spacing.md) {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Theme.Status.caution)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(conflict.appName) is open").font(Theme.Font.bodyStrong)
+                    Text(conflict.reason).font(Theme.Font.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Quit \(conflict.appName)") { quit(conflict.bundleID) }
+                    .help("Asks \(conflict.appName) to quit normally, so it can save your work.")
+            }
+            .padding(Theme.Spacing.md)
+            .background(Theme.Status.caution.opacity(0.10), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
 
         ScrollView {

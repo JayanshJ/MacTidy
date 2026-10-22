@@ -81,8 +81,9 @@ public enum ProjectScanner {
         .pythonCaches, .jsBuildDirs, .mavenTarget, .phpVendor, .flutterDartTool, .unityLibrary,
     ]
 
-    public static func scan(devRoots: [URL], results: [CategoryResult], now: Date = .now) async -> [DevProject] {
-        let repos = findRepos(in: devRoots)
+    public static func scan(devRoots: [URL], results: [CategoryResult], ignore: IgnoreList = .load(),
+                            now: Date = .now) async -> [DevProject] {
+        let repos = findRepos(in: devRoots).filter { !ignore.contains($0) }
         let artifacts = results.filter { artifactCategories.contains($0.category) }.flatMap(\.items)
         let owner = assign(artifacts, to: repos)
         guard let git = Shell.find("git") else { return [] }

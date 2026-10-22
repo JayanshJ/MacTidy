@@ -98,6 +98,18 @@ Hugging Face token…). It also denies every **ancestor** of a secret, so
 symlinks so dotfile-managed secrets are protected at their target. Checked
 before user-picked roots; nothing overrides it.
 
+### Ignore list, growth, running-app guard
+
+`IgnoreList` (Model/) is read by `CategoryScanner`'s default init and by
+`ProjectScanner`, so full scans, scheduled runs and the menu bar quick check all
+skip ignored paths without extra wiring. `~/Library/Caches` is itself a
+`.children` registry source, so any more specific source inside it (SwiftPM,
+pip, Playwright…) is listed once and dropped from User caches. When several
+sources match an item, the longest path wins (`CleanSource.source(for:)`).
+`ScanSnapshot.categories` (optional, older history still decodes) feeds
+`ScanHistory.growers`. `RunningAppGuard` is pure: the confirmation sheet passes
+running bundle IDs and shows a warning with a graceful Quit button.
+
 ### Projects
 
 `ProjectScanner` (Scanning/) finds git repos under the dev roots (nested ones

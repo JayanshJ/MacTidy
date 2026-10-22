@@ -132,7 +132,7 @@ public enum Category: String, CaseIterable, Codable, Sendable, Identifiable {
         case .iosBackups:
             "Local iPhone/iPad backups from Finder syncing. Suggest-only: make sure the device is backed up elsewhere (or no longer yours) first."
         case .devCaches:
-            "npm, pnpm, Cargo, Gradle, Go, Maven, Yarn, Terraform, sbt, CocoaPods, VS Code, Colima, and Lima caches outside ~/Library/Caches. Caches re-download on demand; VM disks and extensions are marked and never preselected."
+            "Package-manager, build and toolchain caches: npm, pnpm, Yarn, Cargo, Go, Gradle, Maven, pip, uv, conda, SwiftPM, CocoaPods, Playwright, JetBrains, Xcode previews and more. Caches re-download on demand; toolchains, VM disks and extensions are marked and never preselected."
         case .aiAgents:
             "Claude Code, Codex, Cursor, Gemini, Continue and Aider logs, transcripts, worktrees and plugins, plus local model stores (Ollama, Hugging Face, LM Studio). Only logs and caches are preselected; transcripts, worktrees, plugins and models are marked Caution. Credentials and settings are never touched."
         case .appSupport:
