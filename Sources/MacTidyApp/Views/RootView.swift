@@ -8,8 +8,20 @@ struct RootView: View {
         Group {
             if state.fdaGranted {
                 FlowView()
+            } else if state.fdaSkipped {
+                VStack(spacing: 0) {
+                    LimitedModeBanner()
+                    FlowView()
+                }
             } else {
                 FDAOnboardingView()
+            }
+        }
+        // Access often arrives while the app is open (onboarding polls); run
+        // the first scan then instead of leaving an empty dashboard.
+        .onChange(of: state.fdaGranted) { _, granted in
+            if granted && state.autoScanOnLaunch && state.categoryResults.isEmpty {
+                Task { await state.rescanCategories() }
             }
         }
         .onReceive(NotificationCenter.default.publisher(

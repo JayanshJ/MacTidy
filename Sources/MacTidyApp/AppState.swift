@@ -5,7 +5,13 @@ import CoreKit
 @MainActor
 @Observable
 final class AppState {
-    var fdaGranted = FullDiskAccess.isGranted
+    /// Full Disk Access state + diagnosis. Polled by the onboarding screen and
+    /// refreshed whenever the app becomes active.
+    var fdaStatus = FullDiskAccess.status()
+    var fdaGranted: Bool { fdaStatus.granted }
+    /// Session-only: the user chose to continue without Full Disk Access.
+    /// Never persisted, so each launch re-checks and re-offers the fix.
+    var fdaSkipped = false
 
     /// Background space watcher: quick checks on a fixed cadence + pile-up
     /// notifications. Owned here so Settings can bind its toggles and the
@@ -198,7 +204,9 @@ final class AppState {
     }
 
     func refreshFDA() {
-        fdaGranted = FullDiskAccess.isGranted
+        let status = FullDiskAccess.status()
+        // Guarded so 1 s polling doesn't invalidate every observer each tick.
+        if status != fdaStatus { fdaStatus = status }
     }
 
     func rescanCategories() async {

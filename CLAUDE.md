@@ -116,9 +116,14 @@ already list. When adding a category, check it doesn't re-count bytes another
 category already claims.
 
 `Sources/CoreKit/FDA/FullDiskAccess.swift` — the TCC probe **opens the TCC database**
-rather than `access(2)`, because `access` returns stale answers under TCC. The app
-blocks on first launch until FDA is granted; without it `~/Library` scans are
-silently incomplete.
+rather than `access(2)`, because `access` returns stale answers under TCC (it also
+lists `~/Library/Safari` as a second probe). `FullDiskAccess.status()` adds a pure
+`diagnose` (translocated copy, bare binary, stale grant, ad-hoc signature) and
+records the cdhash on grant. Ad-hoc builds are pinned by cdhash, so after a rebuild
+the Settings switch stays on but belongs to the old build: that is the classic
+"granted but still asking" bug; `make cert` fixes it for good. Onboarding polls
+every second, offers Reset old permission (`tccutil reset SystemPolicyAllFiles`,
+revoke-only) and Relaunch, and can be skipped into a session-only limited mode.
 
 `Sources/CoreKit/Support/Shell.swift` — shelling out to optional tools (brew, docker,
 launchctl). Degrades gracefully (missing tool → nil, never throws) and does not
