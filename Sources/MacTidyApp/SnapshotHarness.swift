@@ -34,8 +34,10 @@ enum SnapshotHarness {
         let granted = FDAStatus(granted: true, issues: [],
                                 signing: SigningInfo(identifier: "com.jayansh.mactidy", cdhash: nil, isAdHoc: false))
         let results = Fixtures.results()
-        func main(_ section: SidebarItem, drill: CoreKit.Category? = nil) -> () -> Void {
+        state.projects = Fixtures.projects(results)
+        func main(_ section: SidebarItem, drill: CoreKit.Category? = nil, project: String? = nil) -> () -> Void {
             {
+                state.selectedProjectID = project
                 state.fdaStatus = granted
                 state.flowPhase = .dashboard
                 state.categoryResults = results
@@ -69,6 +71,7 @@ enum SnapshotHarness {
             ("cleanup", main(.cleanup)),
             ("cleanup-detail", main(.cleanup, drill: .xcodeDerivedData)),
             ("cleanup-node", main(.cleanup, drill: .nodeModules)),
+            ("project-detail", main(.projects, project: "/Users/demo/Developer/storefront")),
         ]
         for item in SidebarItem.allCases where item != .overview && item != .cleanup {
             screens.append((item.rawValue, main(item)))
@@ -124,6 +127,31 @@ enum SnapshotHarness {
 
 /// Plausible scan results for screenshots. Paths are fake; nothing reads them.
 private enum Fixtures {
+    static func projects(_ results: [CategoryResult]) -> [DevProject] {
+        let now = Date()
+        let items = results.flatMap(\.items)
+        func project(_ name: String, days: Double, git: Double, dirty: Bool = false, unpushed: Int? = 0,
+                     stale: Bool = false, subject: String) -> DevProject {
+            let url = URL(fileURLWithPath: "/Users/demo/Developer/\(name)")
+            let mine = items.filter { $0.url.path.hasPrefix(url.path + "/") }
+            var trees = [DevProject.Worktree(path: url, branch: "main", isMain: true, isPrunable: false)]
+            if stale {
+                trees.append(.init(path: URL(fileURLWithPath: "/Users/demo/.codex/worktrees/fix-auth"), branch: "fix-auth", isMain: false, isPrunable: true))
+            }
+            let date = now.addingTimeInterval(-days * 86_400)
+            return DevProject(url: url, branch: "main", lastCommit: date, lastCommitSubject: subject, lastActivity: date,
+                              gitBytes: Int64(git * 1_000_000_000), artifacts: mine, worktrees: trees,
+                              isDirty: dirty, unpushedCommits: unpushed, containsOtherRepos: false)
+        }
+        return [
+            project("ripgrep-fork", days: 240, git: 0.3, unpushed: nil, subject: "Try SIMD line splitting"),
+            project("storefront", days: 130, git: 0.6, unpushed: 2, stale: true, subject: "Checkout: handle declined cards"),
+            project("api-gateway", days: 40, git: 0.2, subject: "Bump rate limits"),
+            project("landing", days: 3, git: 0.1, dirty: true, subject: "New hero copy"),
+            project("dotfiles", days: 12, git: 0.02, subject: "zsh: faster prompt"),
+        ].sorted { $0.score(now: now) > $1.score(now: now) }
+    }
+
     static func results() -> [CategoryResult] {
         let home = "/Users/demo"
         func items(_ category: CoreKit.Category, _ entries: [(String, Double, String?)]) -> CategoryResult {

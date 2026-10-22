@@ -5,7 +5,7 @@ import CoreKit
 
 enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
     case overview, cleanup, insights
-    case devTools, docker
+    case projects, devTools, docker
     case uninstaller, appStorage, loginItems
     case duplicates, diskMap, timeMachine
     case trash, history
@@ -17,6 +17,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
         case .overview: "Overview"
         case .cleanup: "Cleanup"
         case .insights: "Insights"
+        case .projects: "Projects"
         case .devTools: "Dev Tools"
         case .docker: "Docker"
         case .uninstaller: "Uninstaller"
@@ -35,6 +36,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
         case .overview: "gauge.with.dots.needle.33percent"
         case .cleanup: "sparkles.rectangle.stack"
         case .insights: "lightbulb"
+        case .projects: "folder"
         case .devTools: "terminal"
         case .docker: "shippingbox"
         case .uninstaller: "xmark.app"
@@ -62,7 +64,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
         var items: [SidebarItem] {
             switch self {
             case .main: [.overview, .cleanup, .insights]
-            case .developer: [.devTools, .docker]
+            case .developer: [.projects, .devTools, .docker]
             case .apps: [.uninstaller, .appStorage, .loginItems]
             case .files: [.duplicates, .diskMap, .timeMachine]
             case .history: [.trash, .history]
@@ -82,7 +84,7 @@ struct MainShell: View {
         // rows) set section and category together and keep both.
         let selection = Binding<SidebarItem?>(
             get: { state.section },
-            set: { if let item = $0 { state.section = item; state.drilledCategory = nil } })
+            set: { if let item = $0 { state.section = item; state.drilledCategory = nil; state.selectedProjectID = nil } })
         NavigationSplitView {
             List(selection: selection) {
                 ForEach(SidebarItem.Group.allCases, id: \.self) { group in
@@ -130,6 +132,7 @@ struct MainShell: View {
         case .overview: OverviewView()
         case .cleanup: CleanupView()
         case .insights: InsightsTab()
+        case .projects: ProjectsView()
         case .devTools: DeveloperTerminalTab()
         case .docker: DashboardDocker()
         case .uninstaller: DashboardUninstaller()

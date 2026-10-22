@@ -103,6 +103,18 @@ Hugging Face token…). It also denies every **ancestor** of a secret, so
 symlinks so dotfile-managed secrets are protected at their target. Checked
 before user-picked roots; nothing overrides it.
 
+### Projects
+
+`ProjectScanner` (Scanning/) finds git repos under the dev roots (nested ones
+too; `~/Developer` may itself be a repo), assigns each build-output item from the
+category scan to the deepest repo containing it, and reads git state with
+read-only `git --no-optional-locks` calls. Ranking = build-output bytes ×
+coldness (fully cold at 180 days of no commit/index/top-level change).
+`ProjectArchiver` (Safety/) only *creates* a zip without build output and
+verifies it with `unzip -t`; `AppState.archive` then trashes the folder through
+the normal pipeline and refuses dev roots or repos that contain other repos.
+`GitWorktreePruneAction` is the one git mutation (worktree metadata only).
+
 ### Scanning (read-only)
 
 `Sources/CoreKit/Scanning/`: `DiskScanner` (shared engine, `.totalFileAllocatedSize`

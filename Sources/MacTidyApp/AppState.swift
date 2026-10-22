@@ -354,6 +354,61 @@ final class AppState {
         return await AppStorageAttribution.scan(apps: apps)
     }
 
+    // MARK: - Projects
+
+    var projects: [DevProject] = []
+    var selectedProjectID: String?
+    var isScanningProjects = false
+    /// The category scan the current `projects` were built from.
+    var projectsBuiltFrom: Date?
+
+    /// Where archives go. Persisted; defaults to ~/Archives/Projects.
+    var archiveDirectory: URL = UserDefaults.standard.url(forKey: "MacTidy.archiveDirectory")
+        ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: "Archives/Projects") {
+        didSet { UserDefaults.standard.set(archiveDirectory, forKey: "MacTidy.archiveDirectory") }
+    }
+
+    /// Rebuilds the project list from the dev roots and the latest category
+    /// scan (which already found and sized every build directory).
+    func refreshProjects() async {
+        guard !isScanningProjects, !SnapshotHarness.isActive else { return }
+        isScanningProjects = true
+        let roots = makeCategoryScanner().devRoots
+        projects = await ProjectScanner.scan(devRoots: roots, results: categoryResults)
+        projectsBuiltFrom = lastScanDate
+        isScanningProjects = false
+    }
+
+    enum ArchiveRefusal: LocalizedError {
+        case holdsOtherProjects
+        var errorDescription: String? {
+            "This folder holds other projects or is one of your developer folders, so it can't be archived as one project."
+        }
+    }
+
+    /// Whether a project can be archived at all (never a dev root, never a
+    /// folder that holds other repos).
+    func canArchive(_ project: DevProject) -> Bool {
+        let roots = makeCategoryScanner().devRoots.map { $0.resolvingSymlinksInPath().path }
+        return !project.containsOtherRepos && !roots.contains(project.url.resolvingSymlinksInPath().path)
+    }
+
+    /// Zips the project without its build output, verifies the zip, then
+    /// moves the project folder to the Trash through the normal pipeline.
+    /// Nothing is trashed unless the verified zip exists.
+    func archive(_ project: DevProject, projectBytes: Int64) async throws -> (zip: URL, outcome: DeletionOutcome) {
+        guard canArchive(project) else { throw ArchiveRefusal.holdsOtherProjects }
+        let dir = archiveDirectory
+        let excluded = project.artifacts.map(\.url)
+        let zip = try await Task.detached(priority: .userInitiated) {
+            try ProjectArchiver.archive(project.url, excluding: excluded, into: dir)
+        }.value
+        let plan = DeletionPlan(items: [ScanItem(url: project.url, sizeBytes: projectBytes, isDirectory: true)])
+        let outcome = await execute(plan)
+        if !outcome.trashed.isEmpty { projects.removeAll { $0.id == project.id } }
+        return (zip, outcome)
+    }
+
     /// Loads the uninstaller's app list when the page opens without a full
     /// scan having run this launch (the last scan is restored from disk, apps
     /// are not).
