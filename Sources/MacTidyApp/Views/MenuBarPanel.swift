@@ -18,36 +18,23 @@ struct MenuBarPanel: View {
     @State private var diskPressure: DiskPressure?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+        VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
             header
-            Divider()
             summary
             freeSpaceRow
             if !topCategories.isEmpty {
-                Divider()
-                VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                VStack(alignment: .leading, spacing: Theme.Spacing.sm + 2) {
+                    let largest = topCategories.first?.totalBytes ?? 1
                     ForEach(topCategories) { result in
-                        categoryRow(result)
+                        categoryRow(result, largest: largest)
                     }
                 }
             }
-            Divider()
+            Rectangle().fill(Theme.hairline).frame(height: 1)
             actions
         }
-        .padding(Theme.Spacing.md)
+        .padding(Theme.Spacing.lg)
         .frame(width: 300)
-        // Card surface so the popover reads as the same product as the
-        // dashboard — the underPageBackgroundColor fill + hairline border
-        // the rest of the app uses, instead of default SwiftUI on the
-        // system popover background.
-        .background(
-            RoundedRectangle(cornerRadius: Theme.cardRadius)
-                .fill(Color(nsColor: .underPageBackgroundColor))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.cardRadius)
-                .strokeBorder(.separator.opacity(0.6), lineWidth: 0.5)
-        )
         .tint(Theme.accent)
         .task {
             state.monitor.start()
@@ -79,11 +66,11 @@ struct MenuBarPanel: View {
         HStack(spacing: Theme.Spacing.sm) {
             appIcon
             VStack(alignment: .leading, spacing: 1) {
-                Text("MacTidy").font(.headline)
+                Text("MacTidy").font(Theme.Font.bodyStrong)
                 if let subtitle = headerSubtitle {
                     Text(subtitle)
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .font(Theme.Font.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
             Spacer()
@@ -148,13 +135,12 @@ struct MenuBarPanel: View {
     }
 
     private var summary: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 3) {
             Text(headlineBytes.formattedBytes)
-                .font(.system(size: 26, weight: .bold, design: .rounded))
-                .monospacedDigit()
-                .foregroundStyle(headlineBytes > 0 ? Theme.accent : .secondary)
-            Text(hasFullScan ? "reclaimable" : "reclaimable (quick check)")
-                .font(.caption)
+                .font(.system(size: 30, weight: .semibold).monospacedDigit())
+                .foregroundStyle(headlineBytes > 0 ? Color.primary : Color.secondary)
+            Text(hasFullScan ? "can be cleaned" : "can be cleaned, from a quick check")
+                .font(Theme.Font.caption)
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -166,17 +152,16 @@ struct MenuBarPanel: View {
     @ViewBuilder
     private var freeSpaceRow: some View {
         if let pressure = diskPressure, pressure.isAvailable {
-            HStack(spacing: 6) {
-                Image(systemName: "internaldrive")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text("\(pressure.freeBytes.formattedBytes) free")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Text("\(Int(pressure.usedFraction * 100))% used")
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.tertiary)
+            VStack(alignment: .leading, spacing: 6) {
+                CapacityBar(total: pressure.totalBytes, free: pressure.freeBytes,
+                            cleanable: headlineBytes, height: 6)
+                HStack {
+                    Text("\(pressure.freeBytes.formattedBytes) free")
+                    Spacer()
+                    Text("\(Int(pressure.usedFraction * 100))% used")
+                }
+                .font(Theme.Font.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
             }
         }
     }
@@ -195,17 +180,18 @@ struct MenuBarPanel: View {
             .map { $0 }
     }
 
-    private func categoryRow(_ result: CategoryResult) -> some View {
-        HStack {
-            Image(systemName: "tray.full")
-                .font(.caption)
-                .foregroundStyle(Theme.accent.opacity(0.8))
+    private func categoryRow(_ result: CategoryResult, largest: Int64) -> some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            Image(systemName: result.category.symbol)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .frame(width: 16)
             Text(result.category.displayName)
-                .font(.callout)
+                .font(Theme.Font.body)
                 .lineLimit(1)
-            Spacer()
+            Spacer(minLength: Theme.Spacing.sm)
             Text(result.totalBytes.formattedBytes)
-                .font(.callout.monospacedDigit())
+                .font(Theme.Font.body.monospacedDigit())
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -223,7 +209,7 @@ struct MenuBarPanel: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
-            .controlSize(.small)
+            .controlSize(.large)
 
             Button {
                 Task {
@@ -240,8 +226,8 @@ struct MenuBarPanel: View {
                     Label("Quick check now", systemImage: "arrow.clockwise")
                 }
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
+            .buttonStyle(.borderless)
+            .font(Theme.Font.caption)
             .disabled(state.monitor.isChecking || !state.fdaGranted)
             .frame(maxWidth: .infinity)
         }

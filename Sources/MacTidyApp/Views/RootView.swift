@@ -6,17 +6,16 @@ struct RootView: View {
 
     var body: some View {
         Group {
-            if state.fdaGranted {
-                FlowView()
-            } else if state.fdaSkipped {
-                VStack(spacing: 0) {
-                    LimitedModeBanner()
-                    FlowView()
-                }
-            } else {
+            if !state.fdaGranted && !state.fdaSkipped {
                 FDAOnboardingView()
+            } else if state.flowPhase == .welcome && state.categoryResults.isEmpty {
+                WelcomeView()
+            } else {
+                MainShell()
             }
         }
+        .frame(minWidth: 980, minHeight: 640)
+        .animation(Theme.ease, value: state.flowPhase)
         // Access often arrives while the app is open (onboarding polls); run
         // the first scan then instead of leaving an empty dashboard.
         .onChange(of: state.fdaGranted) { _, granted in
@@ -33,6 +32,10 @@ struct RootView: View {
             state.refreshLogs()
         }
         .task {
+            if SnapshotHarness.isActive {
+                await SnapshotHarness.run(state: state)
+                return
+            }
             if state.fdaGranted && state.autoScanOnLaunch && state.categoryResults.isEmpty {
                 await state.rescanCategories()
             }

@@ -22,12 +22,14 @@ struct FDAOnboardingView: View {
                 actions
                 Button("Continue without Full Disk Access") { state.fdaSkipped = true }
                     .buttonStyle(.link)
+                    .foregroundStyle(.secondary)
                     .help("Scans still run, but anything inside ~/Library macOS protects will be missing.")
             }
             .padding(40)
             .frame(maxWidth: 560)
             .frame(maxWidth: .infinity)
         }
+        .background(Theme.canvas)
         .task {
             // Auto-detect the grant; the view disappears (and this task is
             // cancelled) as soon as it's seen.
@@ -41,10 +43,10 @@ struct FDAOnboardingView: View {
     private var header: some View {
         VStack(spacing: Theme.Spacing.sm) {
             Image(systemName: "lock.shield")
-                .font(.system(size: 48))
-                .foregroundStyle(.secondary)
+                .font(.system(size: 40, weight: .light))
+                .foregroundStyle(Theme.accent)
             Text("Full Disk Access needed")
-                .font(.title.bold())
+                .font(.system(size: 26, weight: .semibold))
             Text("MacTidy scans ~/Library, app data and caches, which macOS protects. Without access, results are silently incomplete.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
@@ -122,29 +124,31 @@ struct FDAOnboardingView: View {
     }
 
     private var actions: some View {
-        VStack(spacing: Theme.Spacing.sm) {
-            HStack {
-                Button("Open System Settings") { FullDiskAccess.openSettingsPane() }
-                    .keyboardShortcut(.defaultAction)
-                Button("Show MacTidy in Finder") {
+        VStack(spacing: Theme.Spacing.md) {
+            Button {
+                FullDiskAccess.openSettingsPane()
+            } label: {
+                Text("Open System Settings").padding(.horizontal, Theme.Spacing.md)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .keyboardShortcut(.defaultAction)
+            HStack(spacing: Theme.Spacing.lg) {
+                Button("Show in Finder") {
                     NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
                 }
-            }
-            HStack {
                 if status.signing.isAdHoc || status.issues.contains(.staleGrant) {
-                    Button {
-                        resetOldPermission()
-                    } label: {
-                        if isResetting { ProgressView().controlSize(.small) } else { Text("Reset old permission") }
-                    }
-                    .disabled(isResetting)
-                    .help("Removes MacTidy's Full Disk Access entry so you can add this build fresh. Only removes access, never grants it.")
+                    Button(isResetting ? "Resetting…" : "Reset old permission") { resetOldPermission() }
+                        .disabled(isResetting)
+                        .help("Removes MacTidy's Full Disk Access entry so this build can be added fresh. Only removes access.")
                 }
-                Button("Relaunch MacTidy") { relaunch() }
-                    .help("macOS sometimes applies a new grant only after the app restarts.")
+                Button("Relaunch") { relaunch() }
+                    .help("macOS sometimes applies a new grant only after a restart.")
             }
+            .buttonStyle(.link)
+            .font(Theme.Font.body)
             if let resetMessage {
-                Text(resetMessage).font(.caption).foregroundStyle(.secondary)
+                Text(resetMessage).font(Theme.Font.caption).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
         }

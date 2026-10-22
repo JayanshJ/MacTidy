@@ -8,19 +8,17 @@ struct TreemapView: View {
     let items: [ScanItem]
     var onDrillInto: (ScanItem) -> Void
 
-    private static let palette: [Color] = [
-        .blue, .teal, .indigo, .purple, .pink, .orange, .green, .cyan, .mint
-    ]
-
     var body: some View {
         GeometryReader { proxy in
             let canvas = CGRect(origin: .zero, size: proxy.size)
             let tiles = Self.layout(items.sorted { $0.sizeBytes > $1.sizeBytes },
                                     in: canvas)
+            let largest = Double(max(items.map(\.sizeBytes).max() ?? 1, 1))
             ZStack(alignment: .topLeading) {
-                Rectangle().fill(.quaternary.opacity(0.3))
-                ForEach(Array(tiles.enumerated()), id: \.offset) { index, tile in
-                    tileView(tile, color: Self.palette[index % Self.palette.count])
+                Rectangle().fill(Theme.surface)
+                ForEach(Array(tiles.enumerated()), id: \.offset) { _, tile in
+                    // One hue; bigger tiles are denser.
+                    tileView(tile, color: Theme.accent.opacity(0.12 + 0.43 * sqrt(Double(tile.item.sizeBytes) / largest)))
                 }
             }
         }
@@ -38,12 +36,9 @@ struct TreemapView: View {
             }
         } label: {
             ZStack(alignment: .topLeading) {
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(color.opacity(0.55))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 4)
-                            .strokeBorder(.white.opacity(0.15), lineWidth: 1)
-                    )
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(color)
+                    .padding(1.5)
                 if bigEnough {
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 3) {
@@ -60,8 +55,8 @@ struct TreemapView: View {
                                 .font(.system(size: 9))
                         }
                     }
-                    .foregroundStyle(.white)
-                    .padding(5)
+                    .foregroundStyle(.primary)
+                    .padding(7)
                 }
             }
             .frame(width: r.width, height: r.height)

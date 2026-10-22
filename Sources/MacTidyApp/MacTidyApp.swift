@@ -12,14 +12,19 @@ struct MacTidyApp: App {
             RootView()
                 .environment(state)
                 .tint(Theme.accent)
-                .frame(minWidth: 940, minHeight: 600)
                 .onAppear {
                     delegate.appState = state
+                    state.applyAppearance()
                     delegate.sizeMainWindow()
-                    state.monitor.start()
+                    if !SnapshotHarness.isActive { state.monitor.start() }
                 }
         }
         .windowToolbarStyle(.unified(showsTitle: false))
+        Settings {
+            SettingsView()
+                .environment(state)
+                .tint(Theme.accent)
+        }
         // The resident menu bar presence: quick-check summary + open/scan.
         // `internaldrive` (a disk glyph) echoes the app icon's "mostly-empty
         // disk = space reclaimed" mark and reads as storage cleanup at 16px.
@@ -61,7 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
+        if !SnapshotHarness.isActive { NSApp.activate(ignoringOtherApps: true) }
         UNUserNotificationCenter.current().delegate = notificationDelegate
         sizeMainWindow()
     }

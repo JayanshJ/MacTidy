@@ -15,34 +15,31 @@ struct MemoryCard: View {
     @State private var isPurging = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            HStack(spacing: Theme.Spacing.xs) {
-                Image(systemName: "memorychip").foregroundStyle(Theme.accent)
-                Text("Memory").font(.caption.bold()).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Memory").font(Theme.Font.section)
                 Spacer()
                 if let pressure {
-                    HStack(spacing: 4) {
-                        Circle().fill(pressureColor).frame(width: 8, height: 8)
-                        Text("Pressure: \(pressure.displayName)")
-                            .font(.caption.bold())
+                    HStack(spacing: 6) {
+                        Circle().fill(pressureColor).frame(width: 7, height: 7)
+                        Text("\(pressure.displayName) pressure")
+                            .font(Theme.Font.caption.weight(.medium))
                             .foregroundStyle(pressureColor)
                     }
-                } else {
-                    Text("Pressure unavailable")
-                        .font(.caption).foregroundStyle(.tertiary)
                 }
             }
-
             if let summary {
-                HStack(spacing: Theme.Spacing.lg) {
+                HStack(spacing: Theme.Spacing.xxl) {
                     stat("Used", summary.usedBytes.formattedBytes)
                     stat("Free", summary.freeBytes.formattedBytes)
                     stat("Swap", summary.swapUsedBytes.formattedBytes)
-                    stat("Total", summary.totalBytes.formattedBytes)
+                    stat("Installed", summary.totalBytes.formattedBytes)
                 }
+                Meter(fraction: Double(summary.usedBytes) / Double(max(summary.totalBytes, 1)),
+                      tint: pressureColor, height: 5)
             }
-            Text("Full RAM is normal on macOS — cached memory is reclaimed instantly when needed. Pressure and swap are what predict trouble.")
-                .font(.caption).foregroundStyle(.secondary)
+            Text("Full RAM is normal on macOS. Pressure and swap are what predict slowdowns.")
+                .font(Theme.Font.caption).foregroundStyle(.secondary)
 
             HStack(spacing: Theme.Spacing.sm) {
                 if !idleApps.isEmpty {
@@ -53,7 +50,6 @@ struct MemoryCard: View {
                         Label("Quit \(idleApps.count) idle app\(idleApps.count == 1 ? "" : "s") · ~\(bytes.formattedBytes)",
                               systemImage: "power")
                     }
-                    .buttonStyle(.borderedProminent)
                     .controlSize(.small)
                 }
                 Button {
@@ -65,7 +61,6 @@ struct MemoryCard: View {
                         Label("Purge disk cache…", systemImage: "arrow.down.circle.dotted")
                     }
                 }
-                .buttonStyle(.bordered)
                 .controlSize(.small)
                 .disabled(isPurging || (pressure.map { $0 < .warning } ?? true))
                 .help(pressure.map { $0 >= .warning } ?? false
@@ -84,9 +79,7 @@ struct MemoryCard: View {
                     .font(.caption).foregroundStyle(.orange)
             }
         }
-        .padding(Theme.Spacing.lg)
-        .background(RoundedRectangle(cornerRadius: 12).fill(.regularMaterial))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.quaternary))
+        .cardStyle()
         .task { refreshSnapshot() }
         .confirmationDialog(
             "Purge the disk cache?",
@@ -112,7 +105,7 @@ struct MemoryCard: View {
         switch pressure {
         case .critical: .red
         case .warning: .orange
-        default: Theme.Status.good
+        default: Theme.accent
         }
     }
 
@@ -125,9 +118,9 @@ struct MemoryCard: View {
     }
 
     private func stat(_ label: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(value).font(.callout.bold().monospacedDigit())
-            Text(label).font(.caption2).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value).font(Theme.Font.figure)
+            Text(label).font(Theme.Font.caption).foregroundStyle(.secondary)
         }
     }
 }

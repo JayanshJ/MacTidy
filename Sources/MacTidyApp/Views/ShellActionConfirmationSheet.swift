@@ -26,13 +26,14 @@ struct ShellActionConfirmationSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             if let outcome { outcomeView(outcome) } else { planView }
         }
-        .padding(20)
+        .padding(Theme.Spacing.xl)
         .frame(width: 560, height: 480)
+        .background(Theme.canvas)
     }
 
     @ViewBuilder
     private var planView: some View {
-        Text(title).font(.title2.bold())
+        Text(title).font(.system(size: 17, weight: .semibold))
         Label("This cannot be undone — these actions do not go through the Trash.",
               systemImage: "exclamationmark.triangle.fill")
             .foregroundStyle(.red)
@@ -61,6 +62,7 @@ struct ShellActionConfirmationSheet: View {
             Spacer()
             Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
             Button("Run") { execute() }
+                .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
                 .tint(.red)
                 .disabled(actions.isEmpty)
@@ -75,7 +77,7 @@ struct ShellActionConfirmationSheet: View {
     private func outcomeView(_ outcome: ShellActionOutcome) -> some View {
         Label("Ran \(outcome.succeeded.count) action(s) · ≈ \(outcome.reclaimedBytes.formattedBytes)",
               systemImage: "checkmark.circle")
-            .font(.title2.bold())
+            .font(.system(size: 17, weight: .semibold))
         List {
             if !outcome.succeeded.isEmpty {
                 Section("Succeeded") {
@@ -107,7 +109,7 @@ struct ShellActionConfirmationSheet: View {
             Button("Done") {
                 onCompleted()
                 dismiss()
-            }.keyboardShortcut(.defaultAction)
+            }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
         }
     }
 }

@@ -73,6 +73,12 @@ public struct FDAStatus: Sendable, Equatable {
     public let granted: Bool
     public let issues: [PermissionIssue]
     public let signing: SigningInfo
+
+    public init(granted: Bool, issues: [PermissionIssue], signing: SigningInfo) {
+        self.granted = granted
+        self.issues = issues
+        self.signing = signing
+    }
 }
 
 public enum PermissionIssue: Sendable, Equatable {

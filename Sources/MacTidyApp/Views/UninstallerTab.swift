@@ -50,22 +50,20 @@ struct DashboardUninstaller: View {
     var body: some View {
         HStack(spacing: 0) {
             appList
-                .frame(minWidth: 280, idealWidth: 320)
-            Divider()
+                .frame(width: 320)
+            Rectangle().fill(Theme.hairline).frame(width: 1)
             detail
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .background(Theme.canvas)
+        .task { await state.loadAppsIfNeeded() }
         .onChange(of: selectedAppID) { Task { await loadLeftovers() } }
         .sheet(item: $sheetPlan) { plan in
             DeletionConfirmationSheet(title: "Uninstall \(selectedApp?.app.name ?? "app")?",
                                        plan: plan,
                                        kind: .uninstall,
                                        uninstallActions: actions) { _ in
-                // Stay on the dashboard: drop the uninstalled app from the
-                // list and clear the detail pane instead of triggering a full
-                // rescan + phase change. The app bundle is already in the
-                // Trash, so a rescan would just re-list every category with
-                // the same data minus one app — wasteful and disorienting.
+                // Drop the app from the list instead of a full rescan.
                 if let id = selectedAppID { state.refreshAfterUninstall(appID: id) }
                 selectedAppID = nil
                 leftovers = []
@@ -75,132 +73,136 @@ struct DashboardUninstaller: View {
     }
 
     private var appList: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Apps").font(.headline)
-                Spacer()
-                Picker("Sort", selection: $sortMode) {
-                    ForEach(AppSortMode.allCases) { mode in
-                        Text(mode.label).tag(mode)
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                Text("Uninstaller").font(Theme.Font.title)
+                HStack {
+                    Text("\(state.flowApps.count) apps").font(Theme.Font.body).foregroundStyle(.secondary)
+                    Spacer()
+                    Picker("Sort", selection: $sortMode) {
+                        ForEach(AppSortMode.allCases) { mode in Text(mode.label).tag(mode) }
+                    }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                    .fixedSize()
+                }
+            }
+            .padding(.horizontal, Theme.Spacing.xl)
+            .padding(.top, Theme.Spacing.xl)
+            .padding(.bottom, Theme.Spacing.md)
+            if state.flowApps.isEmpty {
+                Group {
+                    if state.isLoadingApps {
+                        ProgressView("Finding apps")
+                    } else {
+                        EmptyStateView(symbol: "xmark.app", title: "No apps to remove",
+                                       message: "Only non-Apple apps over 50 MB are listed.")
                     }
                 }
-                .pickerStyle(.menu)
-                .controlSize(.small)
-                .labelsHidden()
-                Text("\(state.flowApps.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, Theme.Spacing.md).padding(.vertical, Theme.Spacing.sm)
-            Divider()
-            if state.flowApps.isEmpty {
-                ContentUnavailableView("No apps to uninstall",
-                                       systemImage: "trash.slash",
-                                       description: Text("Only large non-Apple apps are listed."))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List(sortedApps, id: \.app.id, selection: $selectedAppID) { entry in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(entry.app.name).lineLimit(1)
-                            Text(AppUninstaller.lastUsedLabel(for: entry.app.lastUsedDate))
-                                .font(.caption2).foregroundStyle(.secondary)
+                ScrollView {
+                    LazyVStack(spacing: 2) {
+                        ForEach(sortedApps, id: \.app.id) { entry in
+                            appRow(entry.app)
                         }
-                        Spacer()
-                        Text(entry.app.sizeBytes.formattedBytes)
-                            .monospacedDigit().font(.caption).foregroundStyle(.secondary)
                     }
-                    .tag(entry.app.id)
+                    .padding(.horizontal, Theme.Spacing.md)
+                    .padding(.bottom, Theme.Spacing.lg)
                 }
             }
         }
+    }
+
+    private func appRow(_ app: InstalledApp) -> some View {
+        let selected = selectedAppID == app.id
+        return Button { selectedAppID = app.id } label: {
+            HStack(spacing: Theme.Spacing.md) {
+                Image(nsImage: NSWorkspace.shared.icon(forFile: app.url.path))
+                    .resizable().frame(width: 30, height: 30)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(app.name).font(Theme.Font.bodyStrong).lineLimit(1)
+                    Text(AppUninstaller.lastUsedLabel(for: app.lastUsedDate))
+                        .font(Theme.Font.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: Theme.Spacing.sm)
+                Text(app.sizeBytes.formattedBytes)
+                    .font(Theme.Font.caption.monospacedDigit()).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, Theme.Spacing.sm)
+            .padding(.vertical, 7)
+            .background(selected ? Theme.accent.opacity(0.14) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder
     private var detail: some View {
         if let entry = selectedApp {
             VStack(alignment: .leading, spacing: 0) {
-                VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                    Text(entry.app.name).font(.title2.bold())
-                    Text(entry.app.bundleID ?? "no bundle identifier")
-                        .font(.callout.monospaced()).foregroundStyle(.secondary)
-                    Text("App bundle: \(entry.app.sizeBytes.formattedBytes)")
-                        .font(.callout).foregroundStyle(.secondary)
-                    Text("Last opened: \(lastOpenedAbsolute(entry.app.lastUsedDate))")
-                        .font(.callout).foregroundStyle(.secondary)
-                }
-                .padding()
-                Divider()
-                if isLoadingLeftovers {
-                    ProgressView("Searching for leftover data…")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    VStack(spacing: 0) {
-                        HStack {
-                            Text("Leftover data (\(leftovers.count))")
-                                .font(.headline)
-                            Spacer()
-                            if !leftovers.isEmpty {
-                                Button {
-                                    let allSelected = leftovers.allSatisfy { leftoverSelection.contains($0.id) }
-                                    leftoverSelection.removeAll()
-                                    if !allSelected {
-                                        for item in leftovers { leftoverSelection.insert(item.id) }
-                                    }
-                                } label: {
-                                    let allSelected = leftovers.allSatisfy { leftoverSelection.contains($0.id) }
-                                    Label(allSelected ? "Deselect All" : "Select All",
-                                          systemImage: allSelected ? "circle" : "checkmark.circle")
+                ScrollView {
+                    VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
+                        HStack(spacing: Theme.Spacing.lg) {
+                            Image(nsImage: NSWorkspace.shared.icon(forFile: entry.app.url.path))
+                                .resizable().frame(width: 64, height: 64)
+                            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                                Text(entry.app.name).font(Theme.Font.title)
+                                Text("\(entry.app.sizeBytes.formattedBytes)  ·  last opened \(lastOpenedAbsolute(entry.app.lastUsedDate))")
+                                    .font(Theme.Font.body).foregroundStyle(.secondary)
+                                if let id = entry.app.bundleID {
+                                    Text(id).font(.system(size: 11, design: .monospaced)).foregroundStyle(.tertiary)
                                 }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
                             }
                         }
-                        .padding(.horizontal, Theme.Spacing.lg).padding(.vertical, Theme.Spacing.sm)
-                        Divider()
-                        List {
-                            Section {
-                                if leftovers.isEmpty {
-                                    Text("No orphaned data found for this app.").foregroundStyle(.tertiary)
+                        if isLoadingLeftovers {
+                            ProgressView("Looking for leftover data").frame(maxWidth: .infinity)
+                        } else if leftovers.isEmpty {
+                            Text("No leftover data in ~/Library for this app.")
+                                .font(Theme.Font.body).foregroundStyle(.secondary)
+                        } else {
+                            let all = leftovers.allSatisfy { leftoverSelection.contains($0.id) }
+                            SurfaceSection("Leftover data", footer: actionsNote) {
+                                Button(all ? "Deselect All" : "Select All") {
+                                    leftoverSelection = all ? [] : Set(leftovers.map(\.id))
                                 }
-                                ForEach(leftovers) { item in
+                                .buttonStyle(.link)
+                                .font(Theme.Font.caption)
+                            } content: {
+                                ForEach(Array(leftovers.enumerated()), id: \.element.id) { i, item in
+                                    if i > 0 { RowDivider(inset: 70) }
                                     ScanItemRow(item: item, selection: $leftoverSelection)
-                                }
-                            } footer: {
-                                if !actions.isEmpty {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text("Also runs on uninstall:")
-                                            .font(.caption.bold())
-                                        ForEach(actions) { action in
-                                            HStack(spacing: 6) {
-                                                Image(systemName: action.kind.icon)
-                                                    .foregroundStyle(Theme.accent)
-                                                Text(action.kind.rawValue)
-                                            }
-                                            .font(.caption)
-                                        }
-                                        Text("These run automatically with the uninstall — privacy permissions are revoked and the app is unregistered from LaunchServices.")
-                                            .font(.caption2).foregroundStyle(.tertiary)
-                                    }
+                                        .padding(.horizontal, Theme.Spacing.lg)
+                                        .padding(.vertical, Theme.Spacing.xs)
                                 }
                             }
-                        }
-                        SelectionFooter(
-                            selectedCount: leftoverSelection.count + 1,
-                            selectedBytes: entry.app.sizeBytes + selectedLeftovers.reduce(0) { $0 + $1.sizeBytes },
-                            buttonTitle: "Uninstall…",
-                            disabled: false
-                        ) {
-                            var items = selectedLeftovers
-                            items.insert(ScanItem(url: entry.app.url, sizeBytes: entry.app.sizeBytes,
-                                                  isDirectory: true), at: 0)
-                            sheetPlan = DeletionPlan(items: items)
                         }
                     }
+                    .padding(Theme.gutter)
+                }
+                SelectionFooter(
+                    selectedCount: leftoverSelection.count + 1,
+                    selectedBytes: entry.app.sizeBytes + selectedLeftovers.reduce(0) { $0 + $1.sizeBytes },
+                    buttonTitle: "Uninstall…",
+                    disabled: false
+                ) {
+                    var items = selectedLeftovers
+                    items.insert(ScanItem(url: entry.app.url, sizeBytes: entry.app.sizeBytes,
+                                          isDirectory: true), at: 0)
+                    sheetPlan = DeletionPlan(items: items)
                 }
             }
         } else {
-            ContentUnavailableView("Pick an app",
-                                   systemImage: "trash.slash",
-                                   description: Text("Select an app to see its bundle plus leftover data in ~/Library. Privacy permissions are revoked and LaunchServices registration dropped on uninstall."))
+            EmptyStateView(symbol: "xmark.app", title: "Choose an app",
+                           message: "See the app and everything it left in ~/Library. Uninstalling also revokes its privacy permissions.")
+                .frame(maxHeight: .infinity)
         }
+    }
+
+    private var actionsNote: String? {
+        guard !actions.isEmpty else { return nil }
+        return "Uninstalling also runs: " + actions.map(\.kind.rawValue).joined(separator: ", ") + "."
     }
 
     private var selectedLeftovers: [ScanItem] {

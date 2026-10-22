@@ -114,6 +114,7 @@ struct ScheduleEditor: View {
                     onSave(saved)
                     dismiss()
                 }
+                .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
                 .disabled(job.categories.isEmpty)
             }

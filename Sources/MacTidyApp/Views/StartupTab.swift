@@ -11,30 +11,27 @@ struct DashboardStartup: View {
     @State private var errorMessage: String?
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Startup Items").font(.title3.bold())
-                Spacer()
-                Button { reload() } label: {
-                    if isLoading { ProgressView().controlSize(.small) }
-                    else { Label("Rescan", systemImage: "arrow.clockwise") }
-                }
-                .buttonStyle(.bordered).controlSize(.small)
-                .disabled(isLoading)
+        Page("Login Items",
+             subtitle: "Background agents and daemons that start with your Mac. Disabling parks the plist so it can be restored.") {
+            Button { reload() } label: {
+                if isLoading { ProgressView().controlSize(.small) } else { Label("Refresh", systemImage: "arrow.clockwise") }
             }
-            .padding(.horizontal, Theme.Spacing.lg).padding(.vertical, Theme.Spacing.sm)
-            Divider()
-            List {
-                ForEach(LaunchItem.Domain.allCases, id: \.self) { domain in
-                    section(for: domain)
-                }
-                if !disabledItems.isEmpty {
-                    Section("Disabled by MacTidy") {
-                        ForEach(disabledItems) { item in row(item, action: .restore) }
+            .disabled(isLoading)
+        } content: {
+            if isLoading && items.isEmpty {
+                ProgressView("Reading launch agents").frame(maxWidth: .infinity).padding(Theme.Spacing.xxl)
+            }
+            ForEach(LaunchItem.Domain.allCases, id: \.self) { domain in
+                section(for: domain)
+            }
+            if !disabledItems.isEmpty {
+                SurfaceSection("Disabled by MacTidy") {
+                    ForEach(Array(disabledItems.enumerated()), id: \.element.id) { i, item in
+                        if i > 0 { RowDivider() }
+                        row(item, action: .restore)
                     }
                 }
             }
-            .overlay { if isLoading { ProgressView("Reading launchd plists…") } }
         }
         .onAppear { if items.isEmpty { reload() } }
         .alert("Startup item change failed",
@@ -46,14 +43,13 @@ struct DashboardStartup: View {
     @ViewBuilder
     private func section(for domain: LaunchItem.Domain) -> some View {
         let domainItems = items.filter { $0.domain == domain }
-        Section {
-            if domainItems.isEmpty { Text("None found").foregroundStyle(.tertiary) }
-            ForEach(domainItems) { item in row(item, action: .disable) }
-        } header: { Text(domain.rawValue) }
-        footer: {
-            if domain.requiresAdmin {
-                Text("Needs admin rights — macOS will prompt for your password.")
-                    .font(.caption).foregroundStyle(.tertiary)
+        if !domainItems.isEmpty {
+            SurfaceSection(domain.rawValue,
+                           footer: domain.requiresAdmin ? "Changing these asks for your administrator password." : nil) {
+                ForEach(Array(domainItems.enumerated()), id: \.element.id) { i, item in
+                    if i > 0 { RowDivider() }
+                    row(item, action: .disable)
+                }
             }
         }
     }
@@ -62,26 +58,30 @@ struct DashboardStartup: View {
 
     @ViewBuilder
     private func row(_ item: LaunchItem, action: RowAction?) -> some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(item.label).fontWeight(.medium).lineLimit(1)
-                    if item.isLoaded { Badge(text: "Loaded", tint: Theme.Status.good, filled: true) }
-                    if item.runAtLoad == true { Badge(text: "Runs at login", tint: .blue) }
-                    if item.domain.requiresAdmin { Badge(text: "Admin", tint: Theme.Status.caution) }
+        HStack(spacing: Theme.Spacing.md) {
+            Circle()
+                .fill(item.isLoaded ? Theme.accent : Theme.track)
+                .frame(width: 7, height: 7)
+                .help(item.isLoaded ? "Running now" : "Not running")
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: Theme.Spacing.sm) {
+                    Text(item.label).font(Theme.Font.bodyStrong).lineLimit(1)
+                    if item.runAtLoad == true { Badge(text: "At login", tint: .secondary) }
                 }
                 if let program = item.program {
-                    Text(program).font(.caption.monospaced()).foregroundStyle(.secondary)
+                    Text(program).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)
                         .lineLimit(1).truncationMode(.middle)
                 }
             }
-            Spacer()
+            Spacer(minLength: Theme.Spacing.lg)
             switch action {
             case .disable: Button("Disable") { disable(item) }
             case .restore: Button("Restore") { restore(item) }
             case nil: EmptyView()
             }
         }
+        .padding(.horizontal, Theme.Spacing.lg)
+        .padding(.vertical, Theme.Spacing.md)
     }
 
     private func reload() {

@@ -44,10 +44,11 @@ struct DuplicatesView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            rootsBar
-            Divider()
+            header
+            Rectangle().fill(Theme.hairline).frame(height: 1)
             content
         }
+        .background(Theme.canvas)
         .sheet(item: $sheetPlan) { plan in
             DeletionConfirmationSheet(title: "Trash duplicate copies?",
                                       plan: plan,
@@ -66,178 +67,156 @@ struct DuplicatesView: View {
         .onDisappear { scanTask?.cancel() }
     }
 
-    private var rootsBar: some View {
-        VStack(spacing: 8) {
-            HStack {
+    private var header: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
+            PageHeader(title: "Duplicates",
+                       subtitle: "Files compared by content, not name. Clones that already share disk space don\u{2019}t count as waste.") {
+                if isScanning {
+                    Button("Cancel") { scanTask?.cancel() }
+                }
+                Button {
+                    scan()
+                } label: {
+                    if isScanning {
+                        HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Scanning") }
+                    } else {
+                        Text("Find Duplicates")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(effectiveRoots.isEmpty || isScanning)
+            }
+            HStack(spacing: Theme.Spacing.md) {
                 Picker("", selection: $mode) {
                     ForEach(Mode.allCases) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .frame(width: 240)
-                .help(mode == .wholeComputer
-                    ? "Scan your Documents, Downloads, Desktop, and media folders — system and build files are excluded."
-                    : "Pick specific folders to compare for duplicates.")
-                Spacer()
-                Button {
-                    scan()
-                } label: {
-                    if isScanning {
-                        Label("Scanning…", systemImage: "hourglass")
-                    } else {
-                        Label("Find Duplicates", systemImage: "doc.on.doc")
-                    }
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(effectiveRoots.isEmpty || isScanning)
-                if isScanning {
-                    Button("Cancel") { scanTask?.cancel() }
-                        .buttonStyle(.bordered).controlSize(.small)
-                }
-            }
-            HStack {
+                .fixedSize()
                 if mode == .manual {
-                    if roots.isEmpty {
-                        Text("Pick the folders to compare — duplicates are only searched where you point.")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(roots, id: \.self) { root in
-                            HStack(spacing: 4) {
-                                Image(systemName: "folder")
-                                Text(root.lastPathComponent)
-                                Button {
-                                    roots.removeAll { $0 == root }
-                                } label: {
-                                    Image(systemName: "xmark.circle.fill")
-                                }
-                                .buttonStyle(.borderless)
+                    ForEach(roots, id: \.self) { root in
+                        HStack(spacing: 5) {
+                            Image(systemName: "folder").foregroundStyle(.secondary)
+                            Text(root.lastPathComponent)
+                            Button { roots.removeAll { $0 == root } } label: {
+                                Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
                             }
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(.quaternary, in: Capsule())
-                            .help(root.path)
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(.secondary)
                         }
+                        .font(Theme.Font.caption)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 4)
+                        .background(Theme.surface, in: Capsule())
+                        .overlay(Capsule().strokeBorder(Theme.hairline))
+                        .help(root.path)
                     }
-                } else {
-                    Text("Scanning your Documents, Downloads, Desktop, Movies, Music, Pictures, and iCloud Drive. System, hidden, and build files are skipped. Files under 1 MB are ignored.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                if mode == .manual {
                     Button("Add Folder…") { addFolder() }
+                        .buttonStyle(.link)
+                        .font(Theme.Font.caption)
+                } else {
+                    Text("Documents, Downloads, Desktop, media folders and iCloud Drive. Hidden, system and build files are skipped, and so is anything under 1 MB.")
+                        .font(Theme.Font.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
                 }
+                Spacer(minLength: 0)
             }
         }
-        .padding()
+        .padding(.horizontal, Theme.gutter)
+        .padding(.top, Theme.Spacing.xl)
+        .padding(.bottom, Theme.Spacing.lg)
     }
 
     @ViewBuilder
     private var content: some View {
         if isScanning {
-            VStack(spacing: 8) {
+            VStack(spacing: Theme.Spacing.sm) {
                 ProgressView()
-                Text(status).font(.caption).foregroundStyle(.secondary)
+                Text(status).font(Theme.Font.caption).foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if sets.isEmpty {
-            ContentUnavailableView(
-                hasScanned ? "No duplicates found" : "No scan yet",
-                systemImage: "doc.on.doc",
-                description: Text(hasScanned
-                    ? "Every file in the selected folders is unique by content."
-                    : "Add folders and run a scan. Files are compared by content (SHA-256), not by name.")
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            EmptyStateView(symbol: "doc.on.doc",
+                           title: hasScanned ? "No duplicates found" : "Choose where to look",
+                           message: hasScanned
+                               ? "Every file in these folders is unique."
+                               : (mode == .manual ? "Add one or more folders, then find duplicates." : "Find duplicates across your personal folders."))
+                .frame(maxHeight: .infinity)
         } else {
             VStack(spacing: 0) {
-                HStack {
-                    Text("\(sets.count) duplicate set\(sets.count == 1 ? "" : "s") · \(sets.reduce(0) { $0 + $1.wastedBytes }.formattedBytes) wasted")
-                        .foregroundStyle(.secondary)
+                HStack(spacing: Theme.Spacing.md) {
+                    Text("\(sets.reduce(0) { $0 + $1.wastedBytes }.formattedBytes) wasted in \(sets.count) set\(sets.count == 1 ? "" : "s")")
+                        .font(Theme.Font.bodyStrong)
                     Spacer()
-                    if !sets.isEmpty {
-                        Button {
-                            let allItems = sets.flatMap(\.files)
-                            let allSelected = allItems.allSatisfy { selection.contains($0.id) }
-                            selection.removeAll()
-                            if !allSelected {
-                                // Select one copy per set, never all (would
-                                // delete the only remaining copy of content).
-                                for set in sets {
-                                    if let first = set.files.first {
-                                        selection.insert(first.id)
-                                    }
-                                }
-                            }
-                        } label: {
-                            let allSelected = sets.flatMap(\.files).allSatisfy { selection.contains($0.id) }
-                            Label(allSelected ? "Deselect All" : "Select Extras",
-                                  systemImage: allSelected ? "circle" : "checkmark.circle")
+                    Button(allSelected ? "Deselect All" : "Select Extras") {
+                        let wasAll = allSelected
+                        selection.removeAll()
+                        if !wasAll {
+                            // One copy per set, never all of them.
+                            for set in sets { if let first = set.files.first { selection.insert(first.id) } }
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .help("Select one extra copy from each set (always keeps one copy).")
                     }
-                    Button {
-                        showDedupSheet = true
-                    } label: {
-                        Label("Deduplicate — Keep All Files…", systemImage: "arrow.triangle.merge")
-                    }
-                    .disabled(dedupableSets.isEmpty)
-                    .help("Replace extra copies with APFS clones: every path keeps working, the space comes back.")
+                    .help("Select one extra copy from each set. One copy is always kept.")
+                    Button("Replace with Clones…") { showDedupSheet = true }
+                        .disabled(dedupableSets.isEmpty)
+                        .help("Keep every path working while the space comes back: extra copies become APFS clones.")
                 }
-                .padding(.horizontal)
-                .padding(.vertical, 6)
-                List {
-                    ForEach(sets) { set in
-                        setSection(set)
+                .padding(.horizontal, Theme.gutter)
+                .padding(.vertical, Theme.Spacing.md)
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: Theme.Spacing.xl) {
+                        ForEach(sets) { set in setSection(set) }
                     }
+                    .padding(.horizontal, Theme.gutter)
+                    .padding(.bottom, Theme.Spacing.xl)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                if fullySelectedSetExists {
+                    Label("Keep at least one copy of every set. Deselect one to continue.", systemImage: "exclamationmark.triangle.fill")
+                        .font(Theme.Font.caption)
+                        .foregroundStyle(Theme.Status.blocked)
+                        .padding(.vertical, Theme.Spacing.sm)
+                }
                 SelectionFooter(
                     selectedCount: selection.count,
                     selectedBytes: selectedItems.reduce(0) { $0 + $1.sizeBytes },
-                    buttonTitle: "Trash Selected Copies…",
+                    buttonTitle: "Move Copies to Trash…",
                     disabled: fullySelectedSetExists
                 ) {
                     sheetPlan = DeletionPlan(items: selectedItems)
-                }
-                .overlay(alignment: .top) {
-                    if fullySelectedSetExists {
-                        Text("At least one copy of every set must be kept — deselect one.")
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                            .padding(4)
-                    }
                 }
             }
         }
     }
 
-    @ViewBuilder
+    private var allSelected: Bool {
+        let all = sets.flatMap(\.files)
+        return !all.isEmpty && all.allSatisfy { selection.contains($0.id) }
+    }
+
     private func setSection(_ set: DuplicateSet) -> some View {
-        Section {
+        SurfaceSection("\(set.files.count) copies of \(set.fileSizeBytes.formattedBytes)"
+                       + (set.alreadySharedCount > 0 ? ", \(set.alreadySharedCount) already cloned" : "")) {
+            Text("\(set.wastedBytes.formattedBytes) wasted")
+                .font(Theme.Font.caption.monospacedDigit()).foregroundStyle(.secondary)
+        } content: {
             ForEach(Array(set.physicalGroups.enumerated()), id: \.offset) { groupIndex, group in
                 ForEach(Array(group.enumerated()), id: \.element.id) { fileIndex, item in
-                    HStack {
+                    if groupIndex > 0 || fileIndex > 0 { RowDivider(inset: 70) }
+                    HStack(spacing: Theme.Spacing.sm) {
                         ScanItemRow(item: item, selection: $selection)
                         if fileIndex > 0 {
-                            Badge(text: "Clone", tint: Theme.Status.good)
-                                .help("Already shares its on-disk blocks with the copy above — takes no extra space.")
+                            Badge(text: "Clone", tint: Theme.accent)
+                                .help("Shares its disk blocks with the copy above, so it takes no extra space.")
                         } else if groupIndex > 0 {
                             Badge(text: "Extra copy", tint: Theme.Status.caution)
-                                .help("Independent second copy — this one actually wastes space.")
+                                .help("An independent copy that takes its own space.")
                         }
                     }
+                    .padding(.horizontal, Theme.Spacing.lg)
+                    .padding(.vertical, Theme.Spacing.xs)
                 }
-            }
-        } header: {
-            HStack {
-                Text("\(set.files.count) copies"
-                     + (set.alreadySharedCount > 0 ? " (\(set.alreadySharedCount) cloned)" : "")
-                     + " · \(set.fileSizeBytes.formattedBytes) each")
-                Spacer()
-                Text("\(set.wastedBytes.formattedBytes) wasted").monospacedDigit()
             }
         }
     }

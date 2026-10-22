@@ -17,12 +17,12 @@ struct StorageByAppTab: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            appList.frame(minWidth: 300, idealWidth: 340, maxHeight: .infinity)
-            Divider()
+            appList.frame(width: 320)
+            Rectangle().fill(Theme.hairline).frame(width: 1)
             detail.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .background(Theme.canvas)
         .task {
-            // Use preloaded data from AppState if available.
             if !state.appAttributions.isEmpty {
                 attributions = state.appAttributions
             } else if attributions.isEmpty {
@@ -40,119 +40,138 @@ struct StorageByAppTab: View {
     }
 
     private var appList: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Apps").font(.headline)
-                Spacer()
-                Button { Task { await load() } } label: {
-                    if isLoading { ProgressView().controlSize(.small) }
-                    else { Image(systemName: "arrow.clockwise") }
-                }
-                .buttonStyle(.borderless)
-                .disabled(isLoading)
-            }
-            .padding(.horizontal, Theme.Spacing.md).padding(.vertical, Theme.Spacing.sm)
-            Divider()
-            // Non-blocking loading strip — keeps the existing list visible
-            // while a refresh is running instead of collapsing it into an
-            // empty state (the "everything shrinks downward" bug).
-            if isLoading && !attributions.isEmpty {
-                HStack(spacing: 6) {
-                    ProgressView().controlSize(.mini)
-                    Text("Refreshing…")
-                        .font(.caption).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                Text("App Storage").font(Theme.Font.title)
+                HStack {
+                    Text("Data each app keeps in ~/Library").font(Theme.Font.body).foregroundStyle(.secondary)
                     Spacer()
+                    Button { Task { await load() } } label: {
+                        if isLoading { ProgressView().controlSize(.small) } else { Image(systemName: "arrow.clockwise") }
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(isLoading)
+                    .help("Refresh")
                 }
-                .padding(.horizontal, Theme.Spacing.md).padding(.vertical, 4)
-                .background(Theme.accent.opacity(0.06))
-                Divider()
             }
+            .padding(.horizontal, Theme.Spacing.xl)
+            .padding(.top, Theme.Spacing.xl)
+            .padding(.bottom, Theme.Spacing.md)
             if attributions.isEmpty {
-                ContentUnavailableView(
-                    isLoading ? "Scanning…" : "No app data found",
-                    systemImage: "person.crop.square",
-                    description: Text(isLoading
-                        ? "Matching ~/Library folders to your apps."
-                        : "No app-attributable library data. Run a rescan from the Cleanup tab first.")
-                )
+                Group {
+                    if isLoading { ProgressView("Matching folders to apps") }
+                    else { EmptyStateView(symbol: "square.stack.3d.up", title: "No app data found") }
+                }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List(attributions, id: \.app.id, selection: $selectedAppID) { entry in
-                    HStack {
-                        Text(entry.app.name).lineLimit(1)
-                        Spacer()
-                        Text(entry.totalBytes.formattedBytes)
-                            .monospacedDigit().font(.caption).foregroundStyle(.secondary)
+                let largest = attributions.map(\.totalBytes).max() ?? 1
+                ScrollView {
+                    LazyVStack(spacing: 2) {
+                        ForEach(attributions, id: \.app.id) { entry in
+                            appRow(entry, largest: largest)
+                        }
                     }
-                    .tag(entry.app.id)
+                    .padding(.horizontal, Theme.Spacing.md)
+                    .padding(.bottom, Theme.Spacing.lg)
                 }
             }
         }
-        .frame(maxHeight: .infinity)
+    }
+
+    private func appRow(_ entry: AppFootprint, largest: Int64) -> some View {
+        let isSelected = selectedAppID == entry.app.id
+        return Button { selectedAppID = entry.app.id } label: {
+            HStack(spacing: Theme.Spacing.md) {
+                Image(nsImage: NSWorkspace.shared.icon(forFile: entry.app.url.path))
+                    .resizable().frame(width: 30, height: 30)
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack {
+                        Text(entry.app.name).font(Theme.Font.bodyStrong).lineLimit(1)
+                        Spacer(minLength: Theme.Spacing.sm)
+                        Text(entry.totalBytes.formattedBytes)
+                            .font(Theme.Font.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    }
+                    Meter(fraction: Double(entry.totalBytes) / Double(max(largest, 1)), height: 3)
+                }
+            }
+            .padding(.horizontal, Theme.Spacing.sm)
+            .padding(.vertical, 7)
+            .background(isSelected ? Theme.accent.opacity(0.14) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     @ViewBuilder
     private var detail: some View {
         if let entry = selected {
-            VStack(alignment: .leading, spacing: 0) {
-                VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                    Text(entry.app.name).font(.title2.bold())
-                    Text(entry.app.bundleID ?? "no bundle identifier")
-                        .font(.callout.monospaced()).foregroundStyle(.secondary)
-                    Text("App bundle \(entry.app.sizeBytes.formattedBytes) · library data \(entry.libraryBytes.formattedBytes) · total \(entry.totalBytes.formattedBytes)")
-                        .font(.callout).foregroundStyle(.secondary)
-                }
-                .padding()
-                Divider()
-                List {
-                    Section("Where the \(entry.libraryBytes.formattedBytes) lives") {
-                        ForEach(entry.bucketTotals, id: \.0) { bucket, bytes in
+            let hasCaches = entry.paths.contains { $0.bucket == .caches }
+            ScrollView {
+                VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
+                    HStack(spacing: Theme.Spacing.lg) {
+                        Image(nsImage: NSWorkspace.shared.icon(forFile: entry.app.url.path))
+                            .resizable().frame(width: 64, height: 64)
+                        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                            Text(entry.app.name).font(Theme.Font.title)
+                            Text("\(entry.totalBytes.formattedBytes) in total  ·  app \(entry.app.sizeBytes.formattedBytes)  ·  data \(entry.libraryBytes.formattedBytes)")
+                                .font(Theme.Font.body).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Trash Caches…") {
+                            let caches = entry.paths.filter { $0.bucket == .caches }
+                            sheetPlan = DeletionPlan(items: caches.map { ScanItem(url: $0.url, sizeBytes: $0.sizeBytes, isDirectory: true) })
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!hasCaches)
+                        .help("Keeps the app installed. Caches rebuild on next launch.")
+                    }
+                    SurfaceSection("By kind") {
+                        ForEach(Array(entry.bucketTotals.enumerated()), id: \.offset) { i, pair in
+                            if i > 0 { RowDivider() }
                             HStack {
-                                Text(bucket.displayName)
+                                Text(pair.0.displayName).font(Theme.Font.body)
                                 Spacer()
-                                Text(bytes.formattedBytes).monospacedDigit().foregroundStyle(.secondary)
+                                Meter(fraction: Double(pair.1) / Double(max(entry.libraryBytes, 1)),
+                                      tint: pair.0 == .caches ? Theme.accent : Theme.used)
+                                    .frame(width: 120)
+                                Text(pair.1.formattedBytes)
+                                    .font(Theme.Font.body.monospacedDigit()).foregroundStyle(.secondary)
+                                    .frame(width: 80, alignment: .trailing)
                             }
+                            .padding(.horizontal, Theme.Spacing.lg)
+                            .padding(.vertical, Theme.Spacing.md)
                         }
                     }
-                    Section("Paths (largest first)") {
-                        ForEach(entry.paths) { path in
-                            HStack {
+                    SurfaceSection("Folders") {
+                        ForEach(Array(entry.paths.enumerated()), id: \.element.id) { i, path in
+                            if i > 0 { RowDivider() }
+                            HStack(spacing: Theme.Spacing.md) {
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(path.url.lastPathComponent).lineLimit(1)
+                                    Text(path.url.lastPathComponent).font(Theme.Font.bodyStrong).lineLimit(1)
                                     Text(path.url.path)
-                                        .font(.caption.monospaced()).foregroundStyle(.tertiary)
+                                        .font(.system(size: 11, design: .monospaced)).foregroundStyle(.tertiary)
                                         .lineLimit(1).truncationMode(.head)
                                 }
                                 Spacer()
                                 Text(path.sizeBytes.formattedBytes)
-                                    .monospacedDigit().foregroundStyle(.secondary)
+                                    .font(Theme.Font.body.monospacedDigit()).foregroundStyle(.secondary)
                                 Button { showInFinder(path.url) } label: {
-                                    Image(systemName: "magnifyingglass.circle")
+                                    Image(systemName: "arrow.up.forward.square").foregroundStyle(.tertiary)
                                 }
                                 .buttonStyle(.borderless).help("Show in Finder")
                             }
+                            .padding(.horizontal, Theme.Spacing.lg)
+                            .padding(.vertical, Theme.Spacing.md)
                         }
                     }
                 }
-                HStack {
-                    Spacer()
-                    Button {
-                        let caches = entry.paths.filter { $0.bucket == .caches }
-                        sheetPlan = DeletionPlan(items: caches.map { ScanItem(url: $0.url, sizeBytes: $0.sizeBytes, isDirectory: true) })
-                    } label: {
-                        Label("Trash Caches Only…", systemImage: "trash.circle")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .disabled(entry.paths.allSatisfy { $0.bucket != .caches })
-                    .help("Move only this app's caches to the Trash. The app stays installed; caches rebuild on next launch. Reversible.")
-                }
-                .padding(.horizontal, Theme.Spacing.lg).padding(.vertical, Theme.Spacing.md)
+                .padding(Theme.gutter)
             }
         } else {
-            ContentUnavailableView("Pick an app",
-                                   systemImage: "person.crop.square",
-                                   description: Text("See exactly where each app keeps its data in ~/Library, and reclaim its caches without uninstalling."))
+            EmptyStateView(symbol: "square.stack.3d.up", title: "Choose an app",
+                           message: "See where an app keeps its data, and clear its caches without uninstalling it.")
+                .frame(maxHeight: .infinity)
         }
     }
 

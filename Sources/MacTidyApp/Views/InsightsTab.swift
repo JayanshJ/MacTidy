@@ -18,10 +18,29 @@ struct InsightsTab: View {
     @State private var isPlanning = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
-            content
+        Page("Insights",
+             subtitle: usingAI ? "Suggestions reasoned by your AI model. Nothing runs without your confirmation."
+                               : "Suggestions worked out on this Mac. Add an AI provider in Settings for richer reasoning.") {
+            Button { Task { await refresh() } } label: {
+                if isLoading { ProgressView().controlSize(.small) } else { Label("Refresh", systemImage: "arrow.clockwise") }
+            }
+            .disabled(isLoading)
+        } content: {
+            if state.aiConfig.provider != .none { askBar }
+            MemoryCard(quitSheet: $quitSheet)
+            if isLoading && insights.isEmpty {
+                ProgressView("Looking at disk, memory and processes").frame(maxWidth: .infinity).padding(Theme.Spacing.xl)
+            } else if insights.isEmpty {
+                EmptyStateView(symbol: "checkmark.circle", title: "Nothing to suggest",
+                               message: "No reclaimable disk, no idle memory hogs, and macOS isn't under pressure.")
+            } else {
+                SurfaceSection("Suggestions") {
+                    ForEach(Array(insights.enumerated()), id: \.element.id) { i, insight in
+                        if i > 0 { RowDivider(inset: 48) }
+                        insightRow(insight)
+                    }
+                }
+            }
         }
         .sheet(item: $sheetPlan) { plan in
             DeletionConfirmationSheet(title: "Trash suggested items?", plan: plan, reasoning: sheetReasoning) { _ in
@@ -36,119 +55,61 @@ struct InsightsTab: View {
         .task { if insights.isEmpty { await refresh() } }
     }
 
-    private var header: some View {
-        VStack(spacing: Theme.Spacing.sm) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Insights").font(.title3.bold())
-                    Text(usingAI ? "Reasoned by your configured AI model." : "Generated locally — add an AI provider in Settings for richer reasoning.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button { Task { await refresh() } } label: {
-                    if isLoading {
-                        HStack { ProgressView().controlSize(.small); Text("Thinking…") }
-                    } else {
-                        Label("Refresh", systemImage: "sparkles")
-                    }
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(isLoading)
-            }
-            if state.aiConfig.provider != .none {
-                HStack(spacing: Theme.Spacing.xs) {
-                    Image(systemName: "wand.and.stars").foregroundStyle(Theme.accent)
-                    TextField("Ask AI to clean… e.g. “free up 15 GB”, “clean Xcode stuff”", text: $aiIntent)
-                        .textFieldStyle(.roundedBorder)
-                        .onSubmit { Task { await runAIPlan() } }
-                        .disabled(isPlanning)
-                    if isPlanning {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Button {
-                            Task { await runAIPlan() }
-                        } label: {
-                            Label("Plan", systemImage: "arrow.up.circle.fill")
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        .disabled(aiIntent.trimmingCharacters(in: .whitespaces).isEmpty)
-                    }
-                }
+    /// Natural-language cleanup request.
+    private var askBar: some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            Image(systemName: "wand.and.stars").foregroundStyle(Theme.accent)
+            TextField("Ask for a cleanup, like \u{201C}free up 15 GB\u{201D} or \u{201C}clear Xcode build data\u{201D}", text: $aiIntent)
+                .textFieldStyle(.plain)
+                .font(.system(size: 14))
+                .onSubmit { Task { await runAIPlan() } }
+                .disabled(isPlanning)
+            if isPlanning {
+                ProgressView().controlSize(.small)
+            } else {
+                Button("Plan") { Task { await runAIPlan() } }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(aiIntent.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
-        .padding(.horizontal, Theme.Spacing.lg).padding(.vertical, Theme.Spacing.sm)
+        .padding(.horizontal, Theme.Spacing.lg)
+        .padding(.vertical, Theme.Spacing.md)
+        .cardStyle(padded: false)
     }
 
-    @ViewBuilder
-    private var content: some View {
-        if insights.isEmpty && !isLoading {
-            ContentUnavailableView(
-                "Nothing to suggest",
-                systemImage: "checkmark.seal",
-                description: Text("No reclaimable disk, no idle memory hogs, and the OS isn't under pressure. You're tidy.")
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if isLoading && insights.isEmpty {
-            VStack(spacing: 12) {
-                ProgressView().controlSize(.large)
-                Text("Reasoning over your disk, memory, and processes…").font(.caption).foregroundStyle(.secondary)
+    private func insightRow(_ insight: Insight) -> some View {
+        HStack(alignment: .top, spacing: Theme.Spacing.md) {
+            Image(systemName: insight.kind.icon)
+                .foregroundStyle(.secondary)
+                .frame(width: 20)
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                Text(insight.reasoning)
+                    .font(Theme.Font.body)
+                    .fixedSize(horizontal: false, vertical: true)
+                actionButton(for: insight)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            ScrollView {
-                VStack(spacing: Theme.Spacing.md) {
-                    MemoryCard(quitSheet: $quitSheet)
-                    ForEach(insights) { insight in
-                        insightCard(insight)
-                    }
-                }
-                .padding(Theme.Spacing.xl)
+            Spacer(minLength: Theme.Spacing.lg)
+            if insight.reclaimableBytes > 0 {
+                Text(insight.reclaimableBytes.formattedBytes)
+                    .font(Theme.Font.bodyStrong.monospacedDigit())
             }
         }
-    }
-
-    private func insightCard(_ insight: Insight) -> some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            HStack(spacing: Theme.Spacing.xs) {
-                Image(systemName: insight.kind.icon).foregroundStyle(Theme.accent)
-                Text(insight.kind.rawValue).font(.caption.bold()).foregroundStyle(.secondary)
-                Spacer()
-                if insight.reclaimableBytes > 0 {
-                    Text("~\(insight.reclaimableBytes.formattedBytes) reclaimable")
-                        .font(.caption.monospacedDigit()).foregroundStyle(Theme.accent)
-                }
-            }
-            Text(insight.reasoning).font(.callout)
-            actionButton(for: insight)
-        }
-        .padding(Theme.Spacing.lg)
-        .background(RoundedRectangle(cornerRadius: 12).fill(.regularMaterial))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(.quaternary))
+        .padding(.horizontal, Theme.Spacing.lg)
+        .padding(.vertical, Theme.Spacing.md)
     }
 
     @ViewBuilder
     private func actionButton(for insight: Insight) -> some View {
         switch insight.action {
         case .trash(let items):
-            Button {
-                sheetPlan = DeletionPlan(items: items)
-            } label: {
-                Label("Trash these · \(insight.reclaimableBytes.formattedBytes)", systemImage: "trash")
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
+            Button("Review and Clean…") { sheetPlan = DeletionPlan(items: items) }
+                .controlSize(.small)
         case .quitApps(let names):
-            Button {
-                quitSheet = QuitTarget(names: names)
-            } label: {
-                Label("Quit \(names.joined(separator: ", "))", systemImage: "power")
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
+            Button("Quit \(names.joined(separator: ", "))…") { quitSheet = QuitTarget(names: names) }
+                .controlSize(.small)
         case .observe:
-            Text("No action — just so you know.").font(.caption).foregroundStyle(.tertiary)
+            EmptyView()
         }
     }
 
@@ -196,7 +157,7 @@ struct QuitConfirmationSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Quit these apps?").font(.title2.bold())
+            Text("Quit these apps?").font(.system(size: 17, weight: .semibold))
             Text("A graceful quit (not force-kill), so each app can save its state. You can reopen them anytime.")
                 .foregroundStyle(.secondary)
             List {
@@ -217,12 +178,14 @@ struct QuitConfirmationSheet: View {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button(done ? "Done" : "Quit") { quit() }
+                    .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
                     .disabled(done)
             }
         }
-        .padding(20)
+        .padding(Theme.Spacing.xl)
         .frame(width: 460, height: 320)
+        .background(Theme.canvas)
     }
 
     private func appIcon(for name: String) -> String { "app.dashed" }

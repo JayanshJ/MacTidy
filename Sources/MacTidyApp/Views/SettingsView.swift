@@ -5,7 +5,6 @@ import CoreKit
 /// retention. Everything here is persisted via `AppState`.
 struct SettingsView: View {
     @Environment(AppState.self) private var state
-    @Environment(\.dismiss) private var dismiss
     @State private var showRootPicker = false
     @State private var showDevRootPicker = false
     @State private var showCleanupHistory = false
@@ -26,15 +25,75 @@ struct SettingsView: View {
     @State private var isNewSchedule = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Settings").font(.headline)
-                Spacer()
-                Button("Done") { dismiss() }
-            }
-            .padding(.horizontal, Theme.Spacing.md).padding(.vertical, Theme.Spacing.sm)
-            Divider()
+        TabView {
             Form {
+                aboutSection
+                appearanceSection
+                scanningSection
+                UpdateSettingsSection()
+                menuBarSection
+            }
+            .formStyle(.grouped)
+            .tabItem { Label("General", systemImage: "gearshape") }
+
+            Form {
+                safetySection
+                allowedFoldersSection
+                devFoldersSection
+            }
+            .formStyle(.grouped)
+            .tabItem { Label("Folders", systemImage: "folder") }
+
+            Form {
+                schedulesSection
+                logsSection
+            }
+            .formStyle(.grouped)
+            .tabItem { Label("Schedules", systemImage: "calendar") }
+
+            Form {
+                aiSection
+                privacySection
+            }
+            .formStyle(.grouped)
+            .tabItem { Label("AI", systemImage: "wand.and.stars") }
+        }
+        .scrollContentBackground(.hidden)
+        .background(Theme.canvas)
+        .fileImporter(
+            isPresented: $showRootPicker,
+            allowedContentTypes: [.folder]
+        ) { result in
+            if case .success(let url) = result {
+                state.addExtraAllowedRoot(url)
+            }
+        }
+        .fileImporter(
+            isPresented: $showDevRootPicker,
+            allowedContentTypes: [.folder]
+        ) { result in
+            if case .success(let url) = result {
+                state.addCustomDevRoot(url)
+            }
+        }
+        .sheet(isPresented: $showCleanupHistory) {
+            CleanupHistoryView().frame(width: 560, height: 520)
+        }
+        .frame(width: 640, height: 600)
+        .onAppear {
+            if ollamaDetection == nil { refreshOllamaModels() }
+            refreshStoredKeyStatus()
+        }
+        .onChange(of: state.aiConfig.provider) { _, _ in
+            apiKeyInput = ""
+            keyStatus = nil
+            revealKey = false
+            refreshStoredKeyStatus()
+        }
+    }
+
+    @ViewBuilder
+    private var aboutSection: some View {
             Section {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
@@ -60,12 +119,20 @@ struct SettingsView: View {
                 }
             }
 
+    }
+
+    @ViewBuilder
+    private var safetySection: some View {
             Section("Safety") {
                 Text("Every deletion moves to the Trash — undo from the Recently Trashed list. A hard denylist protects /System, your documents, photos, and media no matter what a scan proposes.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
+    }
+
+    @ViewBuilder
+    private var allowedFoldersSection: some View {
             Section {
                 ForEach(state.extraAllowedRoots, id: \.self) { root in
                     HStack {
@@ -94,6 +161,10 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+    }
+
+    @ViewBuilder
+    private var devFoldersSection: some View {
             Section {
                 ForEach(state.customDevRoots, id: \.self) { root in
                     HStack {
@@ -122,6 +193,10 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+    }
+
+    @ViewBuilder
+    private var scanningSection: some View {
             Section("Scanning") {
                 @Bindable var state = state
                 Toggle("Scan automatically on launch", isOn: $state.autoScanOnLaunch)
@@ -130,8 +205,10 @@ struct SettingsView: View {
                 Stepper("Stale screenshots cutoff: \(state.screenshotMinAgeDays) days", value: $state.screenshotMinAgeDays, in: 7...365, step: 7)
             }
 
-            UpdateSettingsSection()
+    }
 
+    @ViewBuilder
+    private var menuBarSection: some View {
             // MARK: - Menu bar & alerts
             Section {
                 @Bindable var monitor = state.monitor
@@ -159,6 +236,10 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+    }
+
+    @ViewBuilder
+    private var aiSection: some View {
             // MARK: - AI
             Section {
                 @Bindable var state = state
@@ -247,6 +328,10 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+    }
+
+    @ViewBuilder
+    private var privacySection: some View {
             Section {
                 @Bindable var state = state
                 Toggle("Send file paths to model", isOn: $state.aiConfig.sendFilePaths)
@@ -281,6 +366,10 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+    }
+
+    @ViewBuilder
+    private var logsSection: some View {
             Section {
                 @Bindable var state = state
                 Picker("Keep log history for", selection: $state.logRetentionDays) {
@@ -302,39 +391,17 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            schedulesSection
-        }
-        .formStyle(.grouped)
-        .fileImporter(
-            isPresented: $showRootPicker,
-            allowedContentTypes: [.folder]
-        ) { result in
-            if case .success(let url) = result {
-                state.addExtraAllowedRoot(url)
+    }
+
+    private var appearanceSection: some View {
+        Section("Appearance") {
+            @Bindable var state = state
+            Picker("Theme", selection: $state.appearance) {
+                Text("Match System").tag("system")
+                Text("Light").tag("light")
+                Text("Dark").tag("dark")
             }
-        }
-        .fileImporter(
-            isPresented: $showDevRootPicker,
-            allowedContentTypes: [.folder]
-        ) { result in
-            if case .success(let url) = result {
-                state.addCustomDevRoot(url)
-            }
-        }
-        .sheet(isPresented: $showCleanupHistory) {
-            CleanupHistoryView()
-        }
-        }
-        .frame(minWidth: 480, idealWidth: 560, minHeight: 520, idealHeight: 640)
-        .onAppear {
-            if ollamaDetection == nil { refreshOllamaModels() }
-            refreshStoredKeyStatus()
-        }
-        .onChange(of: state.aiConfig.provider) { _, _ in
-            apiKeyInput = ""
-            keyStatus = nil
-            revealKey = false
-            refreshStoredKeyStatus()
+            .pickerStyle(.segmented)
         }
     }
 

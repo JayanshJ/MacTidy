@@ -15,33 +15,20 @@ struct TrashNudgeCard: View {
 
     var body: some View {
         HStack(spacing: Theme.Spacing.md) {
-            Image(systemName: "trash.circle.fill")
-                .font(.title2)
-                .foregroundStyle(Theme.Status.caution)
+            Image(systemName: "trash")
+                .font(.system(size: 16))
+                .foregroundStyle(.secondary)
+                .frame(width: 20)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Your Trash holds \(state.trashBytes.formattedBytes)")
-                    .font(.callout.bold())
-                Text("Empty it in Finder to reclaim that space for real. MacTidy never empties the Trash itself.")
-                    .font(.caption).foregroundStyle(.secondary)
+                Text("The Trash is holding \(state.trashBytes.formattedBytes)")
+                    .font(Theme.Font.bodyStrong)
+                Text("That space only comes back once you empty it. MacTidy never empties the Trash for you.")
+                    .font(Theme.Font.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            Button {
-                openTrash()
-            } label: {
-                Label("Open Trash", systemImage: "arrow.up.right.square")
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
+            Button("Open Trash") { openTrash() }
         }
-        .padding(Theme.Spacing.md)
-        .background(
-            RoundedRectangle(cornerRadius: Theme.cardRadius)
-                .fill(Theme.Status.caution.opacity(0.08))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: Theme.cardRadius)
-                .strokeBorder(Theme.Status.caution.opacity(0.25), lineWidth: 0.5)
-        )
+        .cardStyle()
     }
 
     /// Opens the Trash in Finder via AppleScript (the reliable way to focus

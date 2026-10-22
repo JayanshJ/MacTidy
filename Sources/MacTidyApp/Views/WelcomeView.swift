@@ -1,120 +1,71 @@
 import SwiftUI
 import CoreKit
 
-/// The launch screen. A polished hero: the real app icon, a tagline, three
-/// feature highlights, and one clear call to action. The honest subtitle
-/// tells the user up front that this is Move-to-Trash, reversible, and that
-/// the first pass is a dry preview.
+/// First run only: one sentence, one action. Later launches open straight
+/// into the app with the last scan restored.
 struct WelcomeView: View {
     @Environment(AppState.self) private var state
 
     var body: some View {
         VStack(spacing: 0) {
             Spacer()
-
-            // Hero: real app icon + name + tagline.
-            VStack(spacing: Theme.Spacing.md) {
+            VStack(spacing: Theme.Spacing.lg) {
                 appIcon
-                Text("MacTidy")
-                    .font(.system(size: 34, weight: .bold, design: .rounded))
-                Text("Reclaim disk space, guided.")
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
-            // Feature highlights.
-            HStack(spacing: Theme.Spacing.xl) {
-                feature(icon: "trash.circle",
-                        title: "Move to Trash",
-                        text: "Everything is reversible. Restore from Trash to undo.")
-                feature(icon: "shield.lefthalf.filled",
-                        title: "Safe by default",
-                        text: "A hard denylist protects /System, Documents, Photos, and more.")
-                feature(icon: "eye.circle",
-                        title: "Dry-run preview",
-                        text: "See what would be cleaned before anything is touched.")
-            }
-            .frame(maxWidth: 720)
-            .padding(.bottom, Theme.Spacing.xl)
-
-            // Honest subtitle + the single primary action.
-            VStack(spacing: Theme.Spacing.sm) {
-                Text("MacTidy scans your Mac, then shows the biggest, safest things to clean — all at once.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 460)
+                VStack(spacing: Theme.Spacing.sm) {
+                    Text("MacTidy")
+                        .font(.system(size: 34, weight: .semibold))
+                    Text("See what's safe to remove, move it to the Trash,\nand put it back if you change your mind.")
+                        .font(.system(size: 15))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .lineSpacing(3)
+                }
                 Button {
                     Task { await state.startFlow() }
                 } label: {
-                    Label("Start Cleanup", systemImage: "arrow.right.circle.fill")
-                        .font(.title3.bold())
-                        .padding(.horizontal, Theme.Spacing.xl)
-                        .padding(.vertical, Theme.Spacing.sm)
+                    Text("Scan This Mac")
+                        .font(.system(size: 14, weight: .semibold))
+                        .padding(.horizontal, Theme.Spacing.lg)
+                        .padding(.vertical, 3)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .keyboardShortcut(.defaultAction)
+                .padding(.top, Theme.Spacing.md)
             }
-            .padding(.bottom, Theme.Spacing.lg)
+            Spacer()
+            HStack(spacing: Theme.Spacing.xxl) {
+                fact("arrow.uturn.backward", "Everything goes to the Trash")
+                fact("lock", "System folders and credentials are off-limits")
+                fact("eye", "Nothing is selected without a reason")
+            }
+            .padding(.bottom, Theme.Spacing.xl)
+            Text("Version \(AppVersion.short)")
+                .font(Theme.Font.caption)
+                .foregroundStyle(.tertiary)
+                .padding(.bottom, Theme.Spacing.lg)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(Theme.Spacing.xl)
-        .background(.linearGradient(
-            colors: [Theme.accent.opacity(0.10), .clear],
-            startPoint: .top, endPoint: .bottom
-        ))
-        .overlay(alignment: .topTrailing) { versionBadge }
+        .background(Theme.canvas)
     }
 
-    /// The real app icon, rendered from the bundle's AppIcon asset so the
-    /// welcome hero matches the dock icon exactly.
+    private func fact(_ symbol: String, _ text: String) -> some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            Image(systemName: symbol)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Theme.accent)
+            Text(text)
+                .font(Theme.Font.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
     private var appIcon: some View {
         Group {
-            if let nsImage = NSImage(named: "AppIcon") ?? bundledAppIcon {
-                Image(nsImage: nsImage)
-                    .resizable()
-                    .interpolation(.high)
-            } else {
-                // Fallback to the disk-ring glyph if the bundle icon is absent
-                // (e.g. running as a bare SwiftPM binary without a bundle).
-                Image(systemName: "circle.dashed")
-                    .font(.system(size: 64, weight: .light))
-                    .foregroundStyle(Theme.accent)
+            if let image = NSImage(named: "AppIcon") ?? NSApp.applicationIconImage {
+                Image(nsImage: image).resizable().interpolation(.high)
             }
         }
-        .frame(width: 96, height: 96)
-        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .shadow(color: .black.opacity(0.12), radius: 12, y: 6)
-    }
-
-    private var versionBadge: some View {
-        VStack(alignment: .trailing, spacing: 2) {
-            Text("v\(AppVersion.short)")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.tertiary)
-            Text("for macOS 14+")
-                .font(.caption2)
-                .foregroundStyle(.quaternary)
-        }
-        .padding(.top, Theme.Spacing.md)
-        .padding(.trailing, Theme.Spacing.md)
-    }
-
-    private func feature(icon: String, title: String, text: String) -> some View {
-        VStack(spacing: Theme.Spacing.xs) {
-            Image(systemName: icon)
-                .font(.system(size: 26))
-                .foregroundStyle(Theme.accent)
-                .symbolRenderingMode(.hierarchical)
-            Text(title).font(.callout.bold())
-            Text(text)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 200)
-        }
+        .frame(width: 104, height: 104)
     }
 }

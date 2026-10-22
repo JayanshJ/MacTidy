@@ -131,20 +131,30 @@ consult `$PATH` — only standard locations, so behavior is independent of shell
 
 ### App layer
 
-`Sources/MacTidyApp/AppState.swift` — `@MainActor @Observable` model. The UI's single
-gateway for every destructive action: `AppState.execute(_:extraAllowedRoots:)`
-constructs a `DeletionExecutor` with the current `dryRun` and `SafePathPolicy`,
-then records to `TrashLog` + `CleanupLog` and sets `lastUndoableOutcome` for the
-Undo toast. `execute`/`deduplicate` are non-throwing (policy issues come back as
-skipped records). `dryRun` is persisted in UserDefaults and on by default. The
-last scan results are persisted to `~/Library/Application Support/MacTidy/last-
-scan.json` (`ScanItem`/`CategoryResult` are `Codable`) so relaunch isn't a blank
-screen + full rescan; `rescanCategories()` is cancellable and reports per-category
-progress. Views are a sidebar
-(Overview · Disk · Uninstaller · Startup Items · Duplicates · Recently Trashed)
-under `Views/`. `MainSplitView` hosts the post-cleanup `UndoToast`; `DiskView`
-has a List/Map toggle where Map renders `TreemapView` (a recursive binary-split
-treemap of the current directory's children).
+`Sources/MacTidyApp/AppState.swift` — `@MainActor @Observable` model and the UI's
+single gateway for every destructive action (`execute`, `deduplicate`), recording
+to `TrashLog` + `CleanupLog` and driving the Undo toast. Also owns navigation
+(`section`, `drilledCategory`), live scan progress (`scanPartial`), and the
+persisted `appearance` (system/light/dark). The last scan is restored from
+`last-scan.json`, so later launches open straight into the app; the welcome screen
+shows only when there is no saved scan.
+
+UI structure (`Views/`): `RootView` routes onboarding → welcome → `MainShell`.
+`MainShell` is a `NavigationSplitView` sidebar (Overview, Cleanup, Insights ·
+Developer · Apps · Files · History) with a boot-volume footer; Settings is a
+native `Settings` scene (tabs). Design system lives in `Theme.swift`: adaptive
+light/dark color tokens, type ramp, spacing, and components (`Page`,
+`PageHeader`, `SurfaceSection` + `RowDivider`, `Meter`, `CapacityBar`,
+`EmptyStateView`, `Badge`, `RowButtonStyle`). Rules: one accent, spent on what
+can be reclaimed and primary actions; one level of surface (never a card in a
+card); no `fixedSize(vertical:)` outside a scroll view (it inflates the window's
+minimum height).
+
+**Design QA:** `make app && dist/MacTidy.app/Contents/MacOS/MacTidy --snapshot <dir> [--only overview,cleanup,…]`
+renders every screen (plus Settings, the confirmation sheet and the menu bar
+panel) in light and dark to PNG using fixture data, then quits. It never scans,
+trashes or checks for updates, and logs `LAYOUT OVERFLOW` when a screen's
+minimum height exceeds the window.
 
 ## Tests
 

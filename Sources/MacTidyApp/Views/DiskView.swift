@@ -1,199 +1,6 @@
 import SwiftUI
 import CoreKit
 
-struct DiskView: View {
-    enum Mode: String, CaseIterable {
-        case categories = "Cleanup"
-        case explorer = "Biggest Directories"
-    }
-
-    @State private var mode: Mode = .categories
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Picker("", selection: $mode) {
-                ForEach(Mode.allCases, id: \.self) { Text($0.rawValue) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding()
-
-            switch mode {
-            case .categories: CategoryCleanupView()
-            case .explorer: DirectoryExplorerView()
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-// MARK: - Category cleanup
-
-struct CategoryCleanupView: View {
-    @Environment(AppState.self) private var state
-    @State private var selection = Set<UUID>()
-    @State private var sheetPlan: DeletionPlan?
-    /// Per-item batch verdicts keyed by `ScanItem.id`. Populated by the
-    /// category-level "Review with AI" button and rendered inline on rows.
-    @State private var batchVerdicts: [UUID: BatchVerdict] = [:]
-    @State private var reviewAll = false
-    /// Surfaces why a "Review all with AI" pass failed (timeout, parse error,
-    /// a reasoning model that put its answer in `reasoning` not `content`).
-    /// Without this the call failed silently — the spinner stopped and
-    /// nothing rendered, so the feature read as "broken."
-    @State private var reviewError: String?
-
-    private var allItems: [ScanItem] {
-        state.categoryResults.flatMap(\.items)
-    }
-
-    private var selectedItems: [ScanItem] {
-        allItems.filter { selection.contains($0.id) }
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            if state.categoryResults.isEmpty {
-                ContentUnavailableView {
-                    Label("No scan yet", systemImage: "internaldrive")
-                } description: {
-                    Text("Scan the cleanup categories to see what's reclaimable.")
-                } actions: {
-                    Button(state.isScanningCategories ? "Scanning…" : "Scan Now") {
-                        Task { await state.rescanCategories() }
-                    }
-                    .disabled(state.isScanningCategories)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                HStack {
-                    Button("Select All Safe") {
-                        selection = Set(
-                            state.categoryResults
-                                .flatMap(\.items)
-                                .filter(\.isPreselectable)
-                                .map(\.id)
-                        )
-                    }
-                    .buttonStyle(.bordered).controlSize(.small)
-                    if state.aiConfig.provider != .none {
-                        Button {
-                            Task { await reviewAllWithAI() }
-                        } label: {
-                            if reviewAll {
-                                HStack { ProgressView().controlSize(.small); Text("Reviewing…") }
-                            } else {
-                                Label("Review all with AI", systemImage: "wand.and.stars")
-                            }
-                        }
-                        .buttonStyle(.bordered).controlSize(.small)
-                        .disabled(reviewAll)
-                        .help("Get a Safe / Review / Keep verdict for every item in one AI pass.")
-                    }
-                    Spacer()
-                    Button {
-                        Task { await state.rescanCategories() }
-                    } label: {
-                        if state.isScanningCategories {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Label("Rescan", systemImage: "arrow.clockwise")
-                        }
-                    }
-                    .buttonStyle(.bordered).controlSize(.small)
-                    .disabled(state.isScanningCategories)
-                }
-                .padding(.horizontal, Theme.Spacing.lg).padding(.vertical, Theme.Spacing.sm)
-                if let reviewError {
-                    Label(reviewError, systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                        .padding(.horizontal, Theme.Spacing.lg)
-                        .padding(.bottom, Theme.Spacing.sm)
-                }
-                Divider()
-                List {
-                    ForEach(state.categoryResults) { result in
-                        categorySection(result)
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                SelectionFooter(
-                    selectedCount: selection.count,
-                    selectedBytes: selectedItems.reduce(0) { $0 + $1.sizeBytes },
-                    buttonTitle: "Trash Selected…",
-                    disabled: false
-                ) {
-                    sheetPlan = DeletionPlan(items: selectedItems)
-                }
-            }
-        }
-        .sheet(item: $sheetPlan) { plan in
-            DeletionConfirmationSheet(title: "Trash selected items?", plan: plan) { _ in
-                selection.removeAll()
-                Task { await state.rescanCategories() }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func categorySection(_ result: CategoryResult) -> some View {
-        Section {
-            if result.items.isEmpty {
-                Text("Nothing found").foregroundStyle(.tertiary)
-            }
-            ForEach(result.items) { item in
-                ScanItemRow(item: item, selection: $selection, batchVerdict: batchVerdicts[item.id])
-            }
-        } header: {
-            HStack {
-                Text(result.category.displayName)
-                if !result.category.isPreselectable {
-                    Badge(text: "Suggest-only", tint: Theme.Status.caution)
-                        .help("Build artifacts of possibly-active projects; check before trashing.")
-                }
-                Spacer()
-                Text(result.totalBytes.formattedBytes).monospacedDigit()
-            }
-        } footer: {
-            Text(result.category.explanation)
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-        }
-    }
-
-    /// One AI pass over every scanned item, rendering Safe/Review/Keep inline
-    /// on the rows. No new popup — verdicts decorate the existing list. Runs
-    /// in the background; the user can keep using the view while it works.
-    private func reviewAllWithAI() async {
-        reviewAll = true
-        reviewError = nil
-        defer { reviewAll = false }
-        let all = state.categoryResults.flatMap(\.items)
-        do {
-            let verdicts = try await state.explainBatchThrowing(items: all)
-            var map: [UUID: BatchVerdict] = [:]
-            for v in verdicts { map[v.id] = v }
-            batchVerdicts = map
-            // Distinguish a genuine failure from a working pass: an empty list
-            // or all-nil/empty verdicts means the model replied with nothing
-            // parseable (common with reasoning models that put their answer in
-            // `reasoning` instead of `content`). Surface that so it isn't a
-            // silent no-op.
-            if verdicts.isEmpty {
-                reviewError = "The model returned no verdicts."
-            } else if verdicts.allSatisfy({ $0.verdict == nil && $0.summary.isEmpty }) {
-                reviewError = "The model replied but with no parseable verdicts — it may be a reasoning model that needs more time, or one that doesn't support the tool-call format."
-            }
-        } catch {
-            reviewError = error.localizedDescription
-            batchVerdicts = [:]
-        }
-    }
-}
-
-// MARK: - Biggest directories explorer
-
 struct DirectoryExplorerView: View {
     @Environment(AppState.self) private var state
     @State private var root = FileManager.default.homeDirectoryForCurrentUser
@@ -209,26 +16,42 @@ struct DirectoryExplorerView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            breadcrumb
-            if isScanning {
-                ProgressView("Sizing \(root.lastPathComponent)…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if items.isEmpty {
-                ContentUnavailableView("Nothing here",
-                                       systemImage: "folder")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if renderAsMap {
-                TreemapView(items: items) { item in
-                    root = item.url
+            VStack(alignment: .leading, spacing: Theme.Spacing.md) {
+                PageHeader(title: "Disk Map", subtitle: "What takes up space, folder by folder. Click a folder to go inside.") {
+                    Picker("", selection: $renderAsMap) {
+                        Image(systemName: "list.bullet").tag(false)
+                        Image(systemName: "square.grid.2x2").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                    Button { rescan() } label: { Label("Refresh", systemImage: "arrow.clockwise") }
+                        .disabled(isScanning)
                 }
-                .padding(.horizontal, 8)
-                .padding(.bottom, 8)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                list
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                breadcrumb
             }
+            .padding(.horizontal, Theme.gutter)
+            .padding(.top, Theme.Spacing.xl)
+            .padding(.bottom, Theme.Spacing.md)
+            Group {
+                if isScanning {
+                    ProgressView("Measuring \(root.lastPathComponent)")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if items.isEmpty {
+                    EmptyStateView(symbol: "folder", title: "Empty folder")
+                        .frame(maxHeight: .infinity)
+                } else if renderAsMap {
+                    TreemapView(items: items) { item in root = item.url }
+                        .clipShape(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
+                        .padding(.horizontal, Theme.gutter)
+                        .padding(.bottom, Theme.Spacing.xl)
+                } else {
+                    ScrollView { list.padding(.horizontal, Theme.gutter).padding(.bottom, Theme.Spacing.xl) }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .background(Theme.canvas)
         .onAppear { if items.isEmpty { rescan() } }
         .onChange(of: root) { rescan() }
         .sheet(item: $sheetPlan) { plan in
@@ -254,59 +77,62 @@ struct DirectoryExplorerView: View {
     }
 
     private var breadcrumb: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 6) {
             let components = root.pathComponents
             ForEach(Array(components.enumerated()), id: \.offset) { index, component in
-                if index > 0 { Image(systemName: "chevron.right").font(.caption2) }
-                Button(component == "/" ? "Mac" : component) {
+                if index > 0 {
+                    Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary)
+                }
+                Button(component == "/" ? "Macintosh HD" : component) {
                     root = URL(fileURLWithPath: components[0...index].joined(separator: "/")
                         .replacingOccurrences(of: "//", with: "/"))
                 }
                 .buttonStyle(.plain)
-                .fontWeight(index == components.count - 1 ? .bold : .regular)
+                .font(Theme.Font.body.weight(index == components.count - 1 ? .semibold : .regular))
+                .foregroundStyle(index == components.count - 1 ? Color.primary : Color.secondary)
             }
             Spacer()
-            Picker("", selection: $renderAsMap) {
-                Label("List", systemImage: "list.bullet").tag(false)
-                Label("Map", systemImage: "square.grid.2x2").tag(true)
+            if !items.isEmpty {
+                Text(items.reduce(0) { $0 + $1.sizeBytes }.formattedBytes)
+                    .font(Theme.Font.body.monospacedDigit()).foregroundStyle(.secondary)
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 110)
-            Button {
-                rescan()
-            } label: {
-                Label("Rescan", systemImage: "arrow.clockwise")
-            }
-            .disabled(isScanning)
         }
-        .padding(.horizontal)
-        .padding(.bottom, 8)
     }
 
     private var list: some View {
-        List(items) { item in
-            HStack {
-                Image(systemName: item.isDirectory ? "folder" : "doc")
-                    .foregroundStyle(.secondary)
-                Text(item.url.lastPathComponent).lineLimit(1)
-                Spacer()
-                SizeBar(fraction: fraction(of: item))
+        VStack(spacing: 0) {
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                if index > 0 { RowDivider(inset: 50) }
+                explorerRow(item)
+            }
+        }
+        .cardStyle(padded: false)
+    }
+
+    private func explorerRow(_ item: ScanItem) -> some View {
+        Button {
+            if item.isDirectory { root = item.url } else { showInFinder(item.url) }
+        } label: {
+            HStack(spacing: Theme.Spacing.md) {
+                Image(nsImage: NSWorkspace.shared.icon(forFile: item.url.path))
+                    .resizable().frame(width: 22, height: 22)
+                Text(item.url.lastPathComponent).font(Theme.Font.bodyStrong).lineLimit(1)
+                Spacer(minLength: Theme.Spacing.lg)
+                Meter(fraction: fraction(of: item)).frame(width: 140)
                 Text(item.sizeBytes.formattedBytes)
-                    .monospacedDigit()
+                    .font(Theme.Font.body.monospacedDigit())
                     .foregroundStyle(.secondary)
                     .frame(width: 80, alignment: .trailing)
-                if item.isDirectory {
-                    Button {
-                        root = item.url
-                    } label: {
-                        Image(systemName: "chevron.right.circle")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Drill in")
-                }
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+                    .opacity(item.isDirectory ? 1 : 0)
             }
-            .contextMenu {
+            .padding(.horizontal, Theme.Spacing.lg)
+            .padding(.vertical, Theme.Spacing.sm + 2)
+        }
+        .buttonStyle(RowButtonStyle())
+        .contextMenu {
                 Button("Show in Finder") { showInFinder(item.url) }
                 // AI review for any disk-browsing file — asks the configured
                 // advisor for a safe/review/keep verdict + one-line reason,
@@ -321,7 +147,6 @@ struct DirectoryExplorerView: View {
                     sheetPlan = DeletionPlan(items: [item])
                 }
             }
-        }
     }
 
     /// Asks the configured advisor to explain a disk-browser item and shows

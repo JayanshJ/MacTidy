@@ -33,9 +33,17 @@ struct DashboardDocker: View {
     @State private var builderCacheBytes: Int64?
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
+        Page("Docker",
+             subtitle: "Images, containers and build cache. Removing runs docker commands directly, so it can't be undone from the Trash.") {
+            if isLoading { ProgressView().controlSize(.small) }
+            if dockerState?.containers.isEmpty == false {
+                Button(selectingContainers ? "Done" : "Select Containers") {
+                    selectingContainers.toggle()
+                    if !selectingContainers { selectedContainerIDs.removeAll() }
+                }
+            }
+            Button { Task { await scan() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
+        } content: {
             content
         }
         .sheet(item: $sheetTrigger) { trigger in
@@ -83,192 +91,129 @@ struct DashboardDocker: View {
         .onDisappear { waitTask?.cancel() }
     }
 
-    private var header: some View {
-        HStack {
-            Text("Docker").font(.title3.bold())
-            Spacer()
-            if isLoading { ProgressView().controlSize(.small) }
-            // Toggle multi-select for containers. Only meaningful when there
-            // are containers to select; hidden otherwise so the header stays
-            // clean for image-only / empty states.
-            if dockerState?.containers.isEmpty == false {
-                Button {
-                    selectingContainers.toggle()
-                    if !selectingContainers { selectedContainerIDs.removeAll() }
-                } label: {
-                    Label(selectingContainers ? "Done" : "Select",
-                          systemImage: selectingContainers ? "checkmark.circle" : "checkmark.circle.fill")
-                }
-                .buttonStyle(.bordered).controlSize(.small)
-                .help("Select multiple containers to remove at once.")
-            }
-            Button { Task { await scan() } } label: {
-                Label("Rescan", systemImage: "arrow.clockwise")
-            }
-            .buttonStyle(.bordered).controlSize(.small)
-        }
-        .padding(.horizontal, Theme.Spacing.lg).padding(.vertical, Theme.Spacing.sm)
-    }
-
     @ViewBuilder
     private var content: some View {
         if isLoading && dockerState == nil {
-            ProgressView("Scanning Docker…").frame(maxWidth: .infinity, maxHeight: .infinity)
+            ProgressView("Asking Docker").frame(maxWidth: .infinity).padding(Theme.Spacing.xxl)
         } else if availability == .notInstalled {
-            ContentUnavailableView("Docker isn't installed",
-                systemImage: "cylinder.split.1x2",
-                description: Text("Install Docker Desktop to reclaim space from images and containers."))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            EmptyStateView(symbol: "shippingbox", title: "Docker isn't installed",
+                           message: "When Docker Desktop, OrbStack or Colima is installed, its images and containers show up here.")
         } else if availability == .notRunning {
-            VStack(spacing: Theme.Spacing.md) {
-                if waitingForDocker {
-                    ProgressView("Waiting for Docker to start…")
-                        .controlSize(.large)
-                    Text("Docker Desktop's daemon can take a while to be ready. This will refresh automatically.")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-                } else {
-                    ContentUnavailableView("Docker is not running",
-                        systemImage: "power.circle",
-                        description: Text("Start Docker Desktop, then rescan."))
-                    Button("Open Docker") { openDocker() }
-                        .buttonStyle(.borderedProminent)
+            if waitingForDocker {
+                VStack(spacing: Theme.Spacing.sm) {
+                    ProgressView()
+                    Text("Waiting for Docker to start. This refreshes on its own.")
+                        .font(Theme.Font.caption).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity).padding(Theme.Spacing.xxl)
+            } else {
+                VStack(spacing: Theme.Spacing.md) {
+                    EmptyStateView(symbol: "power", title: "Docker isn't running",
+                                   message: "Start Docker to see what its images and containers take up.")
+                    Button("Open Docker") { openDocker() }.buttonStyle(.borderedProminent)
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let ds = dockerState {
             dockerList(ds)
         } else {
-            ContentUnavailableView("No Docker data",
-                systemImage: "cylinder.split.1x2",
-                description: Text("Docker reports no images or containers."))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            EmptyStateView(symbol: "shippingbox", title: "Nothing in Docker",
+                           message: "No images or containers right now.")
         }
     }
 
     @ViewBuilder
     private func dockerList(_ ds: DockerState) -> some View {
-        VStack(spacing: 0) {
-            if selectingContainers, !ds.containers.isEmpty {
-                containerSelectionBar(ds)
-            }
-            List {
-                if let df = dfTable, !df.isEmpty {
-                DisclosureGroup("Docker disk usage (raw)") {
-                    Text(df).font(.caption.monospaced())
-                        .textSelection(.enabled)
-                        .foregroundStyle(.secondary)
-                }
-            }
+        if selectingContainers, !ds.containers.isEmpty {
+            containerSelectionBar(ds)
+        }
+        SurfaceSection("Build cache") {
             builderCacheRow
-            if !ds.projects.isEmpty {
-                Section("Compose projects (\(ds.projects.count))") {
-                    ForEach(ds.projects) { project in
-                        dockerProjectRow(project)
-                    }
-                }
-            }
-            if !ds.standaloneImages.isEmpty {
-                Section("Standalone images (\(ds.standaloneImages.count))") {
-                    ForEach(ds.standaloneImages) { img in
-                        dockerImageRow(img)
-                    }
-                }
-            }
-            if !ds.containers.isEmpty {
-                let running = ds.containers.filter { $0.running }
-                let stopped = ds.containers.filter { !$0.running }
-                if !running.isEmpty {
-                    Section("Running containers (\(running.count))") {
-                        ForEach(running) { c in
-                            dockerContainerRow(c)
-                        }
-                    }
-                }
-                if !stopped.isEmpty {
-                    Section("Stopped containers (\(stopped.count))") {
-                        ForEach(stopped) { c in
-                            dockerContainerRow(c)
-                        }
-                    }
+        }
+        if !ds.projects.isEmpty {
+            SurfaceSection("Compose projects") {
+                ForEach(Array(ds.projects.enumerated()), id: \.element.id) { i, project in
+                    if i > 0 { RowDivider() }
+                    dockerProjectRow(project)
                 }
             }
         }
-        .listStyle(.inset)
-    }
+        if !ds.standaloneImages.isEmpty {
+            SurfaceSection("Images") {
+                ForEach(Array(ds.standaloneImages.enumerated()), id: \.element.id) { i, img in
+                    if i > 0 { RowDivider() }
+                    dockerImageRow(img)
+                }
+            }
+        }
+        let running = ds.containers.filter { $0.running }
+        let stopped = ds.containers.filter { !$0.running }
+        if !running.isEmpty {
+            SurfaceSection("Running containers") {
+                ForEach(Array(running.enumerated()), id: \.element.id) { i, c in
+                    if i > 0 { RowDivider() }
+                    dockerContainerRow(c)
+                }
+            }
+        }
+        if !stopped.isEmpty {
+            SurfaceSection("Stopped containers") {
+                ForEach(Array(stopped.enumerated()), id: \.element.id) { i, c in
+                    if i > 0 { RowDivider() }
+                    dockerContainerRow(c)
+                }
+            }
+        }
+        if let df = dfTable, !df.isEmpty {
+            DisclosureGroup("Raw docker system df") {
+                Text(df)
+                    .font(.system(size: 11, design: .monospaced))
+                    .textSelection(.enabled)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, Theme.Spacing.sm)
+            }
+            .font(Theme.Font.caption)
+            .foregroundStyle(.secondary)
+        }
     }
 
-    /// The BuildKit (builder) cache reclaim card. `docker builder prune -f`
-    /// clears layer/build cache that rebuilds on demand — distinct from
-    /// images/containers (handled above) and from `docker system prune`
-    /// (which MacTidy never runs). Manual-only; the sheet shows the literal
-    /// command and the "cannot be undone" warning.
-    @ViewBuilder
     private var builderCacheRow: some View {
-        HStack(spacing: Theme.Spacing.sm) {
-            Image(systemName: "hammer.drill")
-                .foregroundStyle(Theme.accent)
+        HStack(spacing: Theme.Spacing.md) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Builder cache (BuildKit)").font(.callout.weight(.medium))
-                Text(builderCacheLabel)
-                    .font(.caption).foregroundStyle(.secondary)
+                Text("BuildKit cache").font(Theme.Font.bodyStrong)
+                Text("Layers kept to speed up builds. Rebuilds on demand; images and containers stay.")
+                    .font(Theme.Font.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            Button("Prune") {
-                builderPruneTrigger = BuilderPruneTrigger()
+            if let bytes = builderCacheBytes, bytes > 0 {
+                Text(bytes.formattedBytes).font(Theme.Font.bodyStrong.monospacedDigit())
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .help("Clear Docker's build cache. It rebuilds on demand. This does not remove images or containers.")
+            Button("Prune…") { builderPruneTrigger = BuilderPruneTrigger() }
         }
-        .padding(.vertical, 4)
+        .padding(.horizontal, Theme.Spacing.lg)
+        .padding(.vertical, Theme.Spacing.md)
     }
 
-    private var builderCacheLabel: String {
-        if let bytes = builderCacheBytes, bytes > 0 {
-            return "~\(bytes.formattedBytes) reclaimable — rebuilds on demand."
-        }
-        return "Reclaimable size unknown — the cache rebuilds on demand."
-    }
-
-    /// The multi-select action bar: Select All / None + a Remove Selected
-    /// button that batches the chosen containers into one confirmation sheet.
-    /// Shown only while `selectingContainers` is on.
     @ViewBuilder
     private func containerSelectionBar(_ ds: DockerState) -> some View {
         let allIDs = Set(ds.containers.map(\.id))
         let allSelected = selectedContainerIDs.count == allIDs.count && !allIDs.isEmpty
-        HStack(spacing: Theme.Spacing.sm) {
-            Button {
-                if allSelected {
-                    selectedContainerIDs.removeAll()
-                } else {
-                    selectedContainerIDs = allIDs
-                }
-            } label: {
-                Label(allSelected ? "Deselect All" : "Select All",
-                      systemImage: allSelected ? "circle" : "checkmark.circle.fill")
+        HStack(spacing: Theme.Spacing.md) {
+            Button(allSelected ? "Deselect All" : "Select All") {
+                selectedContainerIDs = allSelected ? [] : allIDs
             }
-            .buttonStyle(.bordered).controlSize(.small)
             .disabled(allIDs.isEmpty)
-
             Text("\(selectedContainerIDs.count) selected")
-                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-
+                .font(Theme.Font.body.monospacedDigit()).foregroundStyle(.secondary)
             Spacer()
-
-            Button {
-                removeSelectedContainers(ds)
-            } label: {
-                Label("Remove Selected", systemImage: "trash")
-            }
-            .buttonStyle(.borderedProminent).controlSize(.small)
-            .tint(.red)
-            .disabled(selectedContainerIDs.isEmpty)
+            Button("Remove Selected…") { removeSelectedContainers(ds) }
+                .buttonStyle(.borderedProminent)
+                .tint(Theme.Status.blocked)
+                .disabled(selectedContainerIDs.isEmpty)
         }
-        .padding(.horizontal, Theme.Spacing.lg).padding(.vertical, Theme.Spacing.xs)
-        .background(.separator.opacity(0.35))
+        .padding(.horizontal, Theme.Spacing.lg)
+        .padding(.vertical, Theme.Spacing.md)
+        .cardStyle(padded: false)
     }
 
     private func removeSelectedContainers(_ ds: DockerState) {
@@ -277,94 +222,78 @@ struct DashboardDocker: View {
         sheetTrigger = SheetTrigger(actions: chosen.map { DockerContainerRemoveAction(container: $0) })
     }
 
-    @ViewBuilder
+    private func statusDot(_ running: Bool) -> some View {
+        Circle().fill(running ? Theme.accent : Theme.track).frame(width: 7, height: 7)
+            .help(running ? "Running" : "Stopped")
+    }
+
     private func dockerProjectRow(_ project: DockerComposeProject) -> some View {
-        HStack {
+        HStack(spacing: Theme.Spacing.md) {
+            statusDot(project.running)
             VStack(alignment: .leading, spacing: 2) {
-                Text(project.name).fontWeight(.medium)
-                Text("\(project.images.count) image(s) · ≈ \(project.totalBytes.formattedBytes)")
-                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                Text(project.name).font(Theme.Font.bodyStrong)
+                Text("\(project.images.count) image\(project.images.count == 1 ? "" : "s")")
+                    .font(Theme.Font.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            Badge(text: project.running ? "running" : "stopped",
-                  tint: project.running ? Theme.Status.good : Theme.Status.caution)
-            Button {
+            Text(project.totalBytes.formattedBytes).font(Theme.Font.body.monospacedDigit()).foregroundStyle(.secondary)
+            Button("Remove…") {
                 sheetTrigger = SheetTrigger(actions: [DockerComposeDownAction(project: project, removeVolumes: removeVolumes)])
-            } label: {
-                Label("Remove project", systemImage: "trash")
             }
-            .buttonStyle(.bordered).controlSize(.small)
         }
+        .padding(.horizontal, Theme.Spacing.lg)
+        .padding(.vertical, Theme.Spacing.md)
     }
 
-    @ViewBuilder
     private func dockerImageRow(_ img: DockerImage) -> some View {
-        HStack {
+        HStack(spacing: Theme.Spacing.md) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(img.dangling ? "dangling" : "\(img.repository):\(img.tag)").fontWeight(.medium)
-                Text("\(img.id.prefix(19)) · \(img.sizeBytes.formattedBytes) · \(img.createdSince)")
-                    .font(.caption.monospaced()).foregroundStyle(.secondary)
+                HStack(spacing: Theme.Spacing.sm) {
+                    Text(img.dangling ? "Untagged image" : "\(img.repository):\(img.tag)")
+                        .font(Theme.Font.bodyStrong).lineLimit(1)
+                    // Heuristic attribution; labelled as a guess.
+                    if let attr = dockerState?.attribution(for: img) {
+                        if let project = attr.projectGuess {
+                            Badge(text: "likely \(project)", tint: .secondary)
+                                .help("Inferred from a container's working directory or mounts. Not certain.")
+                        }
+                        if attr.inUse { Badge(text: "In use", tint: Theme.accent) }
+                    } else if dockerState != nil {
+                        Badge(text: "Unused", tint: Theme.Status.caution)
+                            .help("No container uses this image.")
+                    }
+                }
+                Text("\(img.id.prefix(12))  ·  \(img.createdSince)")
+                    .font(.system(size: 11, design: .monospaced)).foregroundStyle(.tertiary)
             }
             Spacer()
-            // Heuristic attribution for non-compose images: "likely <project>"
-            // when a container's working dir / bind mounts resolved to a name,
-            // "in use" when a running container references it, and "orphaned"
-            // when no container references it at all (safe to prune). The
-            // guess is honest about being a guess.
-            if let attr = dockerState?.attribution(for: img) {
-                if let project = attr.projectGuess {
-                    Badge(text: "likely \(project)", tint: Theme.Status.caution)
-                        .help("A container referencing this image appears to belong to \(project) — inferred from its working directory or bind mounts. Not a certainty.")
-                }
-                if attr.inUse {
-                    Badge(text: "in use", tint: Theme.Status.good)
-                        .help("A running container references this image.")
-                }
-            } else if dockerState != nil {
-                Badge(text: "orphaned", tint: .secondary)
-                    .help("No container references this image. Safe to remove unless you're about to run it.")
-            }
-            Button {
-                sheetTrigger = SheetTrigger(actions: [DockerImageRemoveAction(image: img)])
-            } label: {
-                Label("Remove", systemImage: "trash")
-            }
-            .buttonStyle(.bordered).controlSize(.small)
+            Text(img.sizeBytes.formattedBytes).font(Theme.Font.body.monospacedDigit()).foregroundStyle(.secondary)
+            Button("Remove…") { sheetTrigger = SheetTrigger(actions: [DockerImageRemoveAction(image: img)]) }
         }
+        .padding(.horizontal, Theme.Spacing.lg)
+        .padding(.vertical, Theme.Spacing.md)
     }
 
-    @ViewBuilder
     private func dockerContainerRow(_ c: DockerContainer) -> some View {
-        HStack {
+        HStack(spacing: Theme.Spacing.md) {
             if selectingContainers {
-            Button {
-                toggleContainer(c)
-            } label: {
-                Image(systemName: selectedContainerIDs.contains(c.id)
-                      ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(selectedContainerIDs.contains(c.id)
-                                     ? Theme.accent : .secondary)
+                Toggle("", isOn: Binding(get: { selectedContainerIDs.contains(c.id) },
+                                         set: { _ in toggleContainer(c) }))
+                    .toggleStyle(.checkbox).labelsHidden()
             }
-            .buttonStyle(.plain)
-            .help("Select this container for batch removal.")
-            }
+            statusDot(c.running)
             VStack(alignment: .leading, spacing: 2) {
-                Text(c.name).fontWeight(.medium)
-                Text("image \(c.image)").font(.caption.monospaced()).foregroundStyle(.secondary)
+                Text(c.name).font(Theme.Font.bodyStrong)
+                Text(c.image).font(.system(size: 11, design: .monospaced)).foregroundStyle(.tertiary).lineLimit(1)
             }
             Spacer()
-            Badge(text: c.running ? "running" : "stopped",
-                  tint: c.running ? Theme.Status.good : Theme.Status.caution)
             if !selectingContainers {
-                Button {
-                    sheetTrigger = SheetTrigger(actions: [DockerContainerRemoveAction(container: c)])
-                } label: {
-                    Label("Remove", systemImage: "trash")
-                }
-                .buttonStyle(.bordered).controlSize(.small)
-                .help(c.running ? "Stops then removes the container (docker rm -f)." : "Removes the stopped container.")
+                Button("Remove…") { sheetTrigger = SheetTrigger(actions: [DockerContainerRemoveAction(container: c)]) }
+                    .help(c.running ? "Stops, then removes the container." : "Removes the stopped container.")
             }
         }
+        .padding(.horizontal, Theme.Spacing.lg)
+        .padding(.vertical, Theme.Spacing.md)
     }
 
     private func toggleContainer(_ c: DockerContainer) {
@@ -436,13 +365,14 @@ struct DockerActionConfirmationSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             if let outcome { outcomeView(outcome) } else { planView }
         }
-        .padding(20)
+        .padding(Theme.Spacing.xl)
         .frame(width: 560, height: 480)
+        .background(Theme.canvas)
     }
 
     @ViewBuilder
     private var planView: some View {
-        Text("Docker cleanup").font(.title2.bold())
+        Text("Docker cleanup").font(.system(size: 17, weight: .semibold))
         Label("This cannot be undone — Docker does not go through the Trash.",
               systemImage: "exclamationmark.triangle.fill")
             .foregroundStyle(.red)
@@ -472,6 +402,7 @@ struct DockerActionConfirmationSheet: View {
             Spacer()
             Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
             Button("Run") { execute() }
+                .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
                 .tint(.red)
                 .disabled(actions.isEmpty)
@@ -499,7 +430,7 @@ struct DockerActionConfirmationSheet: View {
     private func outcomeView(_ outcome: ShellActionOutcome) -> some View {
         Label("Ran \(outcome.succeeded.count) action(s) · ≈ \(outcome.reclaimedBytes.formattedBytes)",
               systemImage: "checkmark.circle")
-            .font(.title2.bold())
+            .font(.system(size: 17, weight: .semibold))
         List {
             if !outcome.succeeded.isEmpty {
                 Section("Succeeded") {
@@ -524,7 +455,7 @@ struct DockerActionConfirmationSheet: View {
         .frame(maxHeight: .infinity)
         HStack {
             Spacer()
-            Button("Done") { onCompleted(); dismiss() }.keyboardShortcut(.defaultAction)
+            Button("Done") { onCompleted(); dismiss() }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
         }
     }
 }

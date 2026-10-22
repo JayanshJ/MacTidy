@@ -148,31 +148,30 @@ auth (`-128`) is reported distinctly from a real command failure.
 
 ### App layer
 
-`Sources/MacTidyApp/AppState.swift` — `@MainActor @Observable` model. The UI's single
-gateway for every destructive action: `AppState.execute(_:extraAllowedRoots:kind:)`
-constructs a `DeletionExecutor` with the current `dryRun` and `SafePathPolicy`,
-then records to `TrashLog` + `CleanupLog` and sets `lastUndoableOutcome` for the
-Undo toast. The uninstaller passes `kind: .uninstall` so its cleanups are bucketed
-separately from generic deletions. `execute`/`deduplicate` are non-throwing (policy
-issues come back as skipped records). Persisted settings: `dryRun` (on by default),
-`extraAllowedRoots` (applied to every action in addition to the policy's built-in
-roots), `autoScanOnLaunch`, and `logRetentionDays` (prunes `TrashLog`/`CleanupLog`).
-The last scan results are persisted to `~/Library/Application Support/MacTidy/last-
-scan.json` and a rolling `ScanHistory` (capped at 50) drives the reclaimable trend
-on the Overview. `rescanCategories()` is cancellable and reports per-category
-progress. The UI is a **single-window guided flow** (no sidebar): `FlowView`
-hosts a `FlowPhase` state machine (`welcome → scanning → dashboard → allClean`)
-driven by `AppState`'s flow controller. `startFlow()` runs a category scan plus
-an uninstall/launch-item scan in parallel, then lands on the **dashboard**.
-The dashboard shows everything at once: a tab bar switches between Cleanup
-(category cards grid; tap a card to drill into its items with multi-select +
-Trash), Uninstaller, Startup, and Duplicates — all in the new design system.
-The first pass is a **dry preview** (`flowPass == .dry`); `startRealPass()`
-turns `dryRun` off and stays on the dashboard so the user trashes for real.
-`FlowToolbar` carries a Home button and the escape hatches (Browse disk,
-Recently Trashed, Settings) as sheets. `DiskView` (List/Map toggle, Map renders
-`TreemapView`, a recursive binary-split treemap), `SettingsView`, and `TrashView`
-are sheets reachable from the toolbar. `UndoToast` overlays post-cleanup undo.
+`Sources/MacTidyApp/AppState.swift` — `@MainActor @Observable` model and the UI's
+single gateway for every destructive action (`execute`, `deduplicate`), recording
+to `TrashLog` + `CleanupLog` and driving the Undo toast. Also owns navigation
+(`section`, `drilledCategory`), live scan progress (`scanPartial`), and the
+persisted `appearance` (system/light/dark). The last scan is restored from
+`last-scan.json`, so later launches open straight into the app; the welcome screen
+shows only when there is no saved scan.
+
+UI structure (`Views/`): `RootView` routes onboarding → welcome → `MainShell`.
+`MainShell` is a `NavigationSplitView` sidebar (Overview, Cleanup, Insights ·
+Developer · Apps · Files · History) with a boot-volume footer; Settings is a
+native `Settings` scene (tabs). Design system lives in `Theme.swift`: adaptive
+light/dark color tokens, type ramp, spacing, and components (`Page`,
+`PageHeader`, `SurfaceSection` + `RowDivider`, `Meter`, `CapacityBar`,
+`EmptyStateView`, `Badge`, `RowButtonStyle`). Rules: one accent, spent on what
+can be reclaimed and primary actions; one level of surface (never a card in a
+card); no `fixedSize(vertical:)` outside a scroll view (it inflates the window's
+minimum height).
+
+**Design QA:** `make app && dist/MacTidy.app/Contents/MacOS/MacTidy --snapshot <dir> [--only overview,cleanup,…]`
+renders every screen (plus Settings, the confirmation sheet and the menu bar
+panel) in light and dark to PNG using fixture data, then quits. It never scans,
+trashes or checks for updates, and logs `LAYOUT OVERFLOW` when a screen's
+minimum height exceeds the window.
 
 ## Tests
 

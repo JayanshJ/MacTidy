@@ -18,16 +18,13 @@ struct SystemTab: View {
     @State private var outcome: ShellActionOutcome?
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
-                    timeMachineCard
-                }
-                .padding(Theme.Spacing.xl)
-                .frame(maxWidth: .infinity, alignment: .leading)
+        Page("Snapshots",
+             subtitle: "Time Machine keeps local snapshots on your startup disk. macOS expires them on its own; deleting one frees space now and cannot be undone.") {
+            Button { Task { await loadSnapshots() } } label: {
+                if isLoading { ProgressView().controlSize(.small) } else { Label("Refresh", systemImage: "arrow.clockwise") }
             }
+        } content: {
+            timeMachineCard
         }
         .sheet(isPresented: $showSheet) {
             ShellActionConfirmationSheet(
@@ -41,72 +38,40 @@ struct SystemTab: View {
         .task { await loadSnapshots() }
     }
 
-    private var header: some View {
-        HStack {
-            Label("System", systemImage: "internaldrive").font(.title2.bold())
-            Spacer()
-            Button { Task { await loadSnapshots() } } label: {
-                if isLoading { ProgressView().controlSize(.small) }
-                else { Label("Refresh", systemImage: "arrow.clockwise") }
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-        }
-        .padding(.horizontal, Theme.Spacing.lg).padding(.vertical, Theme.Spacing.sm)
-    }
-
     @ViewBuilder
     private var timeMachineCard: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-            HStack(spacing: Theme.Spacing.xs) {
-                Image(systemName: "clock.arrow.circlepath").foregroundStyle(Theme.accent)
-                Text("Time Machine local snapshots").font(.headline)
-                Spacer()
-                if !snapshots.isEmpty {
-                    Badge(text: "\(snapshots.count)", tint: Theme.accent)
-                }
-            }
-            Text("Local snapshots live on your startup volume and can tie up tens of GB. macOS creates and expires them automatically; deleting one frees space immediately and TM recreates snapshots on its next run.")
-                .font(.caption).foregroundStyle(.secondary)
-
-            if isLoading && snapshots.isEmpty {
-                ProgressView("Checking snapshots…")
-            } else if snapshots.isEmpty {
-                Label("No local snapshots.", systemImage: "checkmark.circle")
-                    .font(.callout).foregroundStyle(.secondary)
-            } else {
-                List {
-                    ForEach(snapshots) { snap in
-                        HStack {
-                            Image(systemName: "clock").foregroundStyle(.secondary)
-                            Text(snap.date).font(.callout.monospaced())
-                            Spacer()
-                            Button("Delete") {
-                                pending = [DeleteSnapshotAction(snapshot: snap)]
-                                outcome = nil
-                                showSheet = true
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                        }
-                    }
-                }
-                .listStyle(.bordered)
-                .frame(maxHeight: 240)
-
-                Button {
+        if isLoading && snapshots.isEmpty {
+            ProgressView("Checking snapshots").frame(maxWidth: .infinity).padding(Theme.Spacing.xxl)
+        } else if snapshots.isEmpty {
+            EmptyStateView(symbol: "clock.arrow.circlepath", title: "No local snapshots",
+                           message: "Nothing is being held by Time Machine on this disk right now.")
+        } else {
+            SurfaceSection("\(snapshots.count) local snapshot\(snapshots.count == 1 ? "" : "s")") {
+                Button(role: .destructive) {
                     pending = snapshots.map { DeleteSnapshotAction(snapshot: $0) }
                     outcome = nil
                     showSheet = true
-                } label: {
-                    Label("Delete all \(snapshots.count) snapshots", systemImage: "trash")
+                } label: { Text("Delete All") }
+                .buttonStyle(.link)
+                .font(Theme.Font.caption)
+            } content: {
+                ForEach(Array(snapshots.enumerated()), id: \.element.id) { i, snap in
+                    if i > 0 { RowDivider(inset: 48) }
+                    HStack(spacing: Theme.Spacing.md) {
+                        Image(systemName: "clock").foregroundStyle(.secondary).frame(width: 20)
+                        Text(snap.date).font(.system(size: 13, design: .monospaced))
+                        Spacer()
+                        Button("Delete") {
+                            pending = [DeleteSnapshotAction(snapshot: snap)]
+                            outcome = nil
+                            showSheet = true
+                        }
+                    }
+                    .padding(.horizontal, Theme.Spacing.lg)
+                    .padding(.vertical, Theme.Spacing.md)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(Theme.Status.blocked)
-                .controlSize(.small)
             }
         }
-        .cardStyle()
     }
 
     private func loadSnapshots() async {

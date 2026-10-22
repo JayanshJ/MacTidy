@@ -34,14 +34,15 @@ struct DedupConfirmationSheet: View {
                 planView
             }
         }
-        .padding(20)
+        .padding(Theme.Spacing.xl)
         .frame(width: 560, height: 440)
+        .background(Theme.canvas)
     }
 
     @ViewBuilder
     private var planView: some View {
         Text("Deduplicate \(sets.count) set\(sets.count == 1 ? "" : "s")?")
-            .font(.title2.bold())
+            .font(.system(size: 17, weight: .semibold))
         Text("""
         \(totalCopies) extra cop\(totalCopies == 1 ? "y" : "ies") will be replaced by APFS \
         clones of the kept file — every path keeps working with identical content, \
@@ -75,6 +76,7 @@ struct DedupConfirmationSheet: View {
             Button("Cancel") { dismiss() }
                 .keyboardShortcut(.cancelAction)
             Button("Deduplicate") { execute() }
+                .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
                 .disabled(sets.isEmpty)
         }
@@ -99,7 +101,7 @@ struct DedupConfirmationSheet: View {
             "Deduplicated \(summary.deduplicated.count) cop\(summary.deduplicated.count == 1 ? "y" : "ies")",
             systemImage: "checkmark.circle"
         )
-        .font(.title2.bold())
+        .font(.system(size: 17, weight: .semibold))
 
         Text("\(summary.reclaimedBytes.formattedBytes) freed once you empty the Trash. All file paths still work.")
             .foregroundStyle(.secondary)
@@ -131,6 +133,7 @@ struct DedupConfirmationSheet: View {
                 onCompleted()
                 dismiss()
             }
+            .buttonStyle(.borderedProminent)
             .keyboardShortcut(.defaultAction)
         }
     }

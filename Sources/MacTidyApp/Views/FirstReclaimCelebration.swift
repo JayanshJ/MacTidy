@@ -12,13 +12,14 @@ struct FirstReclaimCelebration: View {
     var body: some View {
         if let bytes = state.firstReclaimMilestone, !dismissed {
             HStack(spacing: Theme.Spacing.md) {
-                Text("🎉")
-                    .font(.title)
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(Theme.accent)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("You freed \(bytes.formattedBytes)!")
-                        .font(.callout.bold())
-                    Text("That's your first cleanup with MacTidy. Keep going — every pass adds up.")
-                        .font(.caption).foregroundStyle(.secondary)
+                    Text("First cleanup: \(bytes.formattedBytes) freed")
+                        .font(Theme.Font.bodyStrong)
+                    Text("Empty the Trash in Finder whenever you're sure to get the space back.")
+                        .font(Theme.Font.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button {
@@ -31,8 +32,9 @@ struct FirstReclaimCelebration: View {
             }
             .padding(Theme.Spacing.md)
             .frame(maxWidth: 460)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-            .shadow(radius: 8)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Theme.hairline))
+            .shadow(color: .black.opacity(0.12), radius: 10, y: 4)
             .transition(.move(edge: .bottom).combined(with: .opacity))
             .task {
                 try? await Task.sleep(for: .seconds(8))

@@ -13,18 +13,8 @@ struct SizeBar: View {
     var fillsWidth: Bool = false
 
     var body: some View {
-        GeometryReader { proxy in
-            ZStack(alignment: .leading) {
-                // Use a separator-level fill so the track is visible in both
-                // light and dark mode (.quaternary washes out in light mode).
-                Capsule().fill(.separator.opacity(0.5))
-                Capsule()
-                    .fill(.tint)
-                    .frame(width: max(2, proxy.size.width * min(1, fraction)))
-            }
-        }
-        .frame(height: 6)
-        .frame(maxWidth: fillsWidth ? .infinity : 90)
+        Meter(fraction: fraction)
+            .frame(maxWidth: fillsWidth ? .infinity : 90)
     }
 }
 /// Standard row for a scanned item: checkbox, name, context, size,
@@ -50,7 +40,7 @@ struct ScanItemRow: View {
     }
 
     var body: some View {
-        HStack(spacing: Theme.Spacing.sm) {
+        HStack(spacing: Theme.Spacing.md) {
             Toggle("", isOn: Binding(
                 get: { selection.contains(item.id) },
                 set: { isOn in
@@ -58,11 +48,18 @@ struct ScanItemRow: View {
                 }
             ))
             .labelsHidden()
+            .toggleStyle(.checkbox)
+
+            Image(nsImage: NSWorkspace.shared.icon(forFile: item.url.path))
+                .resizable()
+                .frame(width: 22, height: 22)
 
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: Theme.Spacing.xs) {
+                HStack(spacing: Theme.Spacing.sm) {
                     Text(item.url.lastPathComponent)
+                        .font(Theme.Font.bodyStrong)
                         .lineLimit(1)
+                        .truncationMode(.middle)
                     if item.risk != .safe {
                         Badge(text: item.risk.label,
                               tint: item.risk == .danger ? Theme.Status.blocked : Theme.Status.caution)
@@ -71,9 +68,10 @@ struct ScanItemRow: View {
                 }
                 if let subtitle {
                     Text(subtitle)
-                        .font(.caption)
+                        .font(Theme.Font.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                        .truncationMode(.middle)
                 }
                 if let displayed = displayedVerdict {
                     HStack(spacing: 4) {
@@ -89,18 +87,20 @@ struct ScanItemRow: View {
                     }
                 }
             }
-            Spacer()
+            Spacer(minLength: Theme.Spacing.lg)
             Text(item.sizeBytes.formattedBytes)
-                .monospacedDigit()
+                .font(Theme.Font.body.monospacedDigit())
                 .foregroundStyle(.secondary)
             Button {
                 showInFinder(item.url)
             } label: {
-                Image(systemName: "magnifyingglass.circle")
+                Image(systemName: "arrow.up.forward.square")
+                    .foregroundStyle(.tertiary)
             }
             .buttonStyle(.borderless)
             .help("Show in Finder")
         }
+        .padding(.vertical, Theme.Spacing.xs)
         .contextMenu {
             Button("Show in Finder") { showInFinder(item.url) }
             if item.category != nil {
@@ -160,26 +160,29 @@ struct SelectionFooter: View {
     let action: () -> Void
 
     var body: some View {
-        HStack {
+        HStack(spacing: Theme.Spacing.sm) {
             if selectedCount > 0 {
-                Text("\(selectedCount) item\(selectedCount == 1 ? "" : "s") selected")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
                 Text(selectedBytes.formattedBytes)
-                    .font(.callout.bold().monospacedDigit())
-                    .foregroundStyle(Theme.accent)
+                    .font(Theme.Font.figure)
+                    .contentTransition(.numericText())
+                Text("in \(selectedCount) item\(selectedCount == 1 ? "" : "s")")
+                    .font(Theme.Font.body)
+                    .foregroundStyle(.secondary)
             } else {
-                Text("Nothing selected")
-                    .font(.callout)
+                Text("Select items to clean")
+                    .font(Theme.Font.body)
                     .foregroundStyle(.tertiary)
             }
             Spacer()
             Button(buttonTitle, action: action)
+                .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
                 .disabled(disabled || selectedCount == 0)
         }
-        .padding(.horizontal, Theme.Spacing.lg)
+        .animation(Theme.ease, value: selectedBytes)
+        .padding(.horizontal, Theme.gutter)
         .padding(.vertical, Theme.Spacing.md)
         .background(.bar)
+        .overlay(alignment: .top) { Rectangle().fill(Theme.hairline).frame(height: 1) }
     }
 }

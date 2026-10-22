@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import Observation
 import CoreKit
 
@@ -9,6 +10,22 @@ final class AppState {
     /// refreshed whenever the app becomes active.
     var fdaStatus = FullDiskAccess.status()
     var fdaGranted: Bool { fdaStatus.granted }
+    /// Window appearance: "system", "light" or "dark". Persisted.
+    var appearance: String = UserDefaults.standard.string(forKey: "MacTidy.appearance") ?? "system" {
+        didSet {
+            UserDefaults.standard.set(appearance, forKey: "MacTidy.appearance")
+            applyAppearance()
+        }
+    }
+
+    func applyAppearance() {
+        NSApp.appearance = switch appearance {
+        case "light": NSAppearance(named: .aqua)
+        case "dark": NSAppearance(named: .darkAqua)
+        default: nil
+        }
+    }
+
     /// Session-only: the user chose to continue without Full Disk Access.
     /// Never persisted, so each launch re-checks and re-offers the fix.
     var fdaSkipped = false
@@ -78,6 +95,12 @@ final class AppState {
     var lastAIReasoning: String?
 
     var categoryResults: [CategoryResult] = []
+    /// Categories finished so far in the running scan, newest last. Drives the
+    /// live "found so far" view while scanning.
+    var scanPartial: [CategoryResult] = []
+    /// Sidebar selection and the category drilled into on the Cleanup page.
+    var section: SidebarItem = .overview
+    var drilledCategory: CoreKit.Category?
     var isScanningCategories = false
     var scanStatus: String = ""
     /// Human-readable progress for the current category scan ("Scanning User caches…").
@@ -204,6 +227,7 @@ final class AppState {
     }
 
     func refreshFDA() {
+        if SnapshotHarness.isActive { return }
         let status = FullDiskAccess.status()
         // Guarded so 1 s polling doesn't invalidate every observer each tick.
         if status != fdaStatus { fdaStatus = status }
@@ -216,14 +240,18 @@ final class AppState {
         scanProgress = "Starting…"
         scanTotal = CoreKit.Category.allCases.count
         scanCompleted = 0
+        scanPartial = []
         let scanner = makeCategoryScanner()
         let task = Task {
             let results = await scanner.scanAll(
                 progress: { category in
                     Task { @MainActor in self.scanProgress = "Scanning \(category.displayName)…" }
                 },
-                completed: { _ in
-                    Task { @MainActor in self.scanCompleted += 1 }
+                completed: { result in
+                    Task { @MainActor in
+                        self.scanCompleted += 1
+                        self.scanPartial.append(result)
+                    }
                 }
             )
             if Task.isCancelled {
@@ -324,6 +352,17 @@ final class AppState {
     private func preloadAppAttributions() async -> [AppFootprint] {
         let apps = await AppUninstaller.installedApps()
         return await AppStorageAttribution.scan(apps: apps)
+    }
+
+    /// Loads the uninstaller's app list when the page opens without a full
+    /// scan having run this launch (the last scan is restored from disk, apps
+    /// are not).
+    var isLoadingApps = false
+    func loadAppsIfNeeded() async {
+        guard flowApps.isEmpty, !isLoadingApps, !SnapshotHarness.isActive else { return }
+        isLoadingApps = true
+        flowApps = await scanUninstallCandidates()
+        isLoadingApps = false
     }
 
     /// Scans installed apps and their leftovers, keeping only non-Apple apps

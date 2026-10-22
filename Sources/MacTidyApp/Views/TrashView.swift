@@ -11,13 +11,16 @@ struct TrashView: View {
     @State private var restoringID: UUID?
 
     var body: some View {
-        Group {
+        Page("Recently Trashed",
+             subtitle: "Everything MacTidy moved to the Trash. Restore puts it back where it was. MacTidy never empties the Trash.") {
+            if !state.recentTrashed.isEmpty {
+                Button("Clear List") { state.recentTrashed.forEach { state.dismissTrashed($0) } }
+                    .help("Remove all entries from this list. The items stay in the Trash.")
+            }
+        } content: {
             if state.recentTrashed.isEmpty {
-                ContentUnavailableView(
-                    "Nothing trashed yet",
-                    systemImage: "trash",
-                    description: Text("Items MacTidy moves to the Trash appear here for a while, so you can undo with one click.")
-                )
+                EmptyStateView(symbol: "arrow.uturn.backward.circle", title: "Nothing trashed yet",
+                               message: "Items you clean show up here, ready to restore with one click.")
             } else {
                 list
             }
@@ -31,20 +34,14 @@ struct TrashView: View {
     }
 
     private var list: some View {
-        List {
-            ForEach(sectioned, id: \.0) { section in
-                Section {
-                    ForEach(section.1) { record in
-                        row(record)
-                    }
-                } header: {
-                    HStack {
-                        Text(section.0)
-                        Spacer()
-                        Text(section.1.reduce(0) { $0 + $1.bytes }.formattedBytes)
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                    }
+        ForEach(sectioned, id: \.0) { section in
+            SurfaceSection(section.0) {
+                Text(section.1.reduce(0) { $0 + $1.bytes }.formattedBytes)
+                    .font(Theme.Font.caption.monospacedDigit()).foregroundStyle(.secondary)
+            } content: {
+                ForEach(Array(section.1.enumerated()), id: \.element.id) { i, record in
+                    if i > 0 { RowDivider(inset: 48) }
+                    row(record)
                 }
             }
         }
@@ -63,13 +60,14 @@ struct TrashView: View {
 
     @ViewBuilder
     private func row(_ record: TrashRecord) -> some View {
-        HStack {
+        HStack(spacing: Theme.Spacing.md) {
             Image(systemName: rowIcon(record.kind))
                 .foregroundStyle(.secondary)
+                .frame(width: 20)
             VStack(alignment: .leading, spacing: 2) {
-                Text(record.original.lastPathComponent).lineLimit(1)
+                Text(record.original.lastPathComponent).font(Theme.Font.bodyStrong).lineLimit(1)
                 Text(record.original.path)
-                    .font(.caption)
+                    .font(Theme.Font.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.head)
@@ -83,17 +81,18 @@ struct TrashView: View {
                 ProgressView().controlSize(.small)
             } else {
                 Button("Restore") { restore(record) }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
                 Button {
                     state.dismissTrashed(record)
                 } label: {
-                    Image(systemName: "xmark")
+                    Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
                 }
                 .buttonStyle(.borderless)
-                .help("Dismiss from list (keeps it in the Trash)")
+                .foregroundStyle(.tertiary)
+                .help("Remove from this list. It stays in the Trash.")
             }
         }
+        .padding(.horizontal, Theme.Spacing.lg)
+        .padding(.vertical, Theme.Spacing.md)
         .contextMenu {
             Button("Show in Finder") { showInFinder(record.original) }
         }

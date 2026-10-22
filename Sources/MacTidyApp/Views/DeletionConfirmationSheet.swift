@@ -24,80 +24,90 @@ struct DeletionConfirmationSheet: View {
     @State private var actionOutcome: UninstallActionOutcome?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
             if let outcome {
                 outcomeView(outcome)
             } else {
                 planView
             }
         }
-        .padding(20)
-        .frame(width: 560, height: 480)
+        .padding(Theme.Spacing.xl)
+        .frame(width: 600, height: 540)
+        .background(Theme.canvas)
     }
 
     @ViewBuilder
     private var planView: some View {
-        Text(title).font(.title2.bold())
-        if let reasoning, !reasoning.isEmpty {
-            HStack(alignment: .top, spacing: 6) {
-                Image(systemName: "sparkles")
-                    .foregroundStyle(Theme.accent)
-                Text(reasoning)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            Text(title).font(.system(size: 17, weight: .semibold))
+            HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.sm) {
+                Text(plan.totalBytes.formattedBytes).font(.system(size: 32, weight: .semibold).monospacedDigit())
+                Text("in \(plan.candidates.count) item\(plan.candidates.count == 1 ? "" : "s")")
+                    .font(Theme.Font.body).foregroundStyle(.secondary)
             }
-            .padding(.vertical, 2)
+            Text("Everything goes to the Trash, so you can put it back. MacTidy re-checks each path against its safety rules before moving it.")
+                .font(Theme.Font.caption).foregroundStyle(.secondary)
+            if let reasoning, !reasoning.isEmpty {
+                Label(reasoning, systemImage: "wand.and.stars")
+                    .font(Theme.Font.body)
+                    .padding(Theme.Spacing.md)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Theme.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
         }
-        Text("\(plan.candidates.count) item\(plan.candidates.count == 1 ? "" : "s") · \(plan.totalBytes.formattedBytes) will be moved to the Trash. Nothing is permanently deleted — restore from the Trash to undo.")
-            .foregroundStyle(.secondary)
 
-        List {
-            if !uninstallActions.isEmpty {
-                Section("Privacy & system cleanup") {
-                    ForEach(uninstallActions) { action in
-                        HStack(alignment: .top, spacing: 8) {
-                            Image(systemName: action.kind.icon)
-                                .foregroundStyle(Theme.accent)
-                                .frame(width: 20)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(action.kind.rawValue).fontWeight(.medium)
-                                Text(action.kind.explanation)
-                                    .font(.caption).foregroundStyle(.secondary)
-                                Text(action.target)
-                                    .font(.caption.monospaced())
-                                    .foregroundStyle(.tertiary)
-                                    .lineLimit(1).truncationMode(.head)
+        ScrollView {
+            VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
+                if !uninstallActions.isEmpty {
+                    SurfaceSection("Also on uninstall") {
+                        ForEach(Array(uninstallActions.enumerated()), id: \.element.id) { i, action in
+                            if i > 0 { RowDivider(inset: 48) }
+                            HStack(alignment: .top, spacing: Theme.Spacing.md) {
+                                Image(systemName: action.kind.icon).foregroundStyle(.secondary).frame(width: 20)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(action.kind.rawValue).font(Theme.Font.bodyStrong)
+                                    Text(action.kind.explanation).font(Theme.Font.caption).foregroundStyle(.secondary)
+                                }
                             }
+                            .padding(.horizontal, Theme.Spacing.lg)
+                            .padding(.vertical, Theme.Spacing.md)
                         }
                     }
                 }
-            }
-            Section("Files to trash (\(plan.candidates.count))") {
-                ForEach(plan.candidates) { candidate in
-                    HStack {
-                        Text(candidate.url.path)
-                            .lineLimit(1)
-                            .truncationMode(.head)
+                SurfaceSection("Items") {
+                    ForEach(Array(plan.candidates.enumerated()), id: \.element.id) { i, candidate in
+                        if i > 0 { RowDivider(inset: 48) }
+                        HStack(spacing: Theme.Spacing.md) {
+                            Image(nsImage: NSWorkspace.shared.icon(forFile: candidate.url.path))
+                                .resizable().frame(width: 20, height: 20)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(candidate.url.lastPathComponent).font(Theme.Font.bodyStrong).lineLimit(1)
+                                Text(candidate.url.deletingLastPathComponent().path)
+                                    .font(Theme.Font.caption).foregroundStyle(.tertiary)
+                                    .lineLimit(1).truncationMode(.head)
+                            }
                             .help(candidate.url.path)
-                        Spacer()
-                        Text(candidate.sizeBytes.formattedBytes)
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
+                            Spacer()
+                            Text(candidate.sizeBytes.formattedBytes)
+                                .font(Theme.Font.body.monospacedDigit()).foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, Theme.Spacing.lg)
+                        .padding(.vertical, Theme.Spacing.sm)
                     }
                 }
             }
         }
-        .listStyle(.bordered)
-        .frame(maxHeight: .infinity)
 
         HStack {
             Spacer()
             Button("Cancel") { dismiss() }
                 .keyboardShortcut(.cancelAction)
-            Button("Move to Trash") { execute() }
+            Button(kind == .uninstall ? "Uninstall" : "Move to Trash") { execute() }
+                .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
                 .disabled(plan.isEmpty && uninstallActions.isEmpty)
         }
+        .controlSize(.large)
     }
 
     private func execute() {
@@ -112,39 +122,52 @@ struct DeletionConfirmationSheet: View {
 
     @ViewBuilder
     private func outcomeView(_ outcome: DeletionOutcome) -> some View {
-        Label(
-            "Moved \(outcome.trashed.count) item\(outcome.trashed.count == 1 ? "" : "s") to Trash",
-            systemImage: "checkmark.circle"
-        )
-        .font(.title2.bold())
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            Image(systemName: outcome.skipped.isEmpty ? "checkmark.circle" : "exclamationmark.circle")
+                .font(.system(size: 30, weight: .light))
+                .foregroundStyle(outcome.skipped.isEmpty ? Theme.accent : Theme.Status.caution)
+            Text("\(outcome.reclaimedBytes.formattedBytes) moved to the Trash")
+                .font(.system(size: 22, weight: .semibold))
+            Text("\(outcome.trashed.count) item\(outcome.trashed.count == 1 ? "" : "s"). The space comes back when you empty the Trash, and anything can be restored until then.")
+                .font(Theme.Font.body).foregroundStyle(.secondary)
+        }
 
-        Text("\(outcome.reclaimedBytes.formattedBytes) reclaimable once you empty the Trash.")
-            .foregroundStyle(.secondary)
-
-        List {
-            ForEach(outcome.trashed) { record in
-                Label(record.original.path, systemImage: "trash")
-                    .lineLimit(1)
-                    .truncationMode(.head)
-            }
-            if let actionOutcome, !actionOutcome.results.isEmpty {
-                Section("Privacy & system cleanup") {
-                    actionOutcomeRows(actionOutcome)
+        ScrollView {
+            VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
+                if !outcome.skipped.isEmpty {
+                    SurfaceSection("Left in place") {
+                        ForEach(Array(outcome.skipped.enumerated()), id: \.element.id) { i, record in
+                            if i > 0 { RowDivider() }
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(record.url.path).font(Theme.Font.body).lineLimit(1).truncationMode(.head)
+                                Text(record.reason).font(Theme.Font.caption).foregroundStyle(Theme.Status.caution)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, Theme.Spacing.lg)
+                            .padding(.vertical, Theme.Spacing.sm)
+                        }
+                    }
                 }
-            }
-            if !outcome.skipped.isEmpty {
-                Section("Skipped (left in place)") {
-                    ForEach(outcome.skipped) { record in
-                        VStack(alignment: .leading) {
-                            Text(record.url.path).lineLimit(1).truncationMode(.head)
-                            Text(record.reason).font(.caption).foregroundStyle(.orange)
+                if let actionOutcome, !actionOutcome.results.isEmpty {
+                    SurfaceSection("Uninstall steps") {
+                        actionOutcomeRows(actionOutcome)
+                    }
+                }
+                if !outcome.trashed.isEmpty {
+                    SurfaceSection("Moved to the Trash") {
+                        ForEach(Array(outcome.trashed.enumerated()), id: \.element.id) { i, record in
+                            if i > 0 { RowDivider() }
+                            Text(record.original.path)
+                                .font(Theme.Font.body).foregroundStyle(.secondary)
+                                .lineLimit(1).truncationMode(.head)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, Theme.Spacing.lg)
+                                .padding(.vertical, Theme.Spacing.sm)
                         }
                     }
                 }
             }
         }
-        .listStyle(.bordered)
-        .frame(maxHeight: .infinity)
 
         HStack {
             Spacer()
@@ -152,14 +175,16 @@ struct DeletionConfirmationSheet: View {
                 onCompleted(outcome)
                 dismiss()
             }
+            .buttonStyle(.borderedProminent)
             .keyboardShortcut(.defaultAction)
         }
+        .controlSize(.large)
     }
 
     @ViewBuilder
     private func actionOutcomeRows(_ outcome: UninstallActionOutcome) -> some View {
         ForEach(outcome.results) { result in
-            HStack(alignment: .top, spacing: 8) {
+            HStack(alignment: .top, spacing: Theme.Spacing.md) {
                 Image(systemName: result.succeeded
                     ? "checkmark.circle.fill"
                     : "exclamationmark.triangle.fill")
@@ -171,6 +196,9 @@ struct DeletionConfirmationSheet: View {
                         .foregroundStyle(result.succeeded ? Color.secondary : Color.orange)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, Theme.Spacing.lg)
+            .padding(.vertical, Theme.Spacing.sm)
         }
     }
 }
