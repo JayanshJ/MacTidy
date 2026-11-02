@@ -70,7 +70,7 @@ public enum Category: String, CaseIterable, Codable, Sendable, Identifiable {
         case .iosBackups: "iOS device backups"
         case .devCaches: "Developer tool caches"
         case .aiAgents: "AI coding agents"
-        case .appSupport: "Application Support hoarders"
+        case .appSupport: "Application Support"
         case .bigFiles: "Large files"
         case .simulatorDevices: "Simulator devices"
         case .systemLogs: "System logs"
@@ -136,7 +136,7 @@ public enum Category: String, CaseIterable, Codable, Sendable, Identifiable {
         case .aiAgents:
             "Claude Code, Codex, Cursor, Gemini, Continue and Aider logs, transcripts, worktrees and plugins, plus local model stores (Ollama, Hugging Face, LM Studio). Only logs and caches are preselected; transcripts, worktrees, plugins and models are marked Caution. Credentials and settings are never touched."
         case .appSupport:
-            "Per-app data folders in ~/Library/Application Support, largest first. Suggest-only: these hold real app state (config, databases, messages); trashing resets the app, so check what each is before deleting."
+            "What can go inside apps' folders in ~/Library/Application Support: web and script caches of browsers and Electron apps (Slack, Discord, VS Code, Claude…), older versions kept beside newer ones, downloaded wallpapers and media caches, virtual machine disks, and folders of apps that are no longer installed. An installed app's own data (settings, logins, documents, databases) is never listed. Caches are preselected; anything that re-downloads, loses history or belongs to a removed app is marked Caution."
         case .bigFiles:
             "Individual files over 100 MB anywhere under your home. Suggest-only: large files aren't necessarily junk — review each before trashing."
         case .simulatorDevices:
@@ -160,7 +160,7 @@ public enum Category: String, CaseIterable, Codable, Sendable, Identifiable {
     public var isPreselectable: Bool {
         switch self {
         case .nodeModules, .rustTargets, .iosBackups, .simulatorRuntimes,
-             .appSupport, .bigFiles, .pythonCaches, .xcodeArchives,
+             .bigFiles, .pythonCaches, .xcodeArchives,
              .unityLibrary, .androidSystemImages, .staleScreenshots,
              .simulatorDevices, .systemLogs, .groupContainers:
             false
@@ -181,6 +181,10 @@ public struct ScanItem: Identifiable, Hashable, Sendable, Codable {
     /// Extra context shown in the UI, e.g. the parent project of a node_modules dir.
     public let detail: String?
     public let lastModified: Date?
+    /// Why a scanner listed this item when its path alone can't say (an app
+    /// that's no longer installed, a superseded version). Read by the
+    /// category's rules; nil for most items.
+    public let finding: String?
 
     public init(
         id: UUID? = nil,
@@ -189,7 +193,8 @@ public struct ScanItem: Identifiable, Hashable, Sendable, Codable {
         isDirectory: Bool,
         category: Category? = nil,
         detail: String? = nil,
-        lastModified: Date? = nil
+        lastModified: Date? = nil,
+        finding: String? = nil
     ) {
         self.id = id ?? ScanItem.deterministicID(for: url)
         self.url = url
@@ -198,6 +203,7 @@ public struct ScanItem: Identifiable, Hashable, Sendable, Codable {
         self.category = category
         self.detail = detail
         self.lastModified = lastModified
+        self.finding = finding
     }
 
     /// Returns a deterministic UUID derived from the symlink-resolved canonical
@@ -220,7 +226,7 @@ public struct ScanItem: Identifiable, Hashable, Sendable, Codable {
 
     /// Codable with a stable key list so persisted scans survive enum reorders.
     enum CodingKeys: String, CodingKey {
-        case id, url, sizeBytes, isDirectory, category, detail, lastModified
+        case id, url, sizeBytes, isDirectory, category, detail, lastModified, finding
     }
 }
 

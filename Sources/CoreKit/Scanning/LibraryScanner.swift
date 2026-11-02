@@ -73,18 +73,6 @@ extension CategoryScanner {
         }
     }
 
-    /// Largest per-app data folders in ~/Library/Application Support. These
-    /// hold real app state, so the category is suggest-only — the user must
-    /// judge each one. Apple's own subfolders are listed too (for awareness)
-    /// but trashing them is rarely safe; the SafePathPolicy still allows
-    /// trashing arbitrary subfolders here, so the explanation warns loudly.
-    func appSupportHoarders() async -> [ScanItem] {
-        let root = home.appending(path: "Library/Application Support")
-        let items = await DiskScanner.topLevelScan(root: root, category: .appSupport)
-        // Surface the top 30 by size — there can be dozens of tiny ones.
-        return Array(items.prefix(30))
-    }
-
     /// Largest individual files under the user's Downloads and dev roots.
     /// Library is excluded so this doesn't overlap the dedicated Library
     /// categories (caches, backups, Application Support, …). Build/VCS trees

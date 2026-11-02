@@ -270,6 +270,7 @@ struct OverviewView: View {
                 if let pressure, pressure.isAvailable { capacity(pressure, safe: safeBytes, review: reviewBytes) }
                 if state.trashBytes >= TrashNudgeCard.threshold { TrashNudgeCard() }
                 growing
+                appSupportCard
                 if !ranked.isEmpty { breakdown(ranked) }
                 footerStat
             }
@@ -397,6 +398,49 @@ struct OverviewView: View {
         }
     }
 
+    /// Where Application Support's space goes, all of it: what can go, what
+    /// needs a look, and what is apps' own data and stays. The folder that
+    /// prompted most "what is taking my space" questions.
+    @ViewBuilder
+    private var appSupportCard: some View {
+        if let total = state.appSupportBytes, total >= 1_000_000_000 {
+            let items = state.categoryResults.first { $0.category == .appSupport }?.items ?? []
+            let safe = items.filter(\.isPreselectable).reduce(0) { $0 + $1.sizeBytes }
+            let listed = items.reduce(0) { $0 + $1.sizeBytes }
+            SurfaceSection("Application Support",
+                           footer: "\(total.formattedBytes) in total. MacTidy only lists what rebuilds, re-downloads or belongs to removed apps.") {
+                Button("Review") {
+                    state.section = .cleanup
+                    state.drilledCategory = .appSupport
+                }
+                .buttonStyle(.link)
+                .font(Theme.Font.caption)
+            } content: {
+                appSupportRow("Caches that rebuild", "Included in Clean Safe Items.", safe, tint: Theme.accent)
+                RowDivider(inset: 48)
+                appSupportRow("Worth a look", "Re-downloads, older versions, virtual machines, removed apps.",
+                              listed - safe, tint: Theme.Status.caution)
+                RowDivider(inset: 48)
+                appSupportRow("Apps' own data", "Settings, logins, documents and databases. Never listed.",
+                              max(0, total - listed), tint: Theme.used)
+            }
+        }
+    }
+
+    private func appSupportRow(_ title: String, _ detail: String, _ bytes: Int64, tint: Color) -> some View {
+        HStack(spacing: Theme.Spacing.md) {
+            Circle().fill(tint).frame(width: 8, height: 8).frame(width: 20)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(Theme.Font.bodyStrong)
+                Text(detail).font(Theme.Font.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text(bytes.formattedBytes).font(Theme.Font.bodyStrong.monospacedDigit())
+        }
+        .padding(.horizontal, Theme.Spacing.lg)
+        .padding(.vertical, Theme.Spacing.md)
+    }
+
     private func breakdown(_ ranked: [CategoryResult]) -> some View {
         let top = Array(ranked.prefix(7))
         let maxBytes = top.first?.totalBytes ?? 1
@@ -433,8 +477,15 @@ struct OverviewView: View {
 struct CategoryRow: View {
     let result: CategoryResult
     let maxBytes: Int64
+    /// Show only this safe share of the category, with the rest called out.
+    var safeBytes: Int64? = nil
+    /// Badge the row as needing review; defaults to the category's own tier.
+    var needsReview: Bool? = nil
 
     var body: some View {
+        let shown = safeBytes ?? result.totalBytes
+        let toReview = result.totalBytes - shown
+        let review = needsReview ?? !result.category.isPreselectable
         HStack(spacing: Theme.Spacing.md) {
             Image(systemName: result.category.symbol)
                 .font(.system(size: 14))
@@ -443,18 +494,19 @@ struct CategoryRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: Theme.Spacing.sm) {
                     Text(result.category.displayName).font(Theme.Font.bodyStrong)
-                    if !result.category.isPreselectable {
+                    if review {
                         Badge(text: "Review", tint: Theme.Status.caution)
                     }
                 }
-                Text("\(result.items.count) item\(result.items.count == 1 ? "" : "s")")
+                Text("\(result.items.count) item\(result.items.count == 1 ? "" : "s")"
+                     + (safeBytes != nil && toReview > 0 ? "  ·  \(toReview.formattedBytes) more to review" : ""))
                     .font(Theme.Font.caption).foregroundStyle(.secondary)
             }
             Spacer(minLength: Theme.Spacing.lg)
-            Meter(fraction: Double(result.totalBytes) / Double(max(maxBytes, 1)),
-                  tint: result.category.isPreselectable ? Theme.accent : Theme.used)
+            Meter(fraction: Double(shown) / Double(max(maxBytes, 1)),
+                  tint: review ? Theme.used : Theme.accent)
                 .frame(width: 120)
-            Text(result.totalBytes.formattedBytes)
+            Text(shown.formattedBytes)
                 .font(Theme.Font.bodyStrong.monospacedDigit())
                 .frame(width: 76, alignment: .trailing)
             Image(systemName: "chevron.right")

@@ -62,7 +62,7 @@ public enum Recommendations {
     public static let suggestOnlyCategories: Set<Category> = [
         .xcodeArchives, .simulatorDevices, .systemLogs,
         .groupContainers, .unityLibrary, .androidSystemImages,
-        .appSupport, .bigFiles, .staleScreenshots, .iosBackups,
+        .bigFiles, .staleScreenshots, .iosBackups,
     ]
 
     /// Ranked list of suggest-only items — surfaces large items from
@@ -88,7 +88,7 @@ public enum Recommendations {
         return switch category {
         case .xcodeDerivedData, .xcodeDeviceSupport, .simulatorCaches,
              .simulatorRuntimes, .userCaches, .homebrewCache, .devCaches, .aiAgents,
-             .jsBuildDirs, .containerCaches, .mailDownloads:
+             .jsBuildDirs, .containerCaches, .mailDownloads, .appSupport:
             .safeCache
         case .oldInstallers: .staleInstaller
         case .iosBackups: .staleBackup
@@ -96,7 +96,6 @@ public enum Recommendations {
         case .podDirs, .swiftBuildDirs, .gradleBuildDirs, .pythonCaches,
              .mavenTarget, .phpVendor, .flutterDartTool: .staleBuildDir
         case .xcodeArchives, .unityLibrary, .androidSystemImages: nil   // never auto-recommended, only listed
-        case .appSupport: nil   // real app state — never recommended, only listed
         case .staleScreenshots: .bigFile   // user files — ranked like large files, not as caches
         case .bigFiles: .bigFile
         case .simulatorDevices, .systemLogs, .groupContainers: nil  // suggest-only, never auto-recommended

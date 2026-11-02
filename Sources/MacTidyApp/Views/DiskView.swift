@@ -8,6 +8,9 @@ struct DirectoryExplorerView: View {
     @State private var isScanning = false
     @State private var scanTask: Task<Void, Never>?
     @State private var sheetPlan: DeletionPlan?
+    /// Why the safety policy would refuse an item, by item: shown as a lock
+    /// instead of offering a Trash that can only fail.
+    @State private var refusals: [UUID: String] = [:]
     @State private var renderAsMap = false
     /// AI explanation for the currently-selected row, shown in a sheet.
     @State private var aiExplanation: ItemExplanation?
@@ -116,7 +119,20 @@ struct DirectoryExplorerView: View {
             HStack(spacing: Theme.Spacing.md) {
                 Image(nsImage: FileIcon.image(for: item.url))
                     .resizable().frame(width: 22, height: 22)
-                Text(item.url.lastPathComponent).font(Theme.Font.bodyStrong).lineLimit(1)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: Theme.Spacing.sm) {
+                        Text(item.url.lastPathComponent).font(Theme.Font.bodyStrong).lineLimit(1)
+                        if let refusal = refusals[item.id] {
+                            Image(systemName: "lock.fill")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.tertiary)
+                                .help(refusal)
+                        }
+                    }
+                    if let note = note(for: item) {
+                        Text(note).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                }
                 Spacer(minLength: Theme.Spacing.lg)
                 Meter(fraction: fraction(of: item)).frame(width: 140)
                 Text(item.sizeBytes.formattedBytes)
@@ -143,10 +159,46 @@ struct DirectoryExplorerView: View {
                     Label("Review with AI", systemImage: "sparkles")
                 }
                 .disabled(state.advisor == nil)
-                Button("Trash…", role: .destructive) {
-                    sheetPlan = DeletionPlan(items: [item])
+                if let refusal = refusals[item.id] {
+                    Button("Protected: \(refusal)") {}.disabled(true)
+                } else {
+                    Button("Trash…", role: .destructive) {
+                        sheetPlan = DeletionPlan(items: [item])
+                    }
                 }
             }
+    }
+
+    /// What MacTidy knows about the item: the protection, or for folders in
+    /// Application Support, what they are.
+    private func note(for item: ScanItem) -> String? {
+        if let refusal = refusals[item.id] { return refusal }
+        guard let insight = AppSupportRules.insight(for: item.url) else { return nil }
+        let verdict = switch insight.risk {
+        case .safe: "safe to trash"
+        case .caution: "check before trashing"
+        case .danger: "can't be rebuilt"
+        }
+        return "\(insight.label) · \(verdict)"
+    }
+
+    /// The policy's verdict for each item, in plain words, for the ones it
+    /// would refuse.
+    nonisolated private static func refusals(for items: [ScanItem], extraRoots: [URL]) -> [UUID: String] {
+        let policy = SafePathPolicy(extraAllowedRoots: extraRoots)
+        var refusals: [UUID: String] = [:]
+        for item in items {
+            guard case .failure(let violation) = policy.classify(item.url) else { continue }
+            refusals[item.id] = switch violation {
+            case .protectedAppData: "macOS, iCloud or a browser login keeps data here"
+            case .credentialPath: "holds keys, logins or app settings"
+            case .deniedSystemPath: "part of macOS"
+            case .criticalDirectory: "a system folder; trash what's inside instead"
+            case .protectedUserFolder: "your personal files"
+            case .outsideAllowedRoots: "outside the folders MacTidy cleans"
+            }
+        }
+        return refusals
     }
 
     /// Asks the configured advisor to explain a disk-browser item and shows
@@ -186,10 +238,13 @@ struct DirectoryExplorerView: View {
         scanTask?.cancel()
         isScanning = true
         let target = root
+        let extraRoots = state.extraAllowedRoots
         scanTask = Task {
             let result = await DiskScanner.topLevelScan(root: target)
+            let verdicts = await Task.detached { Self.refusals(for: result, extraRoots: extraRoots) }.value
             if !Task.isCancelled {
                 items = result
+                refusals = verdicts
                 isScanning = false
             }
         }

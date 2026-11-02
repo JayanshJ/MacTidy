@@ -17,10 +17,12 @@ public struct SafePathPolicy: Sendable {
         case protectedUserFolder(String)
         case outsideAllowedRoots(String)
         case credentialPath(String)
+        case protectedAppData(String)
 
         public var description: String {
             switch self {
             case .credentialPath(let p): "Refusing to touch credentials or settings, or a folder holding them: \(p)"
+            case .protectedAppData(let p): "Refusing to touch data macOS, iCloud or a browser login depends on: \(p)"
             case .deniedSystemPath(let p): "Refusing to touch system path: \(p)"
             case .criticalDirectory(let p): "Refusing to delete critical directory itself: \(p)"
             case .protectedUserFolder(let p): "Refusing to touch protected personal folder: \(p)"
@@ -42,10 +44,13 @@ public struct SafePathPolicy: Sendable {
         self.home = home
         self.extraAllowedRoots = extraAllowedRoots
         self.secrets = Self.credentialPaths.map { Self.canonical(home.appending(path: $0)) }
+        self.protectedData = Self.protectedAppData.map { Self.canonical(home.appending(path: $0)) }
     }
 
     /// `credentialPaths` resolved against `home`, symlinks followed, once.
     private let secrets: [String]
+    /// `protectedAppData` resolved the same way.
+    private let protectedData: [String]
 
     /// Validates every URL and throws on the first violation. Use this when
     /// you want strict all-or-nothing semantics (e.g. a single atomic
@@ -104,6 +109,20 @@ public struct SafePathPolicy: Sendable {
             return .failure(.credentialPath(path))
         }
 
+        // 2c. System, iCloud and browser-login data inside Application
+        //     Support. Same rule as credentials: the folder, its contents and
+        //     every folder holding it. Profile secrets are refused by name
+        //     wherever an app keeps them, so drilling into a browser's folder
+        //     can't reach cookies or saved passwords.
+        for protected in protectedData
+        where Self.path(path, isSameOrUnder: protected) || protected.hasPrefix(path + "/") {
+            return .failure(.protectedAppData(path))
+        }
+        if path.contains("/Library/Application Support/"),
+           Self.profileSecretNames.contains((path as NSString).lastPathComponent) {
+            return .failure(.protectedAppData(path))
+        }
+
         // 3. User-picked roots unlock personal folders (duplicate finder),
         //    checked after the denylist so they can't unlock system paths.
         if extras.contains(where: { Self.path(path, isSameOrUnder: $0) }) {
@@ -136,6 +155,24 @@ public struct SafePathPolicy: Sendable {
         ".codex/auth.json", ".codex/config.toml",
         ".gemini/oauth_creds.json", ".gemini/settings.json",
         ".cache/huggingface/token",
+    ]
+
+    /// Folders in Application Support that macOS and iCloud keep their own
+    /// state in (privacy permissions, iCloud Drive, contacts, call history,
+    /// Siri knowledge, recent items), plus MacTidy's undo and cleanup logs.
+    static let protectedAppData = [
+        "com.apple.TCC", "CloudDocs", "FileProvider", "iCloud", "AddressBook",
+        "CallHistoryDB", "CallHistoryTransactions", "Knowledge",
+        "com.apple.sharedfilelist", "MacTidy",
+    ].map { "Library/Application Support/" + $0 }
+
+    /// Files in a Chromium or Firefox profile that hold logins, cookies and
+    /// browsing history. Uninstalling an app still trashes its whole folder;
+    /// these names only stop a single profile file being picked on its own.
+    static let profileSecretNames: Set<String> = [
+        "Cookies", "Cookies-journal", "Login Data", "Login Data-journal",
+        "Login Data For Account", "Web Data", "History", "Bookmarks", "Local State",
+        "key4.db", "logins.json", "cookies.sqlite", "places.sqlite",
     ]
 
     /// Symlink-resolved, standardized absolute path. Resolving first means a

@@ -188,7 +188,13 @@ extension CleanSource {
 extension ScanItem {
     /// Risk of the registry source this item came from; items from bespoke
     /// scanners are judged at category level and report `.safe`.
-    public var risk: Risk { CleanSource.source(for: self)?.risk ?? .safe }
+    public var risk: Risk {
+        // Application Support items carry their own knowledge; anything there
+        // MacTidy doesn't recognise (a whole app folder from an older saved
+        // scan) is app data, never safe by default.
+        if category == .appSupport { return AppSupportRules.insight(for: self)?.risk ?? .caution }
+        return CleanSource.source(for: self)?.risk ?? .safe
+    }
 
     /// Whether bulk "select safe" and scheduled runs may include this item:
     /// its category must be preselectable *and* the item itself safe.

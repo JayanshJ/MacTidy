@@ -96,23 +96,6 @@ struct CategoryScannerTests {
         #expect(!Category.simulatorRuntimes.isPreselectable)
     }
 
-    @Test func appSupportListsBiggestFoldersFirst() async throws {
-        let fm = FileManager.default
-        let home = try makeFakeHome()
-        defer { try? fm.removeItem(at: home) }
-
-        let support = home.appending(path: "Library/Application Support")
-        try fm.createDirectory(at: support.appending(path: "Slack"), withIntermediateDirectories: true)
-        try Data(count: 80_000).write(to: support.appending(path: "Slack/cache.db"))
-        try fm.createDirectory(at: support.appending(path: "TinyApp"), withIntermediateDirectories: true)
-        try Data(count: 100).write(to: support.appending(path: "TinyApp/config.json"))
-
-        let result = await CategoryScanner(home: home).scan(.appSupport)
-        #expect(result.items.count == 2)
-        #expect(result.items.first?.url.lastPathComponent == "Slack")
-        #expect(!Category.appSupport.isPreselectable)
-    }
-
     @Test func iosBackupsReadsDeviceNameAndDate() async throws {
         let fm = FileManager.default
         let home = try makeFakeHome()

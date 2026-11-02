@@ -51,6 +51,7 @@ enum SnapshotHarness {
                 state.fdaStatus = granted
                 state.flowPhase = .dashboard
                 state.categoryResults = results
+                state.appSupportBytes = 23_400_000_000
                 state.isScanningCategories = false
                 state.section = section
                 state.drilledCategory = drill
@@ -81,6 +82,7 @@ enum SnapshotHarness {
             ("cleanup", main(.cleanup)),
             ("cleanup-detail", main(.cleanup, drill: .xcodeDerivedData)),
             ("cleanup-node", main(.cleanup, drill: .nodeModules)),
+            ("cleanup-appsupport", main(.cleanup, drill: .appSupport)),
             ("project-detail", main(.projects, project: "/Users/demo/Developer/storefront")),
         ]
         for item in SidebarItem.allCases where item != .overview && item != .cleanup {
@@ -202,6 +204,31 @@ private enum Fixtures {
             items(.iosBackups, [("Library/Application Support/MobileSync/Backup/00008110", 18.2, "iPhone")]),
             items(.bigFiles, [("Downloads/screen-recording.mov", 4.2, nil), ("Downloads/dataset.parquet", 2.1, nil)]),
             items(.crashReports, [("Library/Logs/DiagnosticReports/Xcode-2026-10-01.ips", 0.02, nil)]),
+            items(.appSupport, [
+                ("Library/Application Support/Claude/vm_bundles", 10.7, "Claude"),
+                ("Library/Application Support/Claude/Cache", 0.35, "Claude"),
+                ("Library/Application Support/Claude/claude-code/2.1.308", 0.27, "Claude"),
+                ("Library/Application Support/Claude/Code Cache", 0.2, "Claude"),
+                ("Library/Application Support/com.apple.wallpaper/aerials", 1.9, "Wallpapers"),
+                ("Library/Application Support/Google/Chrome/Default/Service Worker/CacheStorage", 1.4, "Google Chrome"),
+                ("Library/Application Support/Google/Chrome/Default/Code Cache", 0.3, "Google Chrome"),
+                ("Library/Application Support/Code/CachedData", 0.9, "VS Code"),
+                ("Library/Application Support/Code/CachedExtensionVSIXs", 0.4, "VS Code"),
+                ("Library/Application Support/Slack/Service Worker/CacheStorage", 0.8, "Slack")]).adding([
+                ScanItem(url: URL(fileURLWithPath: home + "/Library/Application Support/com.example.oldeditor"),
+                         sizeBytes: 2_300_000_000, isDirectory: true, category: .appSupport,
+                         detail: AppSupportRules.removedAppsGroup,
+                         lastModified: Date().addingTimeInterval(-200 * 86_400), finding: "leftover"),
+                ScanItem(url: URL(fileURLWithPath: home + "/Library/Application Support/JetBrains/Toolbox/apps/IDEA/2024.3.1"),
+                         sizeBytes: 1_600_000_000, isDirectory: true, category: .appSupport,
+                         detail: "JetBrains", lastModified: Date().addingTimeInterval(-120 * 86_400),
+                         finding: "olderVersion")]),
         ]
+    }
+}
+
+private extension CategoryResult {
+    func adding(_ more: [ScanItem]) -> CategoryResult {
+        CategoryResult(category: category, items: items + more)
     }
 }

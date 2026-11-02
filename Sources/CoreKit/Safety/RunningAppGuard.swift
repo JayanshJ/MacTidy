@@ -8,8 +8,20 @@ public struct RunningAppConflict: Sendable, Equatable, Identifiable {
     public var id: String { bundleID }
 }
 
+/// An open app as NSWorkspace reports it, as plain values so the guard stays
+/// testable.
+public struct RunningApp: Sendable, Hashable {
+    public let bundleID: String
+    public let name: String
+
+    public init(bundleID: String, name: String) {
+        self.bundleID = bundleID
+        self.name = name
+    }
+}
+
 /// Pure: which open apps use the folders in a cleanup. The caller passes the
-/// running bundle IDs (from NSWorkspace) so this stays testable.
+/// running apps (from NSWorkspace) so this stays testable.
 public enum RunningAppGuard {
     struct Rule {
         let bundleID: String
@@ -41,5 +53,34 @@ public enum RunningAppGuard {
             let hit = paths.contains { p in prefixes.contains { p == $0 || p.hasPrefix($0 + "/") } }
             return hit ? RunningAppConflict(bundleID: rule.bundleID, appName: rule.name, reason: rule.reason) : nil
         }
+    }
+
+    /// The fixed rules above, plus the owner of anything inside
+    /// ~/Library/Application Support: an app writes into its own caches while
+    /// it runs, so trashing them then frees nothing and can upset the app.
+    /// The owner is matched by known bundle ID, then by bundle ID or name
+    /// equal to the folder.
+    public static func conflicts(for urls: [URL],
+                                 running: [RunningApp],
+                                 home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [RunningAppConflict] {
+        var found = conflicts(for: urls, runningBundleIDs: Set(running.map(\.bundleID)), home: home)
+        var seen = Set(found.map(\.bundleID))
+        var checkedOwners = Set<String>()
+        for url in urls {
+            guard let owner = AppSupportRules.ownerIdentity(of: url),
+                  checkedOwners.insert(owner.key).inserted else { continue }
+            let match = running.first { app in
+                owner.bundleIDs.contains(app.bundleID)
+                    || app.bundleID.caseInsensitiveCompare(owner.key) == .orderedSame
+                    || (!app.name.isEmpty && (app.name.caseInsensitiveCompare(owner.name) == .orderedSame
+                        || app.name.caseInsensitiveCompare(owner.key) == .orderedSame))
+            }
+            guard let app = match, seen.insert(app.bundleID).inserted else { continue }
+            let name = app.name.isEmpty ? owner.name : app.name
+            found.append(RunningAppConflict(
+                bundleID: app.bundleID, appName: name,
+                reason: "\(name) keeps files in its folder open while it runs. Quit it first so it rebuilds them cleanly."))
+        }
+        return found
     }
 }

@@ -45,10 +45,16 @@ struct CleanupView: View {
 
     private var categoryList: some View {
         let nonEmpty = state.categoryResults.filter { $0.totalBytes > 0 }.sorted { $0.totalBytes > $1.totalBytes }
-        let safe = nonEmpty.filter(\.category.isPreselectable)
-        let review = nonEmpty.filter { !$0.category.isPreselectable }
         let safeItems = state.safeItems
-        let maxBytes = nonEmpty.first?.totalBytes ?? 1
+        // "Safe to remove" lists only the safe share of a category; one whose
+        // items are all Caution (say, just Claude's VM) is worth a look instead.
+        let safeBytes = Dictionary(grouping: safeItems) { $0.category }
+            .mapValues { $0.reduce(0) { $0 + $1.sizeBytes } }
+        let safe = nonEmpty.filter { $0.category.isPreselectable && (safeBytes[$0.category] ?? 0) > 0 }
+            .sorted { (safeBytes[$0.category] ?? 0) > (safeBytes[$1.category] ?? 0) }
+        let safeIDs = Set(safe.map(\.category))
+        let review = nonEmpty.filter { !safeIDs.contains($0.category) }
+        let maxBytes = max(safe.first.flatMap { safeBytes[$0.category] } ?? 0, review.first?.totalBytes ?? 0, 1)
 
         return Page("Cleanup",
                     subtitle: "\(state.totalReclaimable.formattedBytes) across \(nonEmpty.count) categories. Everything goes to the Trash, so it can be put back.") {
@@ -68,24 +74,29 @@ struct CleanupView: View {
                 if state.trashBytes >= TrashNudgeCard.threshold { TrashNudgeCard() }
                 if !safe.isEmpty {
                     section("Safe to remove", footer: "Caches and build output that rebuild on their own.",
-                            results: safe, maxBytes: maxBytes)
+                            results: safe, maxBytes: maxBytes, safeBytes: safeBytes)
                 }
                 if !review.isEmpty {
                     section("Worth a look", footer: "Personal files, app data and things that are slow to rebuild. Never selected for you.",
-                            results: review, maxBytes: maxBytes)
+                            results: review, maxBytes: maxBytes, safeBytes: nil)
                 }
             }
         }
     }
 
-    private func section(_ title: String, footer: String, results: [CategoryResult], maxBytes: Int64) -> some View {
+    /// `safeBytes` is set for the safe section: rows then show only the safe
+    /// share, the rest as "more to review".
+    private func section(_ title: String, footer: String, results: [CategoryResult], maxBytes: Int64,
+                         safeBytes: [CoreKit.Category?: Int64]?) -> some View {
         SurfaceSection(title, footer: footer) {
             ForEach(Array(results.enumerated()), id: \.element.id) { index, result in
                 if index > 0 { RowDivider(inset: 48) }
                 Button {
                     withAnimation(Theme.ease) { state.drilledCategory = result.category }
                 } label: {
-                    CategoryRow(result: result, maxBytes: maxBytes)
+                    CategoryRow(result: result, maxBytes: maxBytes,
+                                safeBytes: safeBytes.map { $0[result.category] ?? 0 },
+                                needsReview: safeBytes == nil)
                 }
                 .buttonStyle(RowButtonStyle())
             }
@@ -185,8 +196,8 @@ private struct CategoryDetail: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: Theme.Spacing.xl) {
-                        ForEach(groups(items, byProject: category == .nodeModules)) { group in
-                            groupSection(group, titled: category == .nodeModules)
+                        ForEach(groups(items, byProject: isGrouped)) { group in
+                            groupSection(group, titled: isGrouped)
                         }
                     }
                     .padding(.horizontal, Theme.gutter)
@@ -201,14 +212,18 @@ private struct CategoryDetail: View {
         .background(Theme.canvas)
     }
 
-    /// node_modules grouped by project, with per-project select-all.
+    /// node_modules by project and Application Support by app, each group
+    /// with its own select-all.
+    private var isGrouped: Bool { category == .nodeModules || category == .appSupport }
+
+    /// One group of rows, with per-group select-all.
     private struct ItemGroup: Identifiable {
         let id: String
         let items: [ScanItem]
         var bytes: Int64 { items.reduce(0) { $0 + $1.sizeBytes } }
     }
 
-    /// One group for a plain category; one per project for node_modules.
+    /// One group for a plain category; one per project or app otherwise.
     private func groups(_ items: [ScanItem], byProject: Bool) -> [ItemGroup] {
         guard byProject else { return [ItemGroup(id: "", items: items)] }
         return Dictionary(grouping: items) { $0.detail ?? "Other" }

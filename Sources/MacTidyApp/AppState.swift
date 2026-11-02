@@ -142,6 +142,23 @@ final class AppState {
     /// Recent scan snapshots, newest first — drives the reclaimable trend.
     var scanHistory: [ScanSnapshot] = []
 
+    /// Total size of ~/Library/Application Support, for the Overview's
+    /// account of it. Measured after each scan; nil until then.
+    var appSupportBytes: Int64?
+
+    func refreshAppSupportBytes() {
+        guard !SnapshotHarness.isActive else { return }
+        let folder = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Application Support")
+        Task.detached(priority: .utility) { [weak self] in
+            let bytes = DiskScanner.allocatedSize(of: folder)
+            await self?.publishAppSupportBytes(bytes)
+        }
+    }
+
+    private func publishAppSupportBytes(_ bytes: Int64) {
+        appSupportBytes = bytes
+    }
+
     // MARK: - Guided flow state
 
     /// The current phase of the guided cleanup wizard.
@@ -234,7 +251,10 @@ final class AppState {
             self.safeItems = Self.safeItems(in: categoryResults) // didSet doesn't run in init
             self.scanStatus = "Last scan restored from previous session"
         }
-        if !SnapshotHarness.isActive { refreshTrashBytes() }
+        if !SnapshotHarness.isActive {
+            refreshTrashBytes()
+            if !categoryResults.isEmpty { refreshAppSupportBytes() }
+        }
     }
 
     func refreshFDA() {
@@ -278,6 +298,7 @@ final class AppState {
                 lastScanDate = Date.now
                 UserDefaults.standard.set(Date.now.timeIntervalSince1970, forKey: "MacTidy.lastScanDate")
                 persistLastScan(results)
+                refreshAppSupportBytes()
             }
             // History is a JSON read-modify-write; keep it off the main thread.
             let store = scanHistoryStore
@@ -672,7 +693,7 @@ final class AppState {
             scan: { categories in
                 // Scan the requested categories in parallel with a shared dev-roots cache.
                 let devRootsCache = await scanner.precomputeDevRootsCache()
-                return await withTaskGroup(of: CategoryResult.self) { group in
+                let scanned = await withTaskGroup(of: CategoryResult.self) { group in
                     for category in CoreKit.Category.allCases where categories.contains(category) {
                         if Task.isCancelled { break }
                         let cacheRef = devRootsCache
@@ -684,6 +705,15 @@ final class AppState {
                     var results: [CategoryResult] = []
                     for await result in group { results.append(result) }
                     return results
+                }
+                // Unattended runs skip caches an open app is writing to; the
+                // confirmation sheet asks instead, but nobody sees this one.
+                let running = await MainActor.run { RunningApp.current() }
+                return scanned.map { result in
+                    guard result.category == .appSupport else { return result }
+                    return CategoryResult(category: result.category, items: result.items.filter {
+                        RunningAppGuard.conflicts(for: [$0.url], running: running).isEmpty
+                    })
                 }
             },
             executor: executor

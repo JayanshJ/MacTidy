@@ -52,7 +52,7 @@ struct RecommendationsTests {
         #expect(ranked.first?.item == cache)
     }
 
-    @Test func appSupportIsNeverRecommended() {
+    @Test func wholeAppSupportFolderIsNeverRecommended() {
         let item = ScanItem(url: URL(fileURLWithPath: "/tmp/app"), sizeBytes: 9_000_000_000,
                             isDirectory: true, category: .appSupport)
         let ranked = Recommendations.ranked(from: [

@@ -40,8 +40,7 @@ struct DeletionConfirmationSheet: View {
             // Re-check while the sheet is open so quitting the app clears the warning.
             let urls = plan.candidates.map(\.url)
             while !Task.isCancelled, outcome == nil {
-                let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
-                let found = RunningAppGuard.conflicts(for: urls, runningBundleIDs: running)
+                let found = RunningAppGuard.conflicts(for: urls, running: RunningApp.current())
                 if found != conflicts { conflicts = found }
                 try? await Task.sleep(for: .seconds(1))
             }

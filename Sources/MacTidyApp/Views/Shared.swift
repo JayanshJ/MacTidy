@@ -59,6 +59,9 @@ struct ScanItemRow: View {
     }
 
     var body: some View {
+        // Application Support items say what they are; their folder names
+        // ("Cache", "2.1.308") mean little on their own.
+        let insight = item.category == .appSupport ? AppSupportRules.insight(for: item) : nil
         HStack(spacing: Theme.Spacing.md) {
             Toggle("", isOn: Binding(
                 get: { selection.contains(item.id) },
@@ -75,22 +78,28 @@ struct ScanItemRow: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: Theme.Spacing.sm) {
-                    Text(item.url.lastPathComponent)
+                    Text(insight?.label ?? item.url.lastPathComponent)
                         .font(Theme.Font.bodyStrong)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     if item.risk != .safe {
                         Badge(text: item.risk.label,
                               tint: item.risk == .danger ? Theme.Status.blocked : Theme.Status.caution)
-                            .help("Never preselected. \(item.detail ?? "")")
+                            .help("Never preselected. \(insight == nil ? item.detail ?? "" : "")")
                     }
                 }
-                if let subtitle {
+                if let subtitle = subtitle(insight) {
                     Text(subtitle)
                         .font(Theme.Font.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                }
+                if let insight {
+                    Text(insight.explanation)
+                        .font(Theme.Font.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
                 }
                 if let displayed = displayedVerdict {
                     HStack(spacing: 4) {
@@ -142,7 +151,7 @@ struct ScanItemRow: View {
         ) {
             Button("Got it", role: .cancel) {}
         } message: {
-            Text(item.category?.explanation ?? "")
+            Text(insight?.explanation ?? item.category?.explanation ?? "")
         }
     }
 
@@ -161,9 +170,13 @@ struct ScanItemRow: View {
         }
     }
 
-    private var subtitle: String? {
+    private func subtitle(_ insight: AppSupportInsight?) -> String? {
         var parts: [String] = []
-        if let detail = item.detail { parts.append("in \(detail)") }
+        if insight != nil, let path = AppSupportRules.displayPath(of: item.url) {
+            parts.append(path)
+        } else if let detail = item.detail {
+            parts.append("in \(detail)")
+        }
         if let modified = item.lastModified {
             parts.append("modified \(modified.formatted(date: .abbreviated, time: .omitted))")
         }

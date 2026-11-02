@@ -32,15 +32,20 @@ public struct CategoryScanner: Sendable {
     public var screenshotMinAgeDays: Int
     /// Paths the user asked never to see again; applied to every result.
     public var ignore: IgnoreList
+    /// The apps on this Mac, for telling an app's folder from a leftover.
+    /// Nil reads them during the scan.
+    public var installedApps: InstalledApps?
 
     public init(
         home: URL = FileManager.default.homeDirectoryForCurrentUser,
         devRoots: [URL] = CategoryScanner.defaultDevRoots,
         installerMinAgeDays: Int = 30,
         screenshotMinAgeDays: Int = 30,
-        ignore: IgnoreList = .load()
+        ignore: IgnoreList = .load(),
+        installedApps: InstalledApps? = nil
     ) {
         self.ignore = ignore
+        self.installedApps = installedApps
         self.home = home
         self.devRoots = devRoots
         self.installerMinAgeDays = installerMinAgeDays
@@ -161,7 +166,7 @@ public struct CategoryScanner: Sendable {
         case .devCaches, .aiAgents:
             items = await registryItems(category)
         case .appSupport:
-            items = await appSupportHoarders()
+            items = await appSupportItems()
         case .bigFiles:
             items = await bigFiles()
         case .simulatorDevices:

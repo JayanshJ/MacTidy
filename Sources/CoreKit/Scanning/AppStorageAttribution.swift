@@ -120,11 +120,16 @@ public enum AppStorageAttribution {
 
 /// Immutable, Sendable snapshot of the bundle-id/name → app index, captured
 /// safely into the concurrent bucket-scan tasks.
-private struct MatchSnapshot: Sendable {
+struct MatchSnapshot: Sendable {
     let byBundleID: [String: InstalledApp]
     let byName: [String: InstalledApp]
 
     func match(name: String) -> InstalledApp? {
+        // Preferences are `<id>.plist`, saved state `<id>.savedState`.
+        var name = name
+        for suffix in [".plist", ".savedState"] where name.hasSuffix(suffix) {
+            name = String(name.dropLast(suffix.count))
+        }
         if let app = byBundleID[name] { return app }
         if let app = byName[name] { return app }
         // Group containers: "<team-id>.<bundle-id>" — anchored suffix match.

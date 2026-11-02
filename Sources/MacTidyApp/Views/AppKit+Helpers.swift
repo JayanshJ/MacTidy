@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import CoreKit
 
 /// Reads the marketing version + build number from the main bundle's
 /// Info.plist so the welcome screen and Settings show a consistent version.
@@ -22,5 +23,14 @@ extension View {
             ?? bundle.url(forResource: "AppIcon", withExtension: "png")
         guard let url else { return nil }
         return NSImage(contentsOf: url)
+    }
+}
+
+extension RunningApp {
+    /// Every regular app open right now, for `RunningAppGuard`.
+    static func current() -> [RunningApp] {
+        NSWorkspace.shared.runningApplications.compactMap { app in
+            app.bundleIdentifier.map { RunningApp(bundleID: $0, name: app.localizedName ?? "") }
+        }
     }
 }

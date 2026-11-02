@@ -59,10 +59,22 @@ enum AdvisorPrompts {
                 parts.append("Category: \(cat.displayName) — \(cat.explanation)")
             }
         }
+        if let known = knownAs(item, sendFilePaths: sendFilePaths) {
+            parts.append("MacTidy knows it as: \(known)")
+        }
         if let modified = item.lastModified {
             parts.append("Last modified: \(ISO8601DateFormatter().string(from: modified))")
         }
         return parts.joined(separator: "\n")
+    }
+
+    /// What MacTidy's own rules say about an Application Support item, so
+    /// the model has more than a size to go on. The kind and tier name no
+    /// app; the owner and full explanation go only with file paths allowed.
+    static func knownAs(_ item: ScanItem, sendFilePaths: Bool) -> String? {
+        guard item.category == .appSupport, let insight = AppSupportRules.insight(for: item) else { return nil }
+        let kind = "\(insight.label) (MacTidy tier: \(insight.risk.label))"
+        return sendFilePaths ? "\(kind), in \(insight.owner)'s folder. \(insight.explanation)" : kind
     }
 
     static let explainBatchSystem = """
@@ -96,6 +108,9 @@ enum AdvisorPrompts {
                 if let detail = item.detail { entry["context"] = detail }
             } else if let cat = item.category {
                 entry["category"] = cat.displayName
+            }
+            if let known = knownAs(item, sendFilePaths: sendFilePaths) {
+                entry["knownAs"] = known
             }
             if let modified = item.lastModified {
                 entry["lastModified"] = ISO8601DateFormatter().string(from: modified)

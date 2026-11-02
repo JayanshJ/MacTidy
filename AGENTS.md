@@ -103,6 +103,36 @@ Hugging Face token…). It also denies every **ancestor** of a secret, so
 symlinks so dotfile-managed secrets are protected at their target. Checked
 before user-picked roots; nothing overrides it.
 
+### Application Support
+
+`AppSupportRules` (Model/) is what MacTidy knows about
+`~/Library/Application Support`, and `AppSupportScanner` (Scanning/) applies it:
+Chromium/Electron caches (`Cache`, `Code Cache`, `GPUCache`, Dawn/shader caches,
+`Service Worker/CacheStorage`) found inside any app's folder, but only beside a
+Chromium marker (`Local Storage`, `IndexedDB`, `Local State`…), plus a named
+table (Claude's Cowork VM and superseded bundled versions, aerial wallpapers,
+VS Code-family `CachedData`/`CachedExtensionVSIXs`/`logs`, Steam, Adobe, Zoom,
+Spotify). Whole app folders are never listed. Classification is by path, so
+`ScanItem.risk` for `.appSupport` comes from `AppSupportRules.insight(for:)`
+and anything unrecognised is Caution. Service-worker caches of browsers and
+Notion are Caution; the rest of those rules are Safe unless they re-download.
+`SafePathPolicy.protectedAppData` refuses TCC, iCloud, contacts, call history,
+Siri knowledge, recent items and MacTidy's own folder (with ancestors), and
+`profileSecretNames` refuses browser login/cookie/history files by name.
+`RunningAppGuard.conflicts(for:running:)` maps any App Support path to its
+owner app; scheduled runs skip App Support items of open apps.
+
+What a path can't show travels in `ScanItem.finding` (`AppSupportRules.Finding`):
+`leftover` (a bundle-ID-named folder no installed app owns, untouched 30 days;
+`com.apple.*` never; `InstalledApps.owns` also counts helper/shared folders and
+same-vendor apps, and asks Launch Services), `olderVersion` (dotted-version
+siblings, all but the newest; named version rules win), `virtualDisk` (machine
+bundles and ≥1 GB disk images, Danger). Read through
+`AppSupportRules.insight(for: ScanItem)`. The Overview's Application Support
+card splits the folder's total (`AppState.appSupportBytes`) into caches,
+worth-a-look and apps' own data; Disk Map shows these insights and locks rows
+the policy would refuse.
+
 ### Ignore list, growth, running-app guard
 
 `IgnoreList` (Model/) is read by `CategoryScanner`'s default init and by
