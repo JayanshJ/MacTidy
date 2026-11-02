@@ -56,7 +56,18 @@ struct DashboardUninstaller: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Theme.canvas)
-        .task { await state.loadAppsIfNeeded() }
+        .task {
+            await state.loadAppsIfNeeded()
+            // The list leaves out small apps, but a small app can still keep
+            // a lot of data.
+            if let focus = state.uninstallerFocus {
+                if !state.flowApps.contains(where: { $0.app.id == focus.id }) {
+                    state.flowApps.append((focus, []))
+                }
+                selectedAppID = focus.id
+                state.uninstallerFocus = nil
+            }
+        }
         .onChange(of: selectedAppID) { Task { await loadLeftovers() } }
         .sheet(item: $sheetPlan) { plan in
             DeletionConfirmationSheet(title: "Uninstall \(selectedApp?.app.name ?? "app")?",

@@ -74,6 +74,13 @@ public protocol CleanAdvisor: Sendable {
         config: AIConfig
     ) async throws -> ItemExplanation
 
+    /// Say why a folder MacTidy has no rule for is big, from its structural
+    /// profile. Names are sent only with `AIConfig.sendFilePaths` on.
+    func explainFolder(
+        _ profile: FolderProfile,
+        config: AIConfig
+    ) async throws -> ItemExplanation
+
     /// Explain a whole batch of items in one call, returning a verdict per
     /// item keyed by its `id`. Providers that support a single batch prompt
     /// override this; the default loops `explain` so every provider works

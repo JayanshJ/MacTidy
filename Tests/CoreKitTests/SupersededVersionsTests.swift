@@ -594,9 +594,11 @@ struct SupersededVersionsTests {
         ".hermes/config.yaml", ".hermes/pairing/x", ".hermes/backups/config/a",
         ".agent-reach/state.json", ".agent-reach/config.yaml", ".local/share/opencode/auth.json",
         ".local/share/atuin/key", ".local/share/keyrings/login.keyring",
+        ".sbt/.credentials", ".fastlane/spaceship/me@example.com/cookie", ".pub-cache/credentials.json",
         // Ancestors: the folder can't be trashed with the secret inside.
         ".gem", ".nuget", ".ivy2", ".cabal", ".stack", ".hex", ".lmstudio", ".hermes",
         ".agent-reach", ".local", ".local/share", ".local/share/opencode",
+        ".sbt", ".fastlane", ".pub-cache",
     ])
     func newCredentialsAndTheirFoldersAreDenied(_ relative: String) throws {
         let home = try makeHome()

@@ -133,6 +133,59 @@ card splits the folder's total (`AppState.appSupportBytes`) into caches,
 worth-a-look and apps' own data; Disk Map shows these insights and locks rows
 the policy would refuse.
 
+### Superseded versions
+
+`CleanSource.Locate.superseded(Tool)` lists installed versions a tool doesn't
+use, found by `SupersededVersions` (Scanning/) and always Caution. Current is
+read from the tool's own files: nvm `alias/default`, rbenv `version`, asdf
+`~/.tool-versions` (per tool), Toolbox `.history.json`, the `~/.local/bin/claude`
+symlink, Hermes `tools/facts.json`. If that can't be read, the tool lists nothing
+rather than guessing. Java lists only an older build of the same vendor and major;
+Android keeps the newest. `VersionPins` keeps what projects ask for (`.nvmrc`,
+`.ruby-version`, `.tool-versions`, literal Gradle versions, three levels below the
+dev roots). Registry scans skip whole sources that are symlinks (the walker follows
+a root symlink, so `~/.swiftpm/cache` would double-count), and `.children` sources
+drop children the policy refuses and hidden loose files. `~/.local/share` children
+are Caution unless named; a child holding a named source (`claude`, `uv`) never
+appears whole.
+
+### Handled elsewhere and growth nudges
+
+`HandledElsewhere` (Model/) is a table of big things another app or setting
+manages: Steam games, Docker's disk, VMs, messaging media, iCloud Drive.
+`HandledElsewhereScanner` looks only at those paths and skips privacy-protected
+trees without Full Disk Access. Items are `ScanItem`s with `category: nil` and
+`finding: <ruleID>`, held in `AppState.elsewhereItems` and persisted to
+`handled-elsewhere.json`. They are never in `categoryResults`, so no total, plan,
+recommendation or schedule can include them, and `ScanItemRow` shows them without
+a checkbox. Each byte has one owner: `AppSupportScanner` skips what a rule covers,
+the Group containers category drops containers a rule claims, and a test rejects
+overlap with `CleanSource` or `AppSupportRules.named`. `ScanHistory.growthReport`
+drives the Overview's Growing section (at least 1 GB and 10%, top three). It uses
+`ScanSnapshot.folders` (optional, per App Support owner and per rule); a rule key
+missing from the earlier scan means not measured, not zero.
+`BulkWalker.allocatedSizes(materializingDataless: false)` sizes without
+downloading iCloud files.
+
+### Understanding features
+
+`ContainerLeftovers` (Scanning/) judges Group Containers and app Containers by
+`InstalledApps.owns` plus the 30-day rule, reading names and first-level dates
+only. Group Containers of removed apps are flagged in place in the
+`groupContainers` category, so no byte is counted twice; a name only yields an
+owner when it is `TEAMID.`/`group.` plus a full bundle ID, and `family`/`shared`
+groups stay unclear. macOS's own (`isApple`, which also covers `is.workflow` and
+`tvappservices`) aren't listed, and `SafePathPolicy` refuses them and the two
+parent folders. App Containers are detected but not offered: moving one is refused
+without Full Disk Access and unverified with it. `UninstallSuggestions` is pure:
+90+ days unused, 500 MB+ in Application Support, not Apple, not running, a known
+last-used date and no recent change in the data folder; App Storage links it to
+the Uninstaller. `FolderProfile` gives a structural profile and local summary for
+folders with no rule; Disk Map's "Why Is This Big?" shows it and adds the AI's
+answer through `CleanAdvisor.explainFolder` when a provider is set up.
+`AdvisorPrompts.whyBigUser` sends no name or path with file paths off, and never
+the user name. `MACTIDY_REAL_HOME=1 make test` prints detection results for this Mac.
+
 ### Ignore list, growth, running-app guard
 
 `IgnoreList` (Model/) is read by `CategoryScanner`'s default init and by
@@ -142,7 +195,7 @@ skip ignored paths without extra wiring. `~/Library/Caches` is itself a
 pip, Playwright…) is listed once and dropped from User caches. When several
 sources match an item, the longest path wins (`CleanSource.source(for:)`).
 `ScanSnapshot.categories` (optional, older history still decodes) feeds
-`ScanHistory.growers`. `RunningAppGuard` is pure: the confirmation sheet passes
+`ScanHistory.growthReport`. `RunningAppGuard` is pure: the confirmation sheet passes
 running bundle IDs and shows a warning with a graceful Quit button.
 
 ### Projects

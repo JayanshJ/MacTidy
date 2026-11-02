@@ -24,12 +24,24 @@ public struct AppFootprint: Identifiable, Sendable, Hashable {
         public let bucket: Bucket
         public let sizeBytes: Int64
         public var id: String { url.path }
+
+        public init(url: URL, bucket: Bucket, sizeBytes: Int64) {
+            self.url = url
+            self.bucket = bucket
+            self.sizeBytes = sizeBytes
+        }
     }
 
     public let app: InstalledApp
     /// Matched paths (caches, containers, etc.). May be empty if the app
     /// stores nothing outside its bundle.
     public let paths: [Path]
+
+    public init(app: InstalledApp, paths: [Path]) {
+        self.app = app
+        self.paths = paths
+    }
+
     /// Total bytes across `paths` (does NOT include the app bundle — that's
     /// `app.sizeBytes`).
     public var libraryBytes: Int64 { paths.reduce(0) { $0 + $1.sizeBytes } }

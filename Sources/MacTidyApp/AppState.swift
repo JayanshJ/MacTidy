@@ -530,6 +530,13 @@ final class AppState {
     /// scan having run this launch (the last scan is restored from disk, apps
     /// are not).
     var isLoadingApps = false
+    /// The app the Uninstaller should open on, set when another page sends
+    /// the user there.
+    var uninstallerFocus: InstalledApp?
+    func openUninstaller(for app: InstalledApp) {
+        uninstallerFocus = app
+        section = .uninstaller
+    }
     func loadAppsIfNeeded() async {
         guard flowApps.isEmpty, !isLoadingApps, !SnapshotHarness.isActive else { return }
         isLoadingApps = true
@@ -830,6 +837,17 @@ final class AppState {
             return try await advisor.explain(item, config: aiConfig)
         } catch {
             return ItemExplanation(summary: "Couldn't get an explanation: \(error.localizedDescription)")
+        }
+    }
+
+    /// Asks the advisor why a folder is big. Nil with no provider set up: the
+    /// profile's own summary is the answer then, so there's nothing to report.
+    func explainFolder(_ profile: FolderProfile) async -> ItemExplanation? {
+        guard let advisor = advisor else { return nil }
+        do {
+            return try await advisor.explainFolder(profile, config: aiConfig)
+        } catch {
+            return ItemExplanation(summary: "Couldn't reach your AI provider: \(error.localizedDescription) What MacTidy found above still stands.")
         }
     }
 

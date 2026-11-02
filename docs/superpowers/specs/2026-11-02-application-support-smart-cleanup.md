@@ -1,6 +1,6 @@
 # Understanding Application Support — research and plan
 
-*2026-11-02. Phases 1 and 2 shipped in v1.16.0; Phases 3 and 4 follow.*
+*2026-11-02. Phases 1 and 2 shipped in v1.16.0. Phases 3 and 4 are built and not yet released.*
 
 ## The problem, measured
 

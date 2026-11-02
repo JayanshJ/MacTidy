@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import CoreKit
 
-@Suite("Registry gaps, ignore list, growers, running-app guard")
+@Suite("Registry gaps, ignore list, running-app guard")
 struct SmallWinsTests {
     func fakeHome() throws -> URL {
         let home = FileManager.default.temporaryDirectory
@@ -75,32 +75,6 @@ struct SmallWinsTests {
 
         let items = await CategoryScanner(home: home, devRoots: [], ignore: ignore).scan(.devCaches).items
         #expect(items.map(\.url.lastPathComponent) == ["registry"])
-    }
-
-    // MARK: Growers
-
-    @Test func growersCompareWithAScanAtLeastADayOlder() {
-        let now = Date()
-        func snap(_ hoursAgo: Double, _ cats: [CoreKit.Category: Double]) -> ScanSnapshot {
-            ScanSnapshot(date: now.addingTimeInterval(-hoursAgo * 3600), reclaimableBytes: 0, itemCount: 0,
-                         categories: Dictionary(uniqueKeysWithValues: cats.map { ($0.key.rawValue, Int64($0.value * 1e9)) }))
-        }
-        let history = [
-            snap(0, [.aiAgents: 6.0, .nodeModules: 4.0, .userCaches: 1.05]),
-            snap(2, [.aiAgents: 1.0, .nodeModules: 1.0, .userCaches: 1.0]),   // too recent to compare
-            snap(30, [.aiAgents: 4.8, .nodeModules: 4.5, .userCaches: 1.0]),
-        ]
-        let growth = ScanHistory.growers(in: history)
-        #expect(growth.map(\.category) == [.aiAgents])
-        #expect(growth.first?.delta == 1_200_000_000)
-        #expect(growth.first?.current == 6_000_000_000)
-    }
-
-    @Test func oldSnapshotsWithoutCategoriesStillDecodeAndYieldNoGrowth() throws {
-        let json = #"[{"id":"\#(UUID().uuidString)","date":0,"reclaimableBytes":5,"itemCount":1}]"#
-        let decoded = try JSONDecoder().decode([ScanSnapshot].self, from: Data(json.utf8))
-        #expect(decoded.first?.categories == nil)
-        #expect(ScanHistory.growers(in: decoded).isEmpty)
     }
 
     // MARK: Running-app guard

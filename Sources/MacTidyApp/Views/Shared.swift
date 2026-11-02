@@ -61,9 +61,10 @@ struct ScanItemRow: View {
     var body: some View {
         // Application Support items say what they are; their folder names
         // ("Cache", "2.1.308") mean little on their own.
-        let insight = item.category == .appSupport ? AppSupportRules.insight(for: item) : nil
         // Handled elsewhere: shown, never selectable, so never trashable here.
         let elsewhere = HandledElsewhere.rule(for: item)
+        let insight = elsewhere == nil && (item.category == .appSupport || item.finding != nil)
+            ? AppSupportRules.insight(for: item) : nil
         HStack(spacing: Theme.Spacing.md) {
             if elsewhere == nil {
                 Toggle("", isOn: Binding(
@@ -183,7 +184,7 @@ struct ScanItemRow: View {
         } else if elsewhere != nil {
             parts.append((item.url.path as NSString).abbreviatingWithTildeInPath)
         } else if let detail = item.detail {
-            parts.append("in \(detail)")
+            parts.append(item.finding == nil ? "in \(detail)" : detail)
         }
         if let modified = item.lastModified {
             parts.append("modified \(modified.formatted(date: .abbreviated, time: .omitted))")

@@ -42,36 +42,6 @@ public struct ScanSnapshot: Identifiable, Sendable, Codable, Hashable {
     }
 }
 
-/// A category that grew between two scans.
-public struct CategoryGrowth: Identifiable, Sendable, Equatable {
-    public let category: Category
-    public let delta: Int64
-    public let current: Int64
-    public let since: Date
-    public var id: Category { category }
-}
-
-extension ScanHistory {
-    /// Categories that grew by at least `minimumDelta` since the newest scan
-    /// that is at least `minimumGap` older than the latest one. Biggest first.
-    public static func growers(in history: [ScanSnapshot],
-                               minimumDelta: Int64 = 100_000_000,
-                               minimumGap: TimeInterval = 20 * 3600,
-                               limit: Int = 4) -> [CategoryGrowth] {
-        let tracked = history.filter { $0.categories != nil }.sorted { $0.date > $1.date }
-        guard let latest = tracked.first, let now = latest.categories,
-              let base = tracked.first(where: { latest.date.timeIntervalSince($0.date) >= minimumGap }),
-              let before = base.categories else { return [] }
-        return now.compactMap { key, bytes -> CategoryGrowth? in
-            guard let category = Category(rawValue: key) else { return nil }
-            let delta = bytes - (before[key] ?? 0)
-            return delta >= minimumDelta ? CategoryGrowth(category: category, delta: delta, current: bytes, since: base.date) : nil
-        }
-        .sorted { $0.delta > $1.delta }
-        .prefix(limit).map { $0 }
-    }
-}
-
 /// Rolling history of recent scan snapshots, stored as JSON in the app's
 /// Application Support folder. Capped at `maxSnapshots` so it can't grow
 /// unbounded; newest first.

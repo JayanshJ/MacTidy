@@ -77,7 +77,7 @@ extension CleanSource {
         .init(.devCaches, ".m2/repository", "Maven repository"),
         .init(.devCaches, ".yarn/cache", "Yarn cache"),
         .init(.devCaches, ".terraform.d/plugin-cache", "Terraform plugin cache"),
-        .init(.devCaches, ".sbt", "sbt cache"),
+        .init(.devCaches, ".sbt/boot", "sbt launcher cache"),
         .init(.devCaches, ".coursier/cache", "Coursier cache"),
         .init(.devCaches, ".bun/install/cache", "Bun cache"),
         // Per child, so AI-agent entries that live in ~/.cache (codex runtimes,
@@ -86,7 +86,7 @@ extension CleanSource {
         .init(.devCaches, ".deno", "Deno cache"),
         .init(.devCaches, "Library/Developer/Xcode/iOS DeviceLogs", "iOS Device Logs"),
         .init(.devCaches, ".cocoapods", "CocoaPods cache"),
-        .init(.devCaches, ".fastlane", "Fastlane cache"),
+        .init(.devCaches, ".fastlane/caches", "Fastlane cache"),
         .init(.devCaches, ".colima", "Colima VM disk", .danger),
         .init(.devCaches, ".lima", "Lima VM disk", .danger),
         .init(.devCaches, ".vscode/extensions", "VS Code extensions", .caution),
@@ -128,7 +128,8 @@ extension CleanSource {
         .init(.devCaches, "Library/Caches/go-build", "Go build cache"),
         .init(.devCaches, ".cargo/git", "Cargo git checkouts"),
         .init(.devCaches, ".rustup/toolchains", "Rust toolchain (reinstall needed)", .caution, .children),
-        .init(.devCaches, ".pub-cache", "Dart and Flutter package cache"),
+        .init(.devCaches, ".pub-cache/hosted", "Dart and Flutter package cache"),
+        .init(.devCaches, ".pub-cache/git", "Dart and Flutter git packages"),
         .init(.devCaches, "Library/Caches/Yarn", "Yarn cache"),
         .init(.devCaches, ".nvm/.cache", "nvm download cache"),
         .init(.devCaches, ".cache/node-gyp", "node-gyp headers"),
@@ -266,6 +267,8 @@ extension ScanItem {
         // MacTidy doesn't recognise (a whole app folder from an older saved
         // scan) is app data, never safe by default.
         if category == .appSupport { return AppSupportRules.insight(for: self)?.risk ?? .caution }
+        // Trashing a group container resets every app that shares it.
+        if category == .groupContainers { return .caution }
         return CleanSource.source(for: self)?.risk ?? .safe
     }
 

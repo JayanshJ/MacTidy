@@ -12,6 +12,8 @@ struct StorageByAppTab: View {
     @State private var isLoading = false
     @State private var selectedAppID: String?
     @State private var sheetPlan: DeletionPlan?
+    /// Apps that look forgotten but keep a lot of data, by app id.
+    @State private var suggestions: [String: UninstallSuggestion] = [:]
 
     private var selected: AppFootprint? { attributions.first { $0.app.id == selectedAppID } }
 
@@ -25,9 +27,11 @@ struct StorageByAppTab: View {
         .task {
             if !state.appAttributions.isEmpty {
                 attributions = state.appAttributions
+                await refreshSuggestions()
             } else if attributions.isEmpty {
                 await load()
             }
+            if SnapshotHarness.isActive { selectedAppID = suggestions.keys.first }
         }
         .sheet(item: $sheetPlan) { plan in
             DeletionConfirmationSheet(
@@ -91,6 +95,10 @@ struct StorageByAppTab: View {
                         Text(entry.totalBytes.formattedBytes)
                             .font(Theme.Font.caption.monospacedDigit()).foregroundStyle(.secondary)
                     }
+                    if let suggestion = suggestions[entry.app.id] {
+                        Text(suggestion.unusedLabel())
+                            .font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
                     Meter(fraction: Double(entry.totalBytes) / Double(max(largest, 1)), height: 3)
                 }
             }
@@ -125,6 +133,9 @@ struct StorageByAppTab: View {
                         .buttonStyle(.borderedProminent)
                         .disabled(!hasCaches)
                         .help("Keeps the app installed. Caches rebuild on next launch.")
+                    }
+                    if let suggestion = suggestions[entry.app.id] {
+                        uninstallInstead(suggestion)
                     }
                     SurfaceSection("By kind") {
                         ForEach(Array(entry.bucketTotals.enumerated()), id: \.offset) { i, pair in
@@ -175,11 +186,39 @@ struct StorageByAppTab: View {
         }
     }
 
+    /// Leads to the Uninstaller, where the user sees exactly what would go.
+    private func uninstallInstead(_ suggestion: UninstallSuggestion) -> some View {
+        SurfaceSection {
+            HStack(spacing: Theme.Spacing.lg) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(suggestion.unusedLabel()), with \(suggestion.dataBytes.formattedBytes) in Application Support")
+                        .font(Theme.Font.bodyStrong)
+                    Text("If you no longer need it, uninstalling removes the app and its data together.")
+                        .font(Theme.Font.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: Theme.Spacing.md)
+                Button("Open in Uninstaller") { state.openUninstaller(for: suggestion.app) }
+            }
+            .padding(.horizontal, Theme.Spacing.lg)
+            .padding(.vertical, Theme.Spacing.md)
+        }
+    }
+
     private func load() async {
         isLoading = true
         let apps = await AppUninstaller.installedApps()
         let result = await AppStorageAttribution.scan(apps: apps)
         attributions = result
+        await refreshSuggestions()
         isLoading = false
+    }
+
+    private func refreshSuggestions() async {
+        let footprints = attributions
+        let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
+        let found = await Task.detached {
+            UninstallSuggestions.suggestions(for: footprints, runningBundleIDs: running)
+        }.value
+        suggestions = Dictionary(uniqueKeysWithValues: found.map { ($0.id, $0) })
     }
 }

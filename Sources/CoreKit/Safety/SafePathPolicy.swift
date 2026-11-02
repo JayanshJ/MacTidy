@@ -95,6 +95,8 @@ public struct SafePathPolicy: Sendable {
             home + "/Library/Application Support",
             home + "/Library/Preferences",
             home + "/Library/Caches",
+            home + "/Library/Containers",
+            home + "/Library/Group Containers",
             home + "/Downloads",
             "/Applications", "/Library", "/Users", "/usr/local", "/opt/homebrew",
         ]
@@ -119,7 +121,17 @@ public struct SafePathPolicy: Sendable {
             return .failure(.protectedAppData(path))
         }
         if path.contains("/Library/Application Support/"),
-           Self.profileSecretNames.contains((path as NSString).lastPathComponent) {
+           Self.profileSecretNames.contains((path as NSString).lastPathComponent),
+           !Self.isEditorLocalHistory(path, home: home) {
+            return .failure(.protectedAppData(path))
+        }
+
+        // 2d. macOS's own containers. What's inside can be a listed cache, but
+        //     the container itself can't be moved without SIP's say-so, and a
+        //     protected one that does reach the Trash may never leave it.
+        let parent = (path as NSString).deletingLastPathComponent
+        if parent == home + "/Library/Containers" || parent == home + "/Library/Group Containers",
+           ContainerLeftovers.isApple((path as NSString).lastPathComponent) {
             return .failure(.protectedAppData(path))
         }
 
@@ -158,6 +170,7 @@ public struct SafePathPolicy: Sendable {
         // Beside caches MacTidy lists: API keys and publish tokens.
         ".gem/credentials", ".nuget/NuGet/NuGet.Config", ".ivy2/.credentials",
         ".cabal/config", ".stack/config.yaml", ".stack/upload", ".hex/hex.config",
+        ".sbt/.credentials", ".fastlane/spaceship", ".pub-cache/credentials.json",
         ".lmstudio/credentials",
         ".hermes/.env", ".hermes/auth.json", ".hermes/config.yaml", ".hermes/pairing", ".hermes/backups",
         ".agent-reach/state.json", ".agent-reach/config.yaml",
@@ -183,6 +196,13 @@ public struct SafePathPolicy: Sendable {
         "Login Data For Account", "Web Data", "History", "Bookmarks", "Local State",
         "key4.db", "logins.json", "cookies.sqlite", "places.sqlite",
     ]
+
+    /// An editor's local file history is a folder called `History`, not a
+    /// browser's history file, so the name rule above doesn't apply to it.
+    /// Only this exact folder: anything else named `History` stays refused.
+    private static func isEditorLocalHistory(_ path: String, home: String) -> Bool {
+        AppSupportRules.editors.contains { path == "\(home)/\(AppSupportRules.root)/\($0)/User/History" }
+    }
 
     /// Symlink-resolved, standardized absolute path. Resolving first means a
     /// symlink at an allowed location pointing somewhere protected is judged

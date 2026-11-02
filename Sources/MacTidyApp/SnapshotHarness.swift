@@ -63,6 +63,7 @@ enum SnapshotHarness {
                 state.showingElsewhere = showingElsewhere
                 state.scanHistory = scanHistory ?? history
                 state.appSupportBytes = 23_400_000_000 + 97_000_000_000
+                state.appAttributions = Fixtures.attributions()
                 state.isScanningCategories = false
                 state.section = section
                 state.drilledCategory = drill
@@ -96,6 +97,7 @@ enum SnapshotHarness {
             ("cleanup-detail", main(.cleanup, drill: .xcodeDerivedData)),
             ("cleanup-node", main(.cleanup, drill: .nodeModules)),
             ("cleanup-appsupport", main(.cleanup, drill: .appSupport)),
+            ("cleanup-groups", main(.cleanup, drill: .groupContainers)),
             ("project-detail", main(.projects, project: "/Users/demo/Developer/storefront")),
         ]
         for item in SidebarItem.allCases where item != .overview && item != .cleanup {
@@ -128,6 +130,13 @@ enum SnapshotHarness {
             ("elsewhere-link", CGSize(width: 760, height: 150),
              AnyView(HandledElsewhereLink().padding(Theme.Spacing.lg)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).background(Theme.canvas))),
+            ("sheet-whybig", CGSize(width: 520, height: 560),
+             AnyView(WhyBigSheet(folder: Fixtures.bigFolder.url, profile: Fixtures.bigFolder,
+                                 answer: ItemExplanation(summary: "Mostly cached video from a screen recorder, kept as editable projects. Trashing it loses recordings you haven't exported. Review carefully.", verdict: .review),
+                                 isAsking: false, aiAvailable: true, sendsNames: false))),
+            ("sheet-whybig-noai", CGSize(width: 520, height: 560),
+             AnyView(WhyBigSheet(folder: Fixtures.bigFolder.url, profile: Fixtures.bigFolder, answer: nil,
+                                 isAsking: false, aiAvailable: false, sendsNames: false))),
         ].filter { only?.contains($0.0) ?? true }
         state.categoryResults = results
         state.elsewhereItems = elsewhere
@@ -157,6 +166,43 @@ enum SnapshotHarness {
 
 /// Plausible scan results for screenshots. Paths are fake; nothing reads them.
 private enum Fixtures {
+    static let bigFolder = FolderProfile(
+        url: URL(fileURLWithPath: "/Users/demo/Library/Application Support/ScreenStudio"),
+        totalBytes: 18_400_000_000,
+        children: [
+            .init(name: "Projects", bytes: 15_100_000_000, isDirectory: true),
+            .init(name: "Exports", bytes: 2_200_000_000, isDirectory: true),
+            .init(name: "state.db", bytes: 640_000_000, isDirectory: false),
+            .init(name: "thumbnails", bytes: 310_000_000, isDirectory: true),
+        ],
+        childCount: 7,
+        kinds: [
+            .init(kind: .video, bytes: 16_900_000_000, files: 212),
+            .init(kind: .databases, bytes: 640_000_000, files: 3),
+            .init(kind: .images, bytes: 610_000_000, files: 4_180),
+            .init(kind: .other, bytes: 250_000_000, files: 96),
+        ],
+        newestChange: Date().addingTimeInterval(-41 * 86_400))
+
+    static func attributions() -> [AppFootprint] {
+        let support = "/Users/demo/Library/Application Support/"
+        func footprint(_ name: String, _ id: String, app: Double, data: Double, caches: Double, unusedDays: Double) -> AppFootprint {
+            let bundle = URL(fileURLWithPath: "/Applications/\(name).app")
+            return AppFootprint(
+                app: InstalledApp(url: bundle, name: name, bundleID: id, sizeBytes: Int64(app * 1_000_000_000),
+                                  lastUsedDate: Date().addingTimeInterval(-unusedDays * 86_400)),
+                paths: [
+                    .init(url: URL(fileURLWithPath: support + name), bucket: .appSupport, sizeBytes: Int64(data * 1_000_000_000)),
+                    .init(url: URL(fileURLWithPath: "/Users/demo/Library/Caches/" + id), bucket: .caches, sizeBytes: Int64(caches * 1_000_000_000)),
+                ])
+        }
+        return [
+            footprint("Final Cut Pro", "com.example.finalcut", app: 3.8, data: 12.6, caches: 0.9, unusedDays: 214),
+            footprint("Slack", "com.example.slack", app: 0.5, data: 2.1, caches: 0.6, unusedDays: 1),
+            footprint("Figma", "com.example.figma", app: 0.4, data: 0.9, caches: 0.3, unusedDays: 12),
+        ]
+    }
+
     static func projects(_ results: [CategoryResult]) -> [DevProject] {
         let now = Date()
         let items = results.flatMap(\.items)
@@ -241,6 +287,13 @@ private enum Fixtures {
             items(.iosBackups, [("Library/Application Support/MobileSync/Backup/00008110", 18.2, "iPhone")]),
             items(.bigFiles, [("Downloads/screen-recording.mov", 4.2, nil), ("Downloads/dataset.parquet", 2.1, nil)]),
             items(.crashReports, [("Library/Logs/DiagnosticReports/Xcode-2026-10-01.ips", 0.02, nil)]),
+            items(.groupContainers, [
+                ("Library/Group Containers/UBF8T346G9.Office", 0.9, nil),
+                ("Library/Group Containers/group.net.whatsapp.WhatsApp.shared", 0.4, nil)]).adding([
+                ScanItem(url: URL(fileURLWithPath: home + "/Library/Group Containers/ABCDE12345.com.example.oldnotes"),
+                         sizeBytes: 640_000_000, isDirectory: true, category: .groupContainers,
+                         detail: AppSupportRules.removedAppsGroup,
+                         lastModified: Date().addingTimeInterval(-180 * 86_400), finding: "leftover")]),
             items(.appSupport, [
                 ("Library/Application Support/Claude/vm_bundles", 10.7, "Claude"),
                 ("Library/Application Support/Claude/Cache", 0.35, "Claude"),
