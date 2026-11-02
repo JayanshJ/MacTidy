@@ -64,7 +64,10 @@ enum AppSupportScanner {
             if let finding = candidate.finding { findings[path] = finding }
         }
 
-        let unique = outermost(urls)
+        // One owner per byte: what's handled elsewhere is listed there, not
+        // here as well (a Multipass disk image, say).
+        let home = root.deletingLastPathComponent().deletingLastPathComponent()
+        let unique = outermost(urls).filter { HandledElsewhere.rule(covering: $0, home: home) == nil }
         let directories = unique.filter(isRealDirectory)
         let directorySizes = Dictionary(uniqueKeysWithValues: zip(
             directories.map(\.path), BulkWalker.allocatedSizes(of: directories.map(\.path))))

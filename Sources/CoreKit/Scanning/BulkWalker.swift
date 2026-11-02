@@ -22,8 +22,11 @@ enum BulkWalker {
 
     /// Allocated bytes of the regular files under each root, in order. Stops
     /// early (returning partial totals) when the calling task is cancelled.
+    /// With `materializingDataless` off, a folder iCloud hasn't downloaded is
+    /// skipped instead of being fetched just to list it.
     static func allocatedSizes(
         of roots: [String],
+        materializingDataless: Bool = true,
         progress: (@Sendable (_ directory: String, _ bytes: Int64) -> Void)? = nil
     ) -> [Int64] {
         guard !roots.isEmpty else { return [] }
@@ -35,13 +38,42 @@ enum BulkWalker {
         // directory is read. Helpers join only while spare directories pile
         // up, and one that starts late just finds the stack empty, so the many
         // tiny walks a scan does never wait on a busy thread pool.
-        work(queue, isHelper: false, progress: progress)
+        work(queue, isHelper: false, materializingDataless: materializingDataless, progress: progress)
         return queue.totals
+    }
+
+    /// Runs `body` with this thread refusing to download dataless files and
+    /// folders, then restores the thread's policy (pool threads get reused).
+    static func withoutMaterializingDataless(_ body: () -> Void) {
+        let previous = getiopolicy_np(IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, IOPOL_SCOPE_THREAD)
+        setiopolicy_np(IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, IOPOL_SCOPE_THREAD, IOPOL_MATERIALIZE_DATALESS_FILES_OFF)
+        defer {
+            if previous >= 0 {
+                setiopolicy_np(IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES, IOPOL_SCOPE_THREAD, previous)
+            }
+        }
+        body()
     }
 
     private static func work(
         _ queue: WorkQueue,
         isHelper: Bool,
+        materializingDataless: Bool,
+        progress: (@Sendable (String, Int64) -> Void)?
+    ) {
+        guard materializingDataless else {
+            withoutMaterializingDataless {
+                drain(queue, isHelper: isHelper, materializingDataless: false, progress: progress)
+            }
+            return
+        }
+        drain(queue, isHelper: isHelper, materializingDataless: true, progress: progress)
+    }
+
+    private static func drain(
+        _ queue: WorkQueue,
+        isHelper: Bool,
+        materializingDataless: Bool,
         progress: (@Sendable (String, Int64) -> Void)?
     ) {
         let buffer = UnsafeMutableRawPointer.allocate(byteCount: bufferSize, alignment: 16)
@@ -69,7 +101,7 @@ enum BulkWalker {
             let helpers = queue.finish(item, bytes: bytes, adding: subdirectories)
             for _ in 0..<helpers {
                 DispatchQueue.global(qos: .userInitiated).async {
-                    work(queue, isHelper: true, progress: progress)
+                    work(queue, isHelper: true, materializingDataless: materializingDataless, progress: progress)
                 }
             }
         }

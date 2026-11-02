@@ -180,7 +180,9 @@ public struct CategoryScanner: Sendable {
         case .httpStorages:
             items = await children(of: "Library/HTTPStorages", category)
         case .groupContainers:
+            // A container holding something handled elsewhere is listed there.
             items = await children(of: "Library/Group Containers", category)
+                .filter { !HandledElsewhere.claimsGroupContainer($0.url.lastPathComponent) }
         }
         return CategoryResult(category: category, items: items.filter { !ignore.contains($0.url) })
     }

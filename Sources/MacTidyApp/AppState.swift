@@ -146,6 +146,12 @@ final class AppState {
     /// account of it. Measured after each scan; nil until then.
     var appSupportBytes: Int64?
 
+    /// Big things another app or setting manages. Never in `categoryResults`,
+    /// so no total, plan or schedule can include them.
+    var elsewhereItems: [ScanItem] = []
+    /// The Cleanup page is showing the handled-elsewhere detail.
+    var showingElsewhere = false
+
     func refreshAppSupportBytes() {
         guard !SnapshotHarness.isActive else { return }
         let folder = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Application Support")
@@ -202,6 +208,7 @@ final class AppState {
     private let cleanupLog: CleanupLog
     private let scanHistoryStore: ScanHistory
     private let lastScanURL: URL
+    private let lastElsewhereURL: URL
 
     /// Persisted scheduled-cleanup jobs. Loaded once at init; the Settings UI
     /// edits this in place and rewrites the launchd plist via
@@ -222,6 +229,7 @@ final class AppState {
             .appending(path: "Library/Application Support/MacTidy")
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         self.lastScanURL = support.appending(path: "last-scan.json")
+        self.lastElsewhereURL = support.appending(path: "handled-elsewhere.json")
         self.schedules = scheduleStore.load()
         self.extraAllowedRoots = Self.loadExtraAllowedRoots()
         self.customDevRoots = Self.loadCustomDevRoots()
@@ -251,6 +259,11 @@ final class AppState {
             self.safeItems = Self.safeItems(in: categoryResults) // didSet doesn't run in init
             self.scanStatus = "Last scan restored from previous session"
         }
+        if let data = try? Data(contentsOf: lastElsewhereURL),
+           let items = try? JSONDecoder().decode([ScanItem].self, from: data) {
+            let ignored = IgnoreList.load()
+            self.elsewhereItems = items.filter { !ignored.contains($0.url) }
+        }
         if !SnapshotHarness.isActive {
             refreshTrashBytes()
             if !categoryResults.isEmpty { refreshAppSupportBytes() }
@@ -273,7 +286,9 @@ final class AppState {
         scanCompleted = 0
         scanPartial = []
         let scanner = makeCategoryScanner()
+        let fullDiskAccess = fdaGranted
         let task = Task {
+            async let elsewhereScan = scanner.handledElsewhereItems(fullDiskAccess: fullDiskAccess)
             let results = await scanner.scanAll(
                 progress: { category in
                     Task { @MainActor in self.scanProgress = "Scanning \(category.displayName)…" }
@@ -285,12 +300,15 @@ final class AppState {
                     }
                 }
             )
+            let elsewhere = await elsewhereScan
             if Task.isCancelled {
                 await MainActor.run { isScanningCategories = false; scanProgress = ""; scanCompleted = 0 }
                 return
             }
             await MainActor.run {
                 categoryResults = results
+                elsewhereItems = elsewhere
+                persistElsewhere(elsewhere)
                 isScanningCategories = false
                 scanProgress = ""
                 scanCompleted = scanTotal
@@ -303,7 +321,9 @@ final class AppState {
             // History is a JSON read-modify-write; keep it off the main thread.
             let store = scanHistoryStore
             let history = await Task.detached(priority: .utility) {
-                store.append(ScanSnapshot(results: results))
+                let folders = ScanHistory.folderTotals(results: results, elsewhere: elsewhere,
+                                                       fullDiskAccess: fullDiskAccess)
+                store.append(ScanSnapshot(results: results, folders: folders))
                 return store.load()
             }.value
             scanHistory = history
@@ -387,6 +407,40 @@ final class AppState {
         return await AppStorageAttribution.scan(apps: apps)
     }
 
+    // MARK: - Handled elsewhere
+
+    /// Whether the app that manages a rule's items is on this Mac.
+    func isAppInstalled(for rule: ElsewhereRule) -> Bool {
+        guard case .app(_, let bundleIDs, _, _) = rule.destination else { return true }
+        return Self.applicationURL(bundleIDs) != nil
+    }
+
+    /// Follows a handled-elsewhere button. Opens things and reveals folders;
+    /// never changes anything on disk.
+    func openElsewhere(_ rule: ElsewhereRule, items: [ScanItem]) {
+        switch rule.destination {
+        case .dockerTab:
+            showingElsewhere = false
+            drilledCategory = nil
+            section = .docker
+        case .settings(let url, _):
+            if let url = URL(string: url) { NSWorkspace.shared.open(url) }
+        case .app(_, let bundleIDs, let deepLink, _):
+            guard let app = Self.applicationURL(bundleIDs) else {
+                NSWorkspace.shared.activateFileViewerSelecting(items.map(\.url))
+                return
+            }
+            if let deepLink, let url = URL(string: deepLink), NSWorkspace.shared.open(url) { return }
+            NSWorkspace.shared.openApplication(at: app, configuration: NSWorkspace.OpenConfiguration())
+        case .folder:
+            NSWorkspace.shared.activateFileViewerSelecting(items.map(\.url))
+        }
+    }
+
+    private static func applicationURL(_ bundleIDs: [String]) -> URL? {
+        bundleIDs.lazy.compactMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }.first
+    }
+
     // MARK: - Ignore list
 
     /// Paths never to suggest again. Every `CategoryScanner` reads the same
@@ -400,6 +454,8 @@ final class AppState {
         // for every item, so it runs off the main thread.
         let added = IgnoreList(paths: [url.path])
         let before = categoryResults
+        elsewhereItems.removeAll { added.contains($0.url) }
+        persistElsewhere(elsewhereItems)
         Task {
             let filtered = await Task.detached(priority: .userInitiated) { added.filter(before) }.value
             // Results replaced meanwhile (a scan landed): filter those instead.
@@ -1096,6 +1152,14 @@ final class AppState {
         let url = lastScanURL
         Self.persistQueue.async {
             guard let data = try? JSONEncoder().encode(results) else { return }
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
+    private func persistElsewhere(_ items: [ScanItem]) {
+        let url = lastElsewhereURL
+        Self.persistQueue.async {
+            guard let data = try? JSONEncoder().encode(items) else { return }
             try? data.write(to: url, options: .atomic)
         }
     }

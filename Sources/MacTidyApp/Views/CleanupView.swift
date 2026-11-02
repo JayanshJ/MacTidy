@@ -23,6 +23,8 @@ struct CleanupView: View {
                                    sheetTitle = "Move \(items.count) item\(items.count == 1 ? "" : "s") to the Trash?"
                                    sheetPlan = DeletionPlan(items: items)
                                })
+            } else if state.showingElsewhere {
+                HandledElsewhereDetail()
             } else {
                 categoryList
             }
@@ -81,6 +83,7 @@ struct CleanupView: View {
                             results: review, maxBytes: maxBytes, safeBytes: nil)
                 }
             }
+            HandledElsewhereLink()
         }
     }
 
