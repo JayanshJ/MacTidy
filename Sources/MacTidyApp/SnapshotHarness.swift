@@ -43,15 +43,26 @@ enum SnapshotHarness {
                 ScanItem(url: $0.url, sizeBytes: Int64(Double($0.sizeBytes) * shrink), isDirectory: true, category: $0.category)
             })
         }
-        state.scanHistory = [ScanSnapshot(results: results),
-                             ScanSnapshot(results: older, date: Date().addingTimeInterval(-4 * 86_400))]
-        func main(_ section: SidebarItem, drill: CoreKit.Category? = nil, project: String? = nil) -> () -> Void {
+        // Claude's Cowork VM arrived and a game went in, so the folder-level
+        // nudges show alongside a category's.
+        let elsewhere = Fixtures.elsewhere()
+        let folders = ScanHistory.folderTotals(results: results, elsewhere: elsewhere, fullDiskAccess: true)
+        var olderFolders = folders
+        olderFolders["appSupport:Claude"] = 800_000_000
+        olderFolders["elsewhere:steamGames"] = 62_000_000_000
+        let history = [ScanSnapshot(results: results, folders: folders),
+                       ScanSnapshot(results: older, date: Date().addingTimeInterval(-7 * 86_400), folders: olderFolders)]
+        func main(_ section: SidebarItem, drill: CoreKit.Category? = nil, project: String? = nil,
+                  showingElsewhere: Bool = false, scanHistory: [ScanSnapshot]? = nil) -> () -> Void {
             {
                 state.selectedProjectID = project
                 state.fdaStatus = granted
                 state.flowPhase = .dashboard
                 state.categoryResults = results
-                state.appSupportBytes = 23_400_000_000
+                state.elsewhereItems = elsewhere
+                state.showingElsewhere = showingElsewhere
+                state.scanHistory = scanHistory ?? history
+                state.appSupportBytes = 23_400_000_000 + 97_000_000_000
                 state.isScanningCategories = false
                 state.section = section
                 state.drilledCategory = drill
@@ -79,7 +90,9 @@ enum SnapshotHarness {
                 state.scanPartial = Array(results.prefix(9))
             }),
             ("overview", main(.overview)),
+            ("overview-nohistory", main(.overview, scanHistory: [ScanSnapshot(results: results)])),
             ("cleanup", main(.cleanup)),
+            ("cleanup-elsewhere", main(.cleanup, showingElsewhere: true)),
             ("cleanup-detail", main(.cleanup, drill: .xcodeDerivedData)),
             ("cleanup-node", main(.cleanup, drill: .nodeModules)),
             ("cleanup-appsupport", main(.cleanup, drill: .appSupport)),
@@ -111,8 +124,13 @@ enum SnapshotHarness {
              AnyView(DeletionConfirmationSheet(title: "Clean everything that's safe?",
                                                plan: DeletionPlan(items: Array(results.flatMap(\.items).filter(\.isPreselectable).prefix(8)))))),
             ("menubar", CGSize(width: 300, height: 420), AnyView(MenuBarPanel())),
+            // Sits below the fold on the Overview and Cleanup pages.
+            ("elsewhere-link", CGSize(width: 760, height: 150),
+             AnyView(HandledElsewhereLink().padding(Theme.Spacing.lg)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top).background(Theme.canvas))),
         ].filter { only?.contains($0.0) ?? true }
         state.categoryResults = results
+        state.elsewhereItems = elsewhere
         for (mode, name) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
             NSApp.appearance = NSAppearance(named: name)
             for (screen, size, view) in standalone {
@@ -162,6 +180,25 @@ private enum Fixtures {
             project("landing", days: 3, git: 0.1, dirty: true, subject: "New hero copy"),
             project("dotfiles", days: 12, git: 0.02, subject: "zsh: faster prompt"),
         ].sorted { $0.score(now: now) > $1.score(now: now) }
+    }
+
+    static func elsewhere() -> [ScanItem] {
+        let entries: [(String, String, Double, Bool)] = [
+            ("steamGames", "Library/Application Support/Steam/steamapps/common/Elden Ring", 49, true),
+            ("steamGames", "Library/Application Support/Steam/steamapps/common/Hades II", 13, true),
+            ("steamGames", "Library/Application Support/Steam/steamapps/common/Balatro", 35, true),
+            ("dockerDisk", "Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw", 38, false),
+            ("utm", "Library/Containers/com.utmapp.UTM/Data/Documents/Ubuntu 24.04.utm", 21, true),
+            ("messages", "Library/Messages/Attachments", 14.6, true),
+            ("whatsapp", "Library/Group Containers/group.net.whatsapp.WhatsApp.shared/Message/Media", 3.2, true),
+            ("iCloudDrive", "Library/Mobile Documents", 8.4, true),
+            ("vagrant", ".vagrant.d/boxes", 2.7, true),
+        ]
+        return entries.map { rule, path, gigabytes, isDirectory in
+            ScanItem(url: URL(fileURLWithPath: "/Users/demo/" + path), sizeBytes: Int64(gigabytes * 1_000_000_000),
+                     isDirectory: isDirectory, detail: HandledElsewhere.rule(id: rule)?.owner,
+                     lastModified: Date().addingTimeInterval(-40 * 86_400), finding: rule)
+        }
     }
 
     static func results() -> [CategoryResult] {

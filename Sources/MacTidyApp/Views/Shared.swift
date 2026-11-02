@@ -62,15 +62,19 @@ struct ScanItemRow: View {
         // Application Support items say what they are; their folder names
         // ("Cache", "2.1.308") mean little on their own.
         let insight = item.category == .appSupport ? AppSupportRules.insight(for: item) : nil
+        // Handled elsewhere: shown, never selectable, so never trashable here.
+        let elsewhere = HandledElsewhere.rule(for: item)
         HStack(spacing: Theme.Spacing.md) {
-            Toggle("", isOn: Binding(
-                get: { selection.contains(item.id) },
-                set: { isOn in
-                    if isOn { selection.insert(item.id) } else { selection.remove(item.id) }
-                }
-            ))
-            .labelsHidden()
-            .toggleStyle(.checkbox)
+            if elsewhere == nil {
+                Toggle("", isOn: Binding(
+                    get: { selection.contains(item.id) },
+                    set: { isOn in
+                        if isOn { selection.insert(item.id) } else { selection.remove(item.id) }
+                    }
+                ))
+                .labelsHidden()
+                .toggleStyle(.checkbox)
+            }
 
             Image(nsImage: FileIcon.image(for: item.url))
                 .resizable()
@@ -78,7 +82,7 @@ struct ScanItemRow: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: Theme.Spacing.sm) {
-                    Text(insight?.label ?? item.url.lastPathComponent)
+                    Text(insight?.label ?? elsewhere?.title(for: item) ?? item.url.lastPathComponent)
                         .font(Theme.Font.bodyStrong)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -88,7 +92,7 @@ struct ScanItemRow: View {
                             .help("Never preselected. \(insight == nil ? item.detail ?? "" : "")")
                     }
                 }
-                if let subtitle = subtitle(insight) {
+                if let subtitle = subtitle(insight, elsewhere) {
                     Text(subtitle)
                         .font(Theme.Font.caption)
                         .foregroundStyle(.secondary)
@@ -135,13 +139,15 @@ struct ScanItemRow: View {
             if item.category != nil {
                 Button("Why is this suggested?") { showSafetyNote = true }
             }
-            Button {
-                Task { await explain() }
-            } label: {
-                if isExplaining {
-                    Text("Explaining…")
-                } else {
-                    Label("Explain with AI", systemImage: "sparkles")
+            if elsewhere == nil {
+                Button {
+                    Task { await explain() }
+                } label: {
+                    if isExplaining {
+                        Text("Explaining…")
+                    } else {
+                        Label("Explain with AI", systemImage: "sparkles")
+                    }
                 }
             }
         }
@@ -170,10 +176,12 @@ struct ScanItemRow: View {
         }
     }
 
-    private func subtitle(_ insight: AppSupportInsight?) -> String? {
+    private func subtitle(_ insight: AppSupportInsight?, _ elsewhere: ElsewhereRule?) -> String? {
         var parts: [String] = []
         if insight != nil, let path = AppSupportRules.displayPath(of: item.url) {
             parts.append(path)
+        } else if elsewhere != nil {
+            parts.append((item.url.path as NSString).abbreviatingWithTildeInPath)
         } else if let detail = item.detail {
             parts.append("in \(detail)")
         }

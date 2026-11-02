@@ -11,27 +11,34 @@ public struct ScanSnapshot: Identifiable, Sendable, Codable, Hashable {
     /// Bytes per category (keyed by `Category.rawValue`). Nil in snapshots
     /// written before growth tracking existed.
     public let categories: [String: Int64]?
+    /// Bytes per app in Application Support and per handled-elsewhere rule
+    /// (see `ScanHistory.folderTotals`). Nil in snapshots written before
+    /// growth nudges existed.
+    public let folders: [String: Int64]?
 
     public init(
         id: UUID = UUID(),
         date: Date = Date(),
         reclaimableBytes: Int64,
         itemCount: Int,
-        categories: [String: Int64]? = nil
+        categories: [String: Int64]? = nil,
+        folders: [String: Int64]? = nil
     ) {
         self.id = id
         self.date = date
         self.reclaimableBytes = reclaimableBytes
         self.itemCount = itemCount
         self.categories = categories
+        self.folders = folders
     }
 
-    public init(results: [CategoryResult], date: Date = Date()) {
+    public init(results: [CategoryResult], date: Date = Date(), folders: [String: Int64]? = nil) {
         self.init(date: date,
                   reclaimableBytes: results.reduce(0) { $0 + $1.totalBytes },
                   itemCount: results.reduce(0) { $0 + $1.items.count },
                   categories: Dictionary(results.map { ($0.category.rawValue, $0.totalBytes) },
-                                         uniquingKeysWith: +))
+                                         uniquingKeysWith: +),
+                  folders: folders)
     }
 }
 

@@ -173,6 +173,9 @@ struct DirectoryExplorerView: View {
     /// Application Support, what they are.
     private func note(for item: ScanItem) -> String? {
         if let refusal = refusals[item.id] { return refusal }
+        if let rule = HandledElsewhere.rule(covering: item.url) {
+            return "\(rule.label) · manage in \(rule.managedIn)"
+        }
         guard let insight = AppSupportRules.insight(for: item.url) else { return nil }
         let verdict = switch insight.risk {
         case .safe: "safe to trash"

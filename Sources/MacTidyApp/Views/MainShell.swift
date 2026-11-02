@@ -84,7 +84,7 @@ struct MainShell: View {
         // rows) set section and category together and keep both.
         let selection = Binding<SidebarItem?>(
             get: { state.section },
-            set: { if let item = $0 { state.section = item; state.drilledCategory = nil; state.selectedProjectID = nil } })
+            set: { if let item = $0 { state.section = item; state.drilledCategory = nil; state.showingElsewhere = false; state.selectedProjectID = nil } })
         NavigationSplitView {
             List(selection: selection) {
                 ForEach(SidebarItem.Group.allCases, id: \.self) { group in
@@ -272,6 +272,7 @@ struct OverviewView: View {
                 growing
                 appSupportCard
                 if !ranked.isEmpty { breakdown(ranked) }
+                HandledElsewhereLink()
                 footerStat
             }
             .padding(.horizontal, Theme.gutter)
@@ -363,29 +364,40 @@ struct OverviewView: View {
         }
     }
 
-    /// Categories that grew since a scan at least a day older.
+    /// What grew a lot since an earlier scan, or plainly that there's nothing
+    /// to compare with yet.
     @ViewBuilder
     private var growing: some View {
-        let growth = ScanHistory.growers(in: state.scanHistory)
-        if !growth.isEmpty {
-            SurfaceSection("Growing", footer: "Compared with your scan from \(growth[0].since.formatted(.relative(presentation: .named))).") {
-                ForEach(Array(growth.enumerated()), id: \.element.id) { index, g in
+        switch ScanHistory.growthReport(in: state.scanHistory) {
+        case .noHistory:
+            if !state.categoryResults.isEmpty {
+                Text("No earlier scan to compare with yet. Scan again tomorrow to see what's growing.")
+                    .font(Theme.Font.caption).foregroundStyle(.secondary)
+            }
+        case .steady:
+            EmptyView()
+        case .growing(let nudges):
+            SurfaceSection("Growing") {
+                ForEach(Array(nudges.enumerated()), id: \.element.id) { index, nudge in
                     if index > 0 { RowDivider(inset: 48) }
                     Button {
                         state.section = .cleanup
-                        state.drilledCategory = g.category
+                        switch nudge.place {
+                        case .category(let category):
+                            state.showingElsewhere = false
+                            state.drilledCategory = category
+                        case .handledElsewhere:
+                            state.drilledCategory = nil
+                            state.showingElsewhere = true
+                        }
                     } label: {
                         HStack(spacing: Theme.Spacing.md) {
-                            Image(systemName: g.category.symbol)
+                            Image(systemName: nudge.symbol)
                                 .font(.system(size: 14)).foregroundStyle(.secondary).frame(width: 20)
-                            Text(g.category.displayName).font(Theme.Font.bodyStrong)
+                            Text(nudge.sentence()).font(Theme.Font.bodyStrong)
                             Spacer()
-                            Text("+\(g.delta.formattedBytes)")
-                                .font(Theme.Font.bodyStrong.monospacedDigit())
-                                .foregroundStyle(Theme.Status.caution)
-                            Text("now \(g.current.formattedBytes)")
+                            Text("now \(nudge.current.formattedBytes)")
                                 .font(Theme.Font.caption.monospacedDigit()).foregroundStyle(.secondary)
-                                .frame(width: 90, alignment: .trailing)
                             Image(systemName: "chevron.right")
                                 .font(.system(size: 10, weight: .semibold)).foregroundStyle(.tertiary)
                         }
@@ -407,6 +419,9 @@ struct OverviewView: View {
             let items = state.categoryResults.first { $0.category == .appSupport }?.items ?? []
             let safe = items.filter(\.isPreselectable).reduce(0) { $0 + $1.sizeBytes }
             let listed = items.reduce(0) { $0 + $1.sizeBytes }
+            let elsewhere = state.elsewhereItems
+                .filter { $0.url.path.contains("/Library/Application Support/") }
+                .reduce(0) { $0 + $1.sizeBytes }
             SurfaceSection("Application Support",
                            footer: "\(total.formattedBytes) in total. MacTidy only lists what rebuilds, re-downloads or belongs to removed apps.") {
                 Button("Review") {
@@ -420,9 +435,14 @@ struct OverviewView: View {
                 RowDivider(inset: 48)
                 appSupportRow("Worth a look", "Re-downloads, older versions, virtual machines, removed apps.",
                               listed - safe, tint: Theme.Status.caution)
+                if elsewhere > 0 {
+                    RowDivider(inset: 48)
+                    appSupportRow("Handled elsewhere", "Games and media other apps manage. Not counted as cleanable.",
+                                  elsewhere, tint: Theme.track)
+                }
                 RowDivider(inset: 48)
                 appSupportRow("Apps' own data", "Settings, logins, documents and databases. Never listed.",
-                              max(0, total - listed), tint: Theme.used)
+                              max(0, total - listed - elsewhere), tint: Theme.used)
             }
         }
     }
@@ -630,6 +650,15 @@ struct UndoToast: View {
 }
 
 // MARK: - Category symbols
+
+extension GrowthNudge {
+    var symbol: String {
+        switch place {
+        case .category(let category): category.symbol
+        case .handledElsewhere: HandledElsewhereLink.symbol
+        }
+    }
+}
 
 extension CoreKit.Category {
     var symbol: String {
