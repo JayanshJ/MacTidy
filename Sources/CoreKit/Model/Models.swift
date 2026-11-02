@@ -132,9 +132,9 @@ public enum Category: String, CaseIterable, Codable, Sendable, Identifiable {
         case .iosBackups:
             "Local iPhone/iPad backups from Finder syncing. Suggest-only: make sure the device is backed up elsewhere (or no longer yours) first."
         case .devCaches:
-            "Package-manager, build and toolchain caches: npm, pnpm, Yarn, Cargo, Go, Gradle, Maven, pip, uv, conda, SwiftPM, CocoaPods, Playwright, JetBrains, Xcode previews and more. Caches re-download on demand; toolchains, VM disks and extensions are marked and never preselected."
+            "Package-manager, build and toolchain caches: npm, pnpm, Yarn, Cargo, Go, Gradle, Maven, pip, uv, conda, SwiftPM, CocoaPods, Playwright, JetBrains, Xcode previews and more. Caches re-download on demand; toolchains, versions your tools don't currently use, VM disks and extensions are marked and never preselected."
         case .aiAgents:
-            "Claude Code, Codex, Cursor, Gemini, Continue and Aider logs, transcripts, worktrees and plugins, plus local model stores (Ollama, Hugging Face, LM Studio). Only logs and caches are preselected; transcripts, worktrees, plugins and models are marked Caution. Credentials and settings are never touched."
+            "Claude Code, Codex, Cursor, Gemini, Continue, Aider, Hermes and Agent Reach logs, transcripts, worktrees, plugins and older tool versions, plus local model stores (Ollama, Hugging Face, LM Studio). Only logs and caches are preselected; the rest is marked Caution. Credentials and settings are never touched."
         case .appSupport:
             "What can go inside apps' folders in ~/Library/Application Support: web and script caches of browsers and Electron apps (Slack, Discord, VS Code, Claude…), older versions kept beside newer ones, downloaded wallpapers and media caches, virtual machine disks, and folders of apps that are no longer installed. An installed app's own data (settings, logins, documents, databases) is never listed. Caches are preselected; anything that re-downloads, loses history or belongs to a removed app is marked Caution."
         case .bigFiles:

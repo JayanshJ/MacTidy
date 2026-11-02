@@ -27,13 +27,17 @@ public enum Risk: String, Sendable {
 /// line here. Sources never bypass the destructive pipeline: their items are
 /// plain `ScanItem`s that go `DeletionPlan → SafePathPolicy → Trasher`.
 public struct CleanSource: Sendable {
-    public enum Locate: Sendable {
+    public enum Locate: Sendable, Equatable {
         /// The directory is one item.
         case whole
         /// Each child is its own item (per project, per model, per skill), so
         /// the user can keep some. Children that are, or contain, another
         /// source's path are skipped so no byte is counted twice.
         case children
+        /// Installed versions other than the one the tool uses, found by
+        /// `SupersededVersions`. The current version is never an item, and a
+        /// tool whose current version can't be read lists nothing.
+        case superseded(SupersededVersions.Tool)
     }
 
     public let category: Category
@@ -101,6 +105,14 @@ extension CleanSource {
         .init(.devCaches, "Library/Caches/org.swift.swiftpm", "Swift Package Manager cache"),
         .init(.devCaches, "Library/Caches/CocoaPods", "CocoaPods download cache"),
         .init(.devCaches, "Library/Caches/org.carthage.CarthageKit", "Carthage cache"),
+        .init(.devCaches, "Library/Developer/Xcode/DocumentationCache", "Xcode documentation cache"),
+        .init(.devCaches, "Library/Developer/XCTestDevices", "Simulators Xcode cloned for parallel tests"),
+        .init(.devCaches, "Library/Developer/XCPGDevices", "Simulators Xcode made for playgrounds"),
+        .init(.devCaches, "Library/iTunes/iPhone Software Updates", "iPhone update file (downloaded again if needed)", .safe, .children),
+        .init(.devCaches, "Library/iTunes/iPad Software Updates", "iPad update file (downloaded again if needed)", .safe, .children),
+        // On current toolchains this is a symlink to Library/Caches/org.swift.swiftpm,
+        // listed above; only a real folder from an older toolchain is an item.
+        .init(.devCaches, ".swiftpm/cache", "Swift Package Manager cache"),
 
         // Python
         .init(.devCaches, "Library/Caches/pip", "pip cache"),
@@ -127,6 +139,55 @@ extension CleanSource {
         .init(.devCaches, ".cache/puppeteer", "Puppeteer browsers"),
         .init(.devCaches, "Library/Caches/Cypress", "Cypress binary", .safe, .children),
         .init(.devCaches, "Library/Caches/JetBrains", "JetBrains IDE cache (re-indexes on open)", .safe, .children),
+        // The server itself downloads again on the next connection; extensions
+        // don't, and each server's `data` folder (settings, state) is never listed.
+        .init(.devCaches, ".vscode-server/bin", "VS Code remote server (downloaded again on connect)"),
+        .init(.devCaches, ".vscode-server/cli/servers", "VS Code remote server (downloaded again on connect)"),
+        .init(.devCaches, ".vscode-server/extensions", "VS Code remote extensions (reinstall needed)", .caution),
+        .init(.devCaches, ".cursor-server/bin", "Cursor remote server (downloaded again on connect)"),
+        .init(.devCaches, ".cursor-server/cli/servers", "Cursor remote server (downloaded again on connect)"),
+        .init(.devCaches, ".cursor-server/extensions", "Cursor remote extensions (reinstall needed)", .caution),
+
+        // Ruby, .NET, JVM, Haskell, OCaml, Elixir, Julia. Only the download
+        // caches are Safe. Sibling folders hold config, tokens and things the
+        // user published or installed, so these are never listed whole.
+        .init(.devCaches, ".gem/specs", "RubyGems index cache"),
+        .init(.devCaches, ".gem/ruby", "Gems installed for one Ruby (reinstall needed)", .caution, .children),
+        .init(.devCaches, ".nuget/packages", "NuGet package cache"),
+        .init(.devCaches, ".ivy2/cache", "Ivy cache"),
+        .init(.devCaches, ".stack/pantry", "Stack package index"),
+        .init(.devCaches, ".stack/programs", "GHC installed by Stack (downloaded again on build)", .caution),
+        .init(.devCaches, ".stack/snapshots", "Haskell packages built by Stack (slow to rebuild)", .caution),
+        .init(.devCaches, ".cabal/packages", "Cabal downloads (run cabal update afterwards)", .caution),
+        .init(.devCaches, ".cabal/store", "Haskell packages built by Cabal (slow to rebuild)", .caution),
+        .init(.devCaches, ".opam/download-cache", "opam download cache"),
+        .init(.devCaches, ".hex/packages", "Hex package cache"),
+        .init(.devCaches, ".mix/archives", "Mix archives (reinstall with mix local.hex)", .caution),
+        .init(.devCaches, ".julia/artifacts", "Julia binary artifacts (run Pkg.instantiate afterwards)", .caution),
+        .init(.devCaches, ".docker/buildx", "Docker Buildx state (custom builders are forgotten)", .caution),
+
+        // ~/.local/share holds tools and people's own data side by side, so an
+        // unknown child is Caution. What's named below is listed on its own,
+        // and a child holding a named one is skipped: ~/.local/share/claude
+        // (the Claude Code install) and ~/.local/share/uv never appear whole.
+        .init(.devCaches, ".local/share", "Command-line tool data (may be your own, check first)", .caution, .children),
+        .init(.devCaches, ".local/share/pnpm/store", "pnpm store"),
+        .init(.devCaches, ".local/share/virtualenvs", "Pipenv virtualenv (pipenv install rebuilds it)", .caution, .children),
+        .init(.devCaches, ".local/share/uv/python", "Python installed by uv (its tools and venvs stop working)", .caution, .children),
+        .init(.devCaches, ".local/share/uv/tools", "Tool installed with uv (reinstall needed)", .caution, .children),
+        .init(.devCaches, ".local/share/Trash", "Files command-line tools moved to their own trash", .caution),
+        .init(.devCaches, ".local/share/containers", "Podman machines and images", .danger),
+
+        // Superseded versions. Always Caution: none reinstalls itself, and a
+        // project outside the dev roots may still ask for one.
+        .init(.devCaches, ".nvm/versions/node", "Node version, not your nvm default (reinstall needed)", .caution, .superseded(.nvm)),
+        .init(.devCaches, ".rbenv/versions", "Ruby version, not your rbenv global (reinstall needed)", .caution, .superseded(.rbenv)),
+        .init(.devCaches, ".asdf/installs", "asdf version, not in ~/.tool-versions (reinstall needed)", .caution, .superseded(.asdf)),
+        .init(.devCaches, "Library/Java/JavaVirtualMachines", "Older JDK build, a newer one is installed (reinstall needed)", .caution, .superseded(.java)),
+        .init(.devCaches, "Library/Android/sdk/build-tools", "Older Android build tools (Gradle downloads them if needed)", .caution, .superseded(.androidBuildTools)),
+        .init(.devCaches, "Library/Android/sdk/platforms", "Older Android platform (Gradle downloads it if needed)", .caution, .superseded(.androidPlatforms)),
+        .init(.devCaches, "Library/Android/sdk/ndk", "Older Android NDK (Gradle downloads it if needed)", .caution, .superseded(.androidNDK)),
+        .init(.devCaches, "Library/Application Support/JetBrains/Toolbox/apps", "Older IDE build Toolbox keeps for rollback", .caution, .superseded(.jetBrainsToolbox)),
     ]
 
     /// AI coding agents and local model stores. Credentials and settings in
@@ -155,11 +216,21 @@ extension CleanSource {
         .init(.aiAgents, ".cursor/extensions", "Cursor extensions (reinstall needed)", .caution),
         .init(.aiAgents, ".continue/index", "Continue code index (rebuilt)"),
         .init(.aiAgents, ".aider/caches", "Aider cache"),
+        .init(.aiAgents, ".local/share/claude/versions", "Older Claude Code version, not the one in use", .caution, .superseded(.claudeCode)),
+        // Hermes and Agent Reach keep tokens, memories and sessions beside
+        // these, and Hermes runs from its checkout and environments, so only
+        // download caches and tools that aren't in use are listed.
+        .init(.aiAgents, ".hermes/cache/uv", "Hermes package cache"),
+        .init(.aiAgents, ".hermes/tools", "Older Hermes tool, not the version in use", .caution, .superseded(.hermesTools)),
+        .init(.aiAgents, ".agent-reach/cache", "Agent Reach download cache"),
+        .init(.aiAgents, ".agent-reach/tools", "Agent Reach tool (reinstall needed)", .caution, .children),
         // Local models: big, slow to re-pull. Ollama is one store (blobs are
         // shared between models), so it is one item, never split.
         .init(.aiAgents, ".ollama/models", "Ollama models (re-pull needed)", .caution),
         .init(.aiAgents, ".cache/huggingface/hub", "Hugging Face model (re-download needed)", .caution, .children),
         .init(.aiAgents, ".lmstudio/models", "LM Studio models (re-download needed)", .caution, .children),
+        .init(.aiAgents, ".lmstudio/extensions", "LM Studio runtimes (re-download needed)", .caution),
+        .init(.aiAgents, ".lmstudio/hub", "LM Studio Hub downloads and presets", .caution),
     ]
 
     /// The source an item was found by. Matched on the path tail so it works
@@ -178,6 +249,8 @@ extension CleanSource {
             let matches = switch source.locate {
             case .whole: path.hasSuffix(tail)
             case .children: item.category == source.category && parent.hasSuffix(tail)
+            // asdf and Toolbox nest versions a level or two below the source.
+            case .superseded: item.category == source.category && path.contains(tail + "/")
             }
             if matches { best = source }
         }
@@ -210,9 +283,16 @@ extension CategoryScanner {
         // Both sides normalized the same way: listings return /private/var/…
         // while resolvingSymlinksInPath maps that back to /var/….
         let allRoots = CleanSource.all.map { home.appending(path: $0.path).resolvingSymlinksInPath().path }
+        let policy = SafePathPolicy(home: home)
+        let devRoots = devRoots
+        let sources = CleanSource.all.filter { $0.category == category }
+        let superseded = sources.filter { if case .superseded = $0.locate { true } else { false } }
         return await withTaskGroup(of: [ScanItem].self) { group in
-            for source in CleanSource.all where source.category == category {
-                group.addTask { await Self.scan(source, home: home, allRoots: allRoots) }
+            for source in sources where !superseded.contains(where: { $0.path == source.path }) {
+                group.addTask { await Self.scan(source, home: home, allRoots: allRoots, policy: policy) }
+            }
+            group.addTask {
+                Self.supersededItems(superseded, home: home, devRoots: devRoots, policy: policy)
             }
             var items: [ScanItem] = []
             for await batch in group { items += batch }
@@ -220,11 +300,15 @@ extension CategoryScanner {
         }
     }
 
-    private static func scan(_ source: CleanSource, home: URL, allRoots: [String]) async -> [ScanItem] {
+    private static func scan(_ source: CleanSource, home: URL, allRoots: [String],
+                             policy: SafePathPolicy) async -> [ScanItem] {
         let url = home.appending(path: source.path)
         guard FileManager.default.fileExists(atPath: url.path) else { return [] }
         switch source.locate {
         case .whole:
+            // A symlink's bytes belong to its target: sizing it would count
+            // them twice, and trashing it would free nothing.
+            guard (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink != true else { return [] }
             let size = DiskScanner.allocatedSize(of: url)
             guard size > 0 else { return [] }
             let modified = try? url.resourceValues(forKeys: [.contentModificationDateKey])
@@ -236,12 +320,18 @@ extension CategoryScanner {
             return await DiskScanner.topLevelScan(root: url, category: source.category)
                 .filter { child in
                     let p = child.url.resolvingSymlinksInPath().path
-                    return child.sizeBytes > 0
-                        && !allRoots.contains { $0 == p || $0.hasPrefix(p + "/") }
+                    // Hidden loose files are bookkeeping (.DS_Store, .lock), and
+                    // a child the policy refuses holds a secret: neither is a row.
+                    let bookkeeping = !child.isDirectory && child.url.lastPathComponent.hasPrefix(".")
+                    guard child.sizeBytes > 0, !bookkeeping,
+                          case .success = policy.classify(child.url) else { return false }
+                    return !allRoots.contains { $0 == p || $0.hasPrefix(p + "/") }
                 }
                 .map { ScanItem(url: $0.url, sizeBytes: $0.sizeBytes, isDirectory: $0.isDirectory,
                                 category: source.category, detail: source.label.isEmpty ? nil : source.label,
                                 lastModified: $0.lastModified) }
+        case .superseded:
+            return []  // Listed together by `supersededItems`.
         }
     }
 }

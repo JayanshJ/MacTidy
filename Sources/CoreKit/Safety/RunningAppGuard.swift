@@ -32,13 +32,14 @@ public enum RunningAppGuard {
 
     static let rules: [Rule] = [
         Rule(bundleID: "com.apple.dt.Xcode", name: "Xcode",
-             paths: ["Library/Developer/Xcode", "Library/Caches/org.swift.swiftpm", "Library/Developer/CoreSimulator"],
+             paths: ["Library/Developer/Xcode", "Library/Developer/XCTestDevices", "Library/Developer/XCPGDevices",
+                     "Library/Caches/org.swift.swiftpm", "Library/Developer/CoreSimulator"],
              reason: "Xcode builds and indexes out of these folders. Quit it first so a build doesn't fail on files that vanished."),
         Rule(bundleID: "com.apple.iphonesimulator", name: "Simulator",
              paths: ["Library/Developer/CoreSimulator", "Library/Developer/Xcode/UserData/Previews"],
              reason: "A running simulator uses these files."),
         Rule(bundleID: "com.google.android.studio", name: "Android Studio",
-             paths: [".android/avd", ".gradle"],
+             paths: [".android/avd", ".gradle", "Library/Android/sdk"],
              reason: "Android Studio and its emulator use these folders while open."),
     ]
 
