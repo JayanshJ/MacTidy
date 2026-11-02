@@ -83,7 +83,7 @@ struct MenuBarPanel: View {
     /// without a bundle (the same fallback the Welcome view uses).
     private var appIcon: some View {
         Group {
-            if let nsImage = NSImage(named: "AppIcon") ?? bundledAppIcon {
+            if let nsImage = Self.appIconImage {
                 Image(nsImage: nsImage)
                     .resizable()
                     .interpolation(.high)
@@ -97,13 +97,14 @@ struct MenuBarPanel: View {
         .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
     }
 
-    private var bundledAppIcon: NSImage? {
+    /// Loaded once; reading the .icns from disk on every render was wasted work.
+    private static let appIconImage: NSImage? = NSImage(named: "AppIcon") ?? {
         let bundle = Bundle.main
         let url = bundle.url(forResource: "AppIcon", withExtension: "icns")
             ?? bundle.url(forResource: "AppIcon", withExtension: "png")
         guard let url else { return nil }
         return NSImage(contentsOf: url)
-    }
+    }()
 
     /// Shows the quick-check recency (the monitor's own "last checked" time)
     /// so the user can tell how stale the quick-check number is. Hidden when

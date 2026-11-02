@@ -154,6 +154,7 @@ struct QuitConfirmationSheet: View {
     let onCompleted: (Bool) -> Void
     @State private var results: [(String, Bool)] = []
     @State private var done = false
+    @State private var isQuitting = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -177,10 +178,11 @@ struct QuitConfirmationSheet: View {
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                if isQuitting { ProgressView().controlSize(.small) }
                 Button(done ? "Done" : "Quit") { quit() }
                     .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(done)
+                    .disabled(done || isQuitting)
             }
         }
         .padding(Theme.Spacing.xl)
@@ -193,14 +195,22 @@ struct QuitConfirmationSheet: View {
     private func quit() {
         // Graceful quit via AppleScript — apps get a chance to save state,
         // unlike kill -9. Never used on denied/system processes (the resolver
-        // already filtered those out before the insight reached here).
-        for name in apps {
-            let escaped = name.replacingOccurrences(of: "\"", with: "\\\"")
-            let script = "tell application \"\(escaped)\" to quit"
-            let out = Shell.run("/usr/bin/osascript", ["-e", script])
-            results.append((name, out?.succeeded ?? false))
+        // already filtered those out before the insight reached here). Each
+        // quit blocks until the app exits (longer behind a save dialog), so
+        // it runs off the main thread and results appear one by one.
+        isQuitting = true
+        Task {
+            for name in apps {
+                let escaped = name.replacingOccurrences(of: "\"", with: "\\\"")
+                let script = "tell application \"\(escaped)\" to quit"
+                let ok = await Task.detached {
+                    Shell.run("/usr/bin/osascript", ["-e", script])?.succeeded ?? false
+                }.value
+                results.append((name, ok))
+            }
+            isQuitting = false
+            done = true
+            onCompleted(true)
         }
-        done = true
-        onCompleted(true)
     }
 }

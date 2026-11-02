@@ -126,6 +126,8 @@ the normal pipeline and refuses dev roots or repos that contain other repos.
 
 `Sources/CoreKit/Scanning/`: `DiskScanner` (shared engine, `.totalFileAllocatedSize`
 = real on-disk blocks, symlinks not followed so trees can't double-count or escape;
+sizing goes through `BulkWalker`: `getattrlistbulk` batches, helper threads under a
+process-wide cap, 4–15× faster than a `FileManager` enumerator;
 also `largeFiles(under:minSize:)` which skips build/VCS trees to avoid overlap),
 `CategoryScanner` (the curated cleanup categories), `AppUninstaller`,
 `LaunchItemsAuditor`, `DuplicateFinder` (clone-aware via inode + `F_LOG2PHYS`),

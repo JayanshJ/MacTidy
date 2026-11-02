@@ -23,6 +23,7 @@ struct DeletionConfirmationSheet: View {
     @State private var outcome: DeletionOutcome?
     @State private var actionOutcome: UninstallActionOutcome?
     @State private var conflicts: [RunningAppConflict] = []
+    @State private var isWorking = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
@@ -37,9 +38,10 @@ struct DeletionConfirmationSheet: View {
         .background(Theme.canvas)
         .task {
             // Re-check while the sheet is open so quitting the app clears the warning.
+            let urls = plan.candidates.map(\.url)
             while !Task.isCancelled, outcome == nil {
                 let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
-                let found = RunningAppGuard.conflicts(for: plan.candidates.map(\.url), runningBundleIDs: running)
+                let found = RunningAppGuard.conflicts(for: urls, runningBundleIDs: running)
                 if found != conflicts { conflicts = found }
                 try? await Task.sleep(for: .seconds(1))
             }
@@ -103,11 +105,11 @@ struct DeletionConfirmationSheet: View {
                         }
                     }
                 }
-                SurfaceSection("Items") {
+                SurfaceSection("Items", lazy: true) {
                     ForEach(Array(plan.candidates.enumerated()), id: \.element.id) { i, candidate in
                         if i > 0 { RowDivider(inset: 48) }
                         HStack(spacing: Theme.Spacing.md) {
-                            Image(nsImage: NSWorkspace.shared.icon(forFile: candidate.url.path))
+                            Image(nsImage: FileIcon.image(for: candidate.url))
                                 .resizable().frame(width: 20, height: 20)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(candidate.url.lastPathComponent).font(Theme.Font.bodyStrong).lineLimit(1)
@@ -131,21 +133,29 @@ struct DeletionConfirmationSheet: View {
             Spacer()
             Button("Cancel") { dismiss() }
                 .keyboardShortcut(.cancelAction)
+            if isWorking { ProgressView().controlSize(.small) }
             Button(kind == .uninstall ? "Uninstall" : "Move to Trash") { execute() }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
-                .disabled(plan.isEmpty && uninstallActions.isEmpty)
+                .disabled(isWorking || (plan.isEmpty && uninstallActions.isEmpty))
         }
         .controlSize(.large)
     }
 
     private func execute() {
-        if !uninstallActions.isEmpty {
-            actionOutcome = AppUninstaller.performActions(uninstallActions)
-        }
+        guard !isWorking else { return }
+        isWorking = true
+        let actions = uninstallActions
         Task { @MainActor in
+            // tccutil and lsregister are blocking subprocesses.
+            if !actions.isEmpty {
+                actionOutcome = await Task.detached(priority: .userInitiated) {
+                    AppUninstaller.performActions(actions)
+                }.value
+            }
             let result = await state.execute(plan, extraAllowedRoots: extraAllowedRoots, kind: kind)
             outcome = result
+            isWorking = false
         }
     }
 
@@ -164,7 +174,7 @@ struct DeletionConfirmationSheet: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
                 if !outcome.skipped.isEmpty {
-                    SurfaceSection("Left in place") {
+                    SurfaceSection("Left in place", lazy: true) {
                         ForEach(Array(outcome.skipped.enumerated()), id: \.element.id) { i, record in
                             if i > 0 { RowDivider() }
                             VStack(alignment: .leading, spacing: 2) {
@@ -183,7 +193,7 @@ struct DeletionConfirmationSheet: View {
                     }
                 }
                 if !outcome.trashed.isEmpty {
-                    SurfaceSection("Moved to the Trash") {
+                    SurfaceSection("Moved to the Trash", lazy: true) {
                         ForEach(Array(outcome.trashed.enumerated()), id: \.element.id) { i, record in
                             if i > 0 { RowDivider() }
                             Text(record.original.path)

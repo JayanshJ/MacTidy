@@ -82,7 +82,7 @@ struct StorageByAppTab: View {
         let isSelected = selectedAppID == entry.app.id
         return Button { selectedAppID = entry.app.id } label: {
             HStack(spacing: Theme.Spacing.md) {
-                Image(nsImage: NSWorkspace.shared.icon(forFile: entry.app.url.path))
+                Image(nsImage: FileIcon.image(for: entry.app.url))
                     .resizable().frame(width: 30, height: 30)
                 VStack(alignment: .leading, spacing: 5) {
                     HStack {
@@ -110,7 +110,7 @@ struct StorageByAppTab: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
                     HStack(spacing: Theme.Spacing.lg) {
-                        Image(nsImage: NSWorkspace.shared.icon(forFile: entry.app.url.path))
+                        Image(nsImage: FileIcon.image(for: entry.app.url))
                             .resizable().frame(width: 64, height: 64)
                         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                             Text(entry.app.name).font(Theme.Font.title)

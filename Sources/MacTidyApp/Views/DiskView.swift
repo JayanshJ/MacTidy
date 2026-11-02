@@ -114,7 +114,7 @@ struct DirectoryExplorerView: View {
             if item.isDirectory { root = item.url } else { showInFinder(item.url) }
         } label: {
             HStack(spacing: Theme.Spacing.md) {
-                Image(nsImage: NSWorkspace.shared.icon(forFile: item.url.path))
+                Image(nsImage: FileIcon.image(for: item.url))
                     .resizable().frame(width: 22, height: 22)
                 Text(item.url.lastPathComponent).font(Theme.Font.bodyStrong).lineLimit(1)
                 Spacer(minLength: Theme.Spacing.lg)
@@ -197,7 +197,9 @@ struct DirectoryExplorerView: View {
 }
 
 extension DeletionPlan: Identifiable {
-    public var id: String { candidates.map(\.url.path).joined(separator: "|") }
+    /// The candidates' ids are fresh per plan, so the first one identifies
+    /// it. (Joining every path rebuilt a huge string on each view update.)
+    public var id: UUID? { candidates.first?.id }
 }
 
 /// Sheet showing an AI verdict + one-line reason for a disk-browser file.

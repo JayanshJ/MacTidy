@@ -179,9 +179,15 @@ private struct SidebarRow: View {
 /// Boot-volume capacity, pinned under the sidebar.
 private struct DiskFooter: View {
     @Environment(AppState.self) private var state
-    @State private var pressure = DiskPressure.current()
+    @State private var pressure: DiskPressure? = SnapshotHarness.isActive ? DiskPressure.current() : nil
 
     var body: some View {
+        Group { content }
+            .task(id: DiskPressure.refreshKey(state)) { pressure = await DiskPressure.load() }
+    }
+
+    @ViewBuilder
+    private var content: some View {
         if let pressure, pressure.isAvailable {
             VStack(alignment: .leading, spacing: Theme.Spacing.xs + 2) {
                 HStack(alignment: .firstTextBaseline) {
@@ -196,9 +202,20 @@ private struct DiskFooter: View {
             }
             .padding(.horizontal, Theme.Spacing.lg)
             .padding(.vertical, Theme.Spacing.md)
-            .onChange(of: state.lastScanDate) { _, _ in self.pressure = DiskPressure.current() }
-            .onChange(of: state.recentTrashed.count) { _, _ in self.pressure = DiskPressure.current() }
         }
+    }
+}
+
+extension DiskPressure {
+    /// Off the main thread: asking for purgeable space goes through
+    /// CacheDelete and can take a few hundred milliseconds.
+    static func load() async -> DiskPressure? {
+        await Task.detached(priority: .utility) { DiskPressure.current() }.value
+    }
+
+    /// Changes after every scan and every cleanup, when free space moves.
+    @MainActor static func refreshKey(_ state: AppState) -> String {
+        "\(state.lastScanDate?.timeIntervalSince1970 ?? 0)/\(state.recentTrashed.count)"
     }
 }
 
@@ -230,11 +247,7 @@ private struct ScanToolbarButton: View {
 struct OverviewView: View {
     @Environment(AppState.self) private var state
     @State private var confirmPlan: DeletionPlan?
-    @State private var pressure = DiskPressure.current()
-
-    private var safeItems: [ScanItem] {
-        state.categoryResults.flatMap(\.items).filter(\.isPreselectable)
-    }
+    @State private var pressure: DiskPressure? = SnapshotHarness.isActive ? DiskPressure.current() : nil
 
     var body: some View {
         if state.flowPhase == .scanning || (state.isScanningCategories && state.categoryResults.isEmpty) {
@@ -245,7 +258,7 @@ struct OverviewView: View {
     }
 
     private var content: some View {
-        let safe = safeItems
+        let safe = state.safeItems
         let safeBytes = safe.reduce(0) { $0 + $1.sizeBytes }
         let reviewBytes = state.totalReclaimable - safeBytes
         let ranked = state.categoryResults.filter { $0.totalBytes > 0 }
@@ -268,11 +281,10 @@ struct OverviewView: View {
         }
         .background(Theme.canvas)
         .sheet(item: $confirmPlan) { plan in
-            DeletionConfirmationSheet(title: "Clean everything that's safe?", plan: plan) { _ in
-                Task { await state.rescanCategories() }
-            }
+            // No rescan: the cleanup already pruned trashed items from the results.
+            DeletionConfirmationSheet(title: "Clean everything that's safe?", plan: plan)
         }
-        .onChange(of: state.lastScanDate) { _, _ in pressure = DiskPressure.current() }
+        .task(id: DiskPressure.refreshKey(state)) { pressure = await DiskPressure.load() }
     }
 
     @ViewBuilder
@@ -302,7 +314,7 @@ struct OverviewView: View {
                 Spacer(minLength: Theme.Spacing.lg)
                 VStack(alignment: .trailing, spacing: Theme.Spacing.sm) {
                     Button {
-                        confirmPlan = DeletionPlan(items: safeItems)
+                        confirmPlan = DeletionPlan(items: state.safeItems)
                     } label: {
                         Text("Clean Safe Items")
                             .font(.system(size: 13, weight: .semibold))
@@ -557,10 +569,7 @@ struct UndoToast: View {
         isRestoring = true
         restoreErrors = []
         Task {
-            var errors: [String] = []
-            for record in records {
-                do { _ = try state.restore(record) } catch { errors.append(record.original.lastPathComponent) }
-            }
+            let errors = await state.restore(records).map(\.original.lastPathComponent)
             isRestoring = false
             restoreErrors = errors
             if errors.isEmpty { state.clearUndoToast() }

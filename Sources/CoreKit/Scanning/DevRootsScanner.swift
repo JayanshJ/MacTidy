@@ -1,6 +1,15 @@
 import Foundation
 
 extension CategoryScanner {
+    /// Every category `devRootsScan` answers. Its result has a key for each,
+    /// empty when nothing was found, so a cache hit never falls back to a
+    /// per-category re-walk of the dev roots.
+    static let devRootsCategories: Set<Category> = [
+        .nodeModules, .rustTargets, .podDirs, .swiftBuildDirs, .gradleBuildDirs,
+        .mavenTarget, .phpVendor, .flutterDartTool, .jsBuildDirs, .pythonCaches,
+        .unityLibrary,
+    ]
+
     /// Single-pass walk of all dev roots that classifies every directory
     /// against ALL build-dir + Python-cache + Unity patterns in one enumeration.
     /// Returns a dictionary keyed by category, so the individual `scan(_:)`
@@ -31,7 +40,7 @@ extension CategoryScanner {
         let venvMarkers = ["pyproject.toml", "requirements.txt", "setup.py"]
         let skipDirs: Set<String> = [".git", "node_modules", "target", "build", ".build", "DerivedData"]
 
-        var results: [Category: [ScanItem]] = [:]
+        var results = Dictionary(uniqueKeysWithValues: Self.devRootsCategories.map { ($0, [ScanItem]()) })
         let fm = FileManager.default
         var pending: [(url: URL, cat: Category, detail: String, modified: Date?)] = []
 

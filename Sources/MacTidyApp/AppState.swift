@@ -94,7 +94,17 @@ final class AppState {
     /// The most recent AI reasoning string, surfaced with the plan.
     var lastAIReasoning: String?
 
-    var categoryResults: [CategoryResult] = []
+    var categoryResults: [CategoryResult] = [] {
+        didSet { safeItems = Self.safeItems(in: categoryResults) }
+    }
+    /// Every item bulk "Clean Safe Items" would take. Cached: each check
+    /// matches the item against the whole cleanup registry, and the Overview
+    /// and Cleanup pages read this on every render.
+    private(set) var safeItems: [ScanItem] = []
+
+    private static func safeItems(in results: [CategoryResult]) -> [ScanItem] {
+        results.flatMap(\.items).filter(\.isPreselectable)
+    }
     /// Categories finished so far in the running scan, newest last. Drives the
     /// live "found so far" view while scanning.
     var scanPartial: [CategoryResult] = []
@@ -210,7 +220,6 @@ final class AppState {
         // Restore persisted state so relaunch isn't a blank screen + full rescan.
         self.recentTrashed = trashLog.load()
         self.cleanupHistory = cleanupLog.load()
-        self.trashBytes = TrashUsage.totalBytes()
         self.scanHistory = scanHistoryStore.load()
         // The one-time first-reclaim milestone: nil until the first real
         // cleanup that frees space, and only ever set once. Read from
@@ -222,8 +231,10 @@ final class AppState {
         applyLogRetention()
         if let results = Self.loadLastScan(from: lastScanURL) {
             self.categoryResults = IgnoreList.load().filter(results)
+            self.safeItems = Self.safeItems(in: categoryResults) // didSet doesn't run in init
             self.scanStatus = "Last scan restored from previous session"
         }
+        if !SnapshotHarness.isActive { refreshTrashBytes() }
     }
 
     func refreshFDA() {
@@ -267,10 +278,14 @@ final class AppState {
                 lastScanDate = Date.now
                 UserDefaults.standard.set(Date.now.timeIntervalSince1970, forKey: "MacTidy.lastScanDate")
                 persistLastScan(results)
-                let snapshot = ScanSnapshot(results: results)
-                scanHistoryStore.append(snapshot)
-                scanHistory = scanHistoryStore.load()
             }
+            // History is a JSON read-modify-write; keep it off the main thread.
+            let store = scanHistoryStore
+            let history = await Task.detached(priority: .utility) {
+                store.append(ScanSnapshot(results: results))
+                return store.load()
+            }.value
+            scanHistory = history
         }
         scanTask = task
         await task.value
@@ -327,12 +342,12 @@ final class AppState {
 
     /// Preloads Docker state so the Docker tab doesn't reload on every visit.
     private func preloadDocker() async {
-        let avail = DockerScanner.availability()
-        dockerAvailability = avail
-        guard avail == .available else { dockerState = nil; return }
-        dockerState = DockerScanner.scan()
-        dockerDfTable = DockerScanner.systemDFTable()
-        dockerBuilderCacheBytes = DockerBuilderCache.reclaimableBytes()
+        let snapshot = await DockerSnapshot.load()
+        dockerAvailability = snapshot.availability
+        dockerState = snapshot.state
+        guard snapshot.availability == .available else { return }
+        dockerDfTable = snapshot.dfTable
+        dockerBuilderCacheBytes = snapshot.builderCacheBytes
     }
 
     /// Preloads Dev Terminal data (ports, dev tool caches, TM snapshots).
@@ -360,9 +375,17 @@ final class AppState {
     func ignore(_ url: URL) {
         ignoreList.add(url)
         ignoreList.save()
-        categoryResults = ignoreList.filter(categoryResults)
-        persistLastScan(categoryResults)
-        if !projects.isEmpty { Task { await refreshProjects() } }
+        // Only the new entry can hide anything; matching resolves symlinks
+        // for every item, so it runs off the main thread.
+        let added = IgnoreList(paths: [url.path])
+        let before = categoryResults
+        Task {
+            let filtered = await Task.detached(priority: .userInitiated) { added.filter(before) }.value
+            // Results replaced meanwhile (a scan landed): filter those instead.
+            categoryResults = categoryResults == before ? filtered : added.filter(categoryResults)
+            persistLastScan(categoryResults)
+            if !projects.isEmpty { await refreshProjects() }
+        }
     }
 
     /// Takes effect on the next scan.
@@ -594,12 +617,16 @@ final class AppState {
     /// back in the outcome's `failed` list. Unlike trashing, these actions are
     /// NOT Trash-undoable, so they are NOT recorded to `TrashLog` — only the
     /// reclaim-over-time `CleanupLog` gets an entry.
+    /// The commands (docker rm, compose down…) can take minutes, so they run
+    /// off the main thread.
     @discardableResult
     func executeShellActions(
         _ actions: [any ShellAction],
         kind: CleanupEntry.Kind
-    ) -> ShellActionOutcome {
-        let outcome = ShellActionExecutor.execute(actions)
+    ) async -> ShellActionOutcome {
+        let outcome = await Task.detached(priority: .userInitiated) {
+            ShellActionExecutor.execute(actions)
+        }.value
         if !outcome.succeeded.isEmpty {
             cleanupLog.append(CleanupEntry(
                 kind: kind,
@@ -750,8 +777,10 @@ final class AppState {
         // Run the snapshot-gathering work off the main thread — ProcessScanner
         // stats ~500 processes, DiskPressure reads sysctl, and LaunchItemsAuditor
         // walks plist dirs. The old code ran all of this on @MainActor.
-        let freshCategories = prunedForMissingFiles(categoryResults)
+        let categories = categoryResults
         let snapshot = await Task.detached {
+            // A stat + realpath per scan item: thousands of syscalls.
+            let freshCategories = Self.prunedForMissingFiles(categories)
             let processes = await Task.detached { ProcessScanner.scan() }.value
             let memory = await Task.detached { ProcessScanner.memorySummary() }.value
             let pressure = await Task.detached { DiskPressure.current() }.value
@@ -805,6 +834,19 @@ final class AppState {
         return destination
     }
 
+    /// Restores several records (the Undo toast) off the main thread, then
+    /// rewrites the log and re-sizes the Trash once. Returns the records that
+    /// could not be restored; they stay in the log.
+    func restore(_ records: [TrashRecord]) async -> [TrashRecord] {
+        let results = await Task.detached(priority: .userInitiated) {
+            records.map { record in (record, (try? Restorer.restore(record)) != nil) }
+        }.value
+        trashLog.remove(Set(results.filter(\.1).map(\.0.id)))
+        recentTrashed = trashLog.load()
+        refreshTrashBytes()
+        return results.filter { !$0.1 }.map(\.0)
+    }
+
     // MARK: - Memory maintenance
 
     /// The most recent disk-cache purge outcome, surfaced inline on the
@@ -815,8 +857,11 @@ final class AppState {
     /// beyond quitting idle apps. Non-throwing; result lands in
     /// `lastPurgeResult` for the UI.
     @discardableResult
-    func purgeDiskCache() -> MemoryMaintenance.PurgeResult {
-        let result = MemoryMaintenance.purgeDiskCache()
+    func purgeDiskCache() async -> MemoryMaintenance.PurgeResult {
+        // Blocks for the whole admin password prompt plus `purge` itself.
+        let result = await Task.detached(priority: .userInitiated) {
+            MemoryMaintenance.purgeDiskCache()
+        }.value
         lastPurgeResult = result
         return result
     }
@@ -828,6 +873,13 @@ final class AppState {
         recentTrashed = trashLog.load()
     }
 
+    /// Clears the whole Recently Trashed list in one log write. The items
+    /// stay in the Trash.
+    func dismissAllTrashed() {
+        trashLog.clear()
+        recentTrashed = []
+    }
+
     /// Clears the post-cleanup Undo toast.
     func clearUndoToast() {
         lastUndoableOutcome = nil
@@ -836,19 +888,43 @@ final class AppState {
     func refreshLogs() {
         // Reconcile the Recently Trashed list with the actual Trash: drop
         // entries whose Trash location no longer exists (the user emptied the
-        // Trash in Finder between sessions) before showing the list.
-        trashLog.pruneMissing()
-        recentTrashed = trashLog.load()
-        cleanupHistory = cleanupLog.load()
+        // Trash in Finder between sessions) before showing the list. Runs on
+        // every activation, so the stat-per-record and JSON work is detached.
+        let trashLog = trashLog, cleanupLog = cleanupLog
+        Task {
+            let (trashed, history) = await Task.detached(priority: .utility) {
+                trashLog.pruneMissing()
+                return (trashLog.load(), cleanupLog.load())
+            }.value
+            if trashed != recentTrashed { recentTrashed = trashed }
+            if history != cleanupHistory { cleanupHistory = history }
+        }
         refreshTrashBytes()
     }
+
+    /// The in-flight Trash sizing; a newer request replaces it.
+    private var trashBytesTask: Task<Void, Never>?
+    /// The latest scan-result prune after a cleanup (see `pruneDeleted`).
+    private var pruneTask: Task<Void, Never>?
 
     /// Re-sizes `~/.Trash` and republishes `trashBytes` so the nudge card and
     /// its dashboard gate reflect the current Trash — call after a trash and
     /// when the app becomes active (the user may have emptied the Trash in
-    /// Finder). Read-only.
+    /// Finder). Read-only. Walks the whole Trash (100k+ files after a
+    /// node_modules cleanup), so it runs off the main thread.
     func refreshTrashBytes() {
-        trashBytes = TrashUsage.totalBytes()
+        trashBytesTask?.cancel()
+        // Detached itself (not awaiting a detached child) so cancelling a
+        // superseded request actually stops its walk.
+        trashBytesTask = Task.detached(priority: .utility) { [weak self] in
+            let bytes = TrashUsage.totalBytes()
+            guard !Task.isCancelled else { return }
+            await self?.publishTrashBytes(bytes)
+        }
+    }
+
+    private func publishTrashBytes(_ bytes: Int64) {
+        if bytes != trashBytes { trashBytes = bytes }
     }
 
     // MARK: - Recording
@@ -937,7 +1013,7 @@ final class AppState {
     /// trashed outside the app (Finder, Trash emptied) isn't recommended
     /// again. Does not mutate `categoryResults` — a pure filter for the
     /// snapshot only. Delegates to the testable `OutcomeRecorder.pruneDeleted`.
-    private func prunedForMissingFiles(_ results: [CategoryResult]) -> [CategoryResult] {
+    private nonisolated static func prunedForMissingFiles(_ results: [CategoryResult]) -> [CategoryResult] {
         let fm = FileManager.default
         return OutcomeRecorder.pruneDeleted(
             results, trashedPaths: [], dropMissing: true,
@@ -956,33 +1032,42 @@ final class AppState {
     /// to `OutcomeRecorder.pruneDeleted` (unit-tested) and owns only the
     /// mutation + persistence.
     private func pruneDeleted(_ urls: [URL]) {
-        let trashed = Set(urls.map { $0.resolvingSymlinksInPath().standardizedFileURL.path })
-        guard !trashed.isEmpty else { return }
-        let before = categoryResults
-        // Run the per-item fileExists checks on a background thread to avoid
-        // blocking the main thread with potentially thousands of stat+realpath
-        // calls. The result is applied back on the main actor.
-        let resultsToPrune = categoryResults
+        guard !urls.isEmpty else { return }
+        // Path resolution and the per-item fileExists checks run on a
+        // background thread (thousands of stat+realpath calls); the result is
+        // applied back on the main actor. Chained, so back-to-back cleanups
+        // each prune the previous one's result.
         let fm = FileManager.default
-        Task { @MainActor in
+        let previous = pruneTask
+        pruneTask = Task { @MainActor in
+            await previous?.value
+            let before = categoryResults
             let pruned = await Task.detached(priority: .userInitiated) {
-                OutcomeRecorder.pruneDeleted(
-                    resultsToPrune, trashedPaths: trashed, dropMissing: true,
+                let trashed = Set(urls.map { $0.resolvingSymlinksInPath().standardizedFileURL.path })
+                return OutcomeRecorder.pruneDeleted(
+                    before, trashedPaths: trashed, dropMissing: true,
                     fileExists: { fm.fileExists(atPath: $0.resolvingSymlinksInPath().path) }
                 )
             }.value
+            // A scan that finished meanwhile is newer than this prune.
+            guard categoryResults == before, pruned != before else { return }
             categoryResults = pruned
-            if categoryResults != before {
-                persistLastScan(categoryResults)
-            }
+            persistLastScan(pruned)
         }
     }
 
     // MARK: - Scan persistence
 
+    /// Serial, so saves land in order; off the main thread because a big scan
+    /// encodes to megabytes of JSON.
+    private static let persistQueue = DispatchQueue(label: "com.jayansh.mactidy.last-scan", qos: .utility)
+
     private func persistLastScan(_ results: [CategoryResult]) {
-        guard let data = try? JSONEncoder().encode(results) else { return }
-        try? data.write(to: lastScanURL, options: .atomic)
+        let url = lastScanURL
+        Self.persistQueue.async {
+            guard let data = try? JSONEncoder().encode(results) else { return }
+            try? data.write(to: url, options: .atomic)
+        }
     }
 
     private static func loadLastScan(from url: URL) -> [CategoryResult]? {
@@ -1078,5 +1163,29 @@ final class AppState {
             installerMinAgeDays: installerMinAgeDays,
             screenshotMinAgeDays: screenshotMinAgeDays
         )
+    }
+}
+
+/// Everything the Docker tab shows, read with `docker` subprocesses (one
+/// `inspect` per image and container) off the main thread.
+struct DockerSnapshot: Sendable {
+    var availability: DockerScanner.Availability
+    var state: DockerState?
+    var dfTable: String?
+    var builderCacheBytes: Int64?
+
+    static func load() async -> DockerSnapshot {
+        await Task.detached(priority: .userInitiated) {
+            let availability = DockerScanner.availability()
+            guard availability == .available else { return DockerSnapshot(availability: availability) }
+            return DockerSnapshot(availability: availability,
+                                  state: DockerScanner.scan(),
+                                  dfTable: DockerScanner.systemDFTable(),
+                                  builderCacheBytes: DockerBuilderCache.reclaimableBytes())
+        }.value
+    }
+
+    static func isAvailable() async -> Bool {
+        await Task.detached { DockerScanner.availability() == .available }.value
     }
 }

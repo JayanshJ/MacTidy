@@ -21,6 +21,7 @@ struct ShellActionConfirmationSheet: View {
     var onCompleted: () -> Void = {}
 
     @State private var outcome: ShellActionOutcome?
+    @State private var isRunning = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -61,16 +62,21 @@ struct ShellActionConfirmationSheet: View {
         HStack {
             Spacer()
             Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+            if isRunning { ProgressView().controlSize(.small) }
             Button("Run") { execute() }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
                 .tint(.red)
-                .disabled(actions.isEmpty)
+                .disabled(isRunning || actions.isEmpty)
         }
     }
 
     private func execute() {
-        outcome = state.executeShellActions(actions, kind: kind)
+        isRunning = true
+        Task {
+            outcome = await state.executeShellActions(actions, kind: kind)
+            isRunning = false
+        }
     }
 
     @ViewBuilder

@@ -112,7 +112,7 @@ struct MemoryCard: View {
     private func runPurge() async {
         isPurging = true
         defer { isPurging = false }
-        state.purgeDiskCache()
+        await state.purgeDiskCache()
         // Re-read pressure after purging so the gauge reflects reality.
         refreshSnapshot()
     }

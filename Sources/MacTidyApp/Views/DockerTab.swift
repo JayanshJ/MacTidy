@@ -306,12 +306,12 @@ struct DashboardDocker: View {
 
     private func scan() async {
         isLoading = true
-        let avail = DockerScanner.availability()
-        availability = avail
-        if avail == .available {
-            dockerState = DockerScanner.scan()
-            dfTable = DockerScanner.systemDFTable()
-            builderCacheBytes = DockerBuilderCache.reclaimableBytes()
+        let snapshot = await DockerSnapshot.load()
+        availability = snapshot.availability
+        if snapshot.availability == .available {
+            dockerState = snapshot.state
+            dfTable = snapshot.dfTable
+            builderCacheBytes = snapshot.builderCacheBytes
             // Drop selections for containers that no longer exist after the
             // rescan (e.g. removed out-of-band or by a prior cleanup).
             if let ds = dockerState {
@@ -337,7 +337,7 @@ struct DashboardDocker: View {
             let deadline = 90_000_000_000  // 90s — Docker Desktop is slow.
             let start = DispatchTime.now().uptimeNanoseconds
             while !Task.isCancelled {
-                if DockerScanner.availability() == .available {
+                if await DockerSnapshot.isAvailable() {
                     await scan()
                     break
                 }
@@ -359,6 +359,7 @@ struct DockerActionConfirmationSheet: View {
     let actions: [any ShellAction]
     @Binding var removeVolumes: Bool
     @State private var outcome: ShellActionOutcome?
+    @State private var isRunning = false
     var onCompleted: () -> Void = {}
 
     var body: some View {
@@ -401,11 +402,12 @@ struct DockerActionConfirmationSheet: View {
         HStack {
             Spacer()
             Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+            if isRunning { ProgressView().controlSize(.small) }
             Button("Run") { execute() }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
                 .tint(.red)
-                .disabled(actions.isEmpty)
+                .disabled(isRunning || actions.isEmpty)
         }
     }
 
@@ -423,7 +425,11 @@ struct DockerActionConfirmationSheet: View {
             }
             return action
         }
-        outcome = state.executeShellActions(toRun, kind: .docker)
+        isRunning = true
+        Task {
+            outcome = await state.executeShellActions(toRun, kind: .docker)
+            isRunning = false
+        }
     }
 
     @ViewBuilder

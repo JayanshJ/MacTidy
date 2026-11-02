@@ -170,15 +170,18 @@ extension CleanSource {
         let path = item.url.path
         let parent = item.url.deletingLastPathComponent().path
         // Most specific wins: Xcode/UserData/Previews (its own source) beats
-        // the per-child Xcode/UserData source that also matches it.
-        return all.filter { source in
+        // the per-child Xcode/UserData source that also matches it. A plain
+        // loop: this runs per item on every render that checks `risk`.
+        var best: CleanSource?
+        for source in all where source.path.count > (best?.path.count ?? -1) {
             let tail = "/" + source.path
-            switch source.locate {
-            case .whole: return path.hasSuffix(tail)
-            case .children: return item.category == source.category && parent.hasSuffix(tail)
+            let matches = switch source.locate {
+            case .whole: path.hasSuffix(tail)
+            case .children: item.category == source.category && parent.hasSuffix(tail)
             }
+            if matches { best = source }
         }
-        .max { $0.path.count < $1.path.count }
+        return best
     }
 }
 

@@ -118,7 +118,7 @@ struct DashboardUninstaller: View {
         let selected = selectedAppID == app.id
         return Button { selectedAppID = app.id } label: {
             HStack(spacing: Theme.Spacing.md) {
-                Image(nsImage: NSWorkspace.shared.icon(forFile: app.url.path))
+                Image(nsImage: FileIcon.image(for: app.url))
                     .resizable().frame(width: 30, height: 30)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(app.name).font(Theme.Font.bodyStrong).lineLimit(1)
@@ -145,7 +145,7 @@ struct DashboardUninstaller: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
                         HStack(spacing: Theme.Spacing.lg) {
-                            Image(nsImage: NSWorkspace.shared.icon(forFile: entry.app.url.path))
+                            Image(nsImage: FileIcon.image(for: entry.app.url))
                                 .resizable().frame(width: 64, height: 64)
                             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                                 Text(entry.app.name).font(Theme.Font.title)

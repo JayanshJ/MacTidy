@@ -99,10 +99,17 @@ public final class TrashLog: @unchecked Sendable {
 
     /// Removes a record after it has been restored (or the user dismissed it).
     public func remove(_ id: UUID) {
+        remove([id])
+    }
+
+    /// Removes several records with one read and one write of the log, so
+    /// undoing a 200-item cleanup isn't 200 full rewrites.
+    public func remove(_ ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
         queue.sync {
             var existing = (try? JSONDecoder().decode(
                 [TrashRecord].self, from: Data(contentsOf: fileURL))) ?? []
-            existing.removeAll { $0.id == id }
+            existing.removeAll { ids.contains($0.id) }
             try? JSONEncoder().encode(existing).write(to: fileURL, options: .atomic)
         }
     }

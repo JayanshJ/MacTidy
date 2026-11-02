@@ -85,7 +85,7 @@ private struct ProjectRow: View {
 
     var body: some View {
         HStack(spacing: Theme.Spacing.md) {
-            Image(nsImage: NSWorkspace.shared.icon(forFile: project.url.path))
+            Image(nsImage: FileIcon.image(for: project.url))
                 .resizable().frame(width: 28, height: 28)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: Theme.Spacing.sm) {
@@ -204,7 +204,7 @@ private struct ProjectDetail: View {
 
     private var header: some View {
         HStack(spacing: Theme.Spacing.lg) {
-            Image(nsImage: NSWorkspace.shared.icon(forFile: project.url.path))
+            Image(nsImage: FileIcon.image(for: project.url))
                 .resizable().frame(width: 56, height: 56)
             VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                 HStack(spacing: Theme.Spacing.sm) {

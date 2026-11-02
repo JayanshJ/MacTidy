@@ -14,7 +14,7 @@ struct TrashView: View {
         Page("Recently Trashed",
              subtitle: "Everything MacTidy moved to the Trash. Restore puts it back where it was. MacTidy never empties the Trash.") {
             if !state.recentTrashed.isEmpty {
-                Button("Clear List") { state.recentTrashed.forEach { state.dismissTrashed($0) } }
+                Button("Clear List") { state.dismissAllTrashed() }
                     .help("Remove all entries from this list. The items stay in the Trash.")
             }
         } content: {

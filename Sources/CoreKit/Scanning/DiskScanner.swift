@@ -13,39 +13,32 @@ public enum DiskScanner {
     /// entries are skipped (there are many even with Full Disk Access).
     /// Symlinks are not followed, so trees can't be double-counted and the
     /// scan can't escape the root.
+    ///
+    /// Walks with `getattrlistbulk(2)` on several threads (see `BulkWalker`),
+    /// several times faster than a `FileManager` enumerator that stats every
+    /// entry separately. Hidden files are included (AppleDouble `._` files
+    /// too, as `du` counts them).
     public static func allocatedSize(
         of root: URL,
         progress: (@Sendable (ScanProgress) -> Void)? = nil
     ) -> Int64 {
-        let keys: Set<URLResourceKey> = [.totalFileAllocatedSizeKey, .isRegularFileKey]
         if let values = try? root.resourceValues(forKeys: [.isRegularFileKey, .totalFileAllocatedSizeKey]),
            values.isRegularFile == true {
             return Int64(values.totalFileAllocatedSize ?? 0)
         }
-        guard let enumerator = FileManager.default.enumerator(
-            at: root,
-            includingPropertiesForKeys: Array(keys),
-            options: [], // include hidden files; ~/Library dotfiles count too
-            errorHandler: { _, _ in true } // keep scanning past unreadable paths
-        ) else { return 0 }
-
-        var total: Int64 = 0
-        var seen = 0
-        while let url = enumerator.nextObject() as? URL {
-            if Task.isCancelled { break }
-            guard let values = try? url.resourceValues(forKeys: keys),
-                  values.isRegularFile == true else { continue }
-            total += Int64(values.totalFileAllocatedSize ?? 0)
-            seen += 1
-            if seen % 512 == 0 {
-                progress?(ScanProgress(currentPath: url.path, scannedBytes: total))
-            }
-        }
-        return total
+        return BulkWalker.allocatedSizes(of: [root.path], progress: walkerProgress(progress))[0]
     }
 
-    /// Sizes the immediate children of `root` concurrently (one task per
-    /// child), returning them largest-first. This powers the
+    private static func walkerProgress(
+        _ progress: (@Sendable (ScanProgress) -> Void)?
+    ) -> (@Sendable (String, Int64) -> Void)? {
+        guard let progress else { return nil }
+        return { directory, bytes in progress(ScanProgress(currentPath: directory, scannedBytes: bytes)) }
+    }
+
+    /// Sizes the immediate children of `root`, returning them largest-first.
+    /// All child directories are sized in one shared parallel walk, so one
+    /// huge child doesn't leave the other cores idle. This powers the
     /// "where did my space go" explorer.
     public static func topLevelScan(
         root: URL,
@@ -60,29 +53,27 @@ public enum DiskScanner {
             at: root, includingPropertiesForKeys: Array(keys)
         ) else { return [] }
 
-        return await withTaskGroup(of: ScanItem?.self) { group in
-            for child in children {
-                group.addTask {
-                    guard let values = try? child.resourceValues(forKeys: keys),
-                          values.isSymbolicLink != true else { return nil }
-                    let modified = values.contentModificationDate
-                    if values.isDirectory == true {
-                        let size = allocatedSize(of: child, progress: progress)
-                        return ScanItem(url: child, sizeBytes: size, isDirectory: true,
-                                        category: category, lastModified: modified)
-                    }
-                    return ScanItem(url: child,
-                                    sizeBytes: Int64(values.totalFileAllocatedSize ?? 0),
-                                    isDirectory: false, category: category,
-                                    lastModified: modified)
-                }
+        var items: [ScanItem] = []
+        var directories: [(url: URL, modified: Date?)] = []
+        for child in children {
+            guard let values = try? child.resourceValues(forKeys: keys),
+                  values.isSymbolicLink != true else { continue }
+            if values.isDirectory == true {
+                directories.append((child, values.contentModificationDate))
+            } else {
+                items.append(ScanItem(url: child,
+                                      sizeBytes: Int64(values.totalFileAllocatedSize ?? 0),
+                                      isDirectory: false, category: category,
+                                      lastModified: values.contentModificationDate))
             }
-            var items: [ScanItem] = []
-            for await item in group where item != nil {
-                items.append(item!)
-            }
-            return items.sorted { $0.sizeBytes > $1.sizeBytes }
         }
+        let sizes = BulkWalker.allocatedSizes(
+            of: directories.map(\.url.path), progress: walkerProgress(progress))
+        for (directory, size) in zip(directories, sizes) {
+            items.append(ScanItem(url: directory.url, sizeBytes: size, isDirectory: true,
+                                  category: category, lastModified: directory.modified))
+        }
+        return items.sorted { $0.sizeBytes > $1.sizeBytes }
     }
 
     /// Recursively finds the largest regular files under `roots`, returning the

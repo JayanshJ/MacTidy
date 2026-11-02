@@ -131,14 +131,14 @@ struct NodePackagesInspector: View {
 
     private func scan() async {
         isLoading = true
-        let projects = NodePackageAnalyzer.findProjects(under: devRoots)
-        var results: [NodeProjectAnalysis] = []
-        for project in projects {
-            if let analysis = NodePackageAnalyzer.analyze(project) {
-                results.append(analysis)
-            }
-        }
-        analyses = results.sorted { $0.nodeModulesBytes > $1.nodeModulesBytes }
+        // Walks the dev roots and sizes every node_modules: keep it off the
+        // main thread, which this view's methods otherwise run on.
+        let roots = devRoots
+        analyses = await Task.detached(priority: .userInitiated) {
+            NodePackageAnalyzer.findProjects(under: roots)
+                .compactMap(NodePackageAnalyzer.analyze)
+                .sorted { $0.nodeModulesBytes > $1.nodeModulesBytes }
+        }.value
         isLoading = false
     }
 }

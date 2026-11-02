@@ -129,14 +129,18 @@ struct RowDivider: View {
 struct SurfaceSection<Content: View, Accessory: View>: View {
     var title: String?
     var footer: String?
+    /// Builds rows only as they scroll into view. For long lists inside a
+    /// ScrollView (hundreds of scan items, each with a Finder icon).
+    var lazy: Bool
     @ViewBuilder var accessory: Accessory
     @ViewBuilder var content: Content
 
-    init(_ title: String? = nil, footer: String? = nil,
+    init(_ title: String? = nil, footer: String? = nil, lazy: Bool = false,
          @ViewBuilder accessory: () -> Accessory = { EmptyView() },
          @ViewBuilder content: () -> Content) {
         self.title = title
         self.footer = footer
+        self.lazy = lazy
         self.accessory = accessory()
         self.content = content()
     }
@@ -153,8 +157,14 @@ struct SurfaceSection<Content: View, Accessory: View>: View {
                 }
                 .padding(.horizontal, Theme.Spacing.xs)
             }
-            VStack(spacing: 0) { content }
-                .cardStyle(padded: false)
+            Group {
+                if lazy {
+                    LazyVStack(spacing: 0) { content }
+                } else {
+                    VStack(spacing: 0) { content }
+                }
+            }
+            .cardStyle(padded: false)
             if let footer {
                 Text(footer)
                     .font(Theme.Font.caption)

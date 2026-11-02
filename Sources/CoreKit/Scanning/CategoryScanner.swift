@@ -4,11 +4,21 @@ public struct CategoryResult: Identifiable, Sendable, Codable, Equatable {
     public let category: Category
     public let items: [ScanItem]
     public var id: Category { category }
-    public var totalBytes: Int64 { items.reduce(0) { $0 + $1.sizeBytes } }
+    /// Summed once: views sort and total categories on every render.
+    public let totalBytes: Int64
 
     public init(category: Category, items: [ScanItem]) {
         self.category = category
         self.items = items
+        self.totalBytes = items.reduce(0) { $0 + $1.sizeBytes }
+    }
+
+    private enum CodingKeys: String, CodingKey { case category, items }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(category: try container.decode(Category.self, forKey: .category),
+                  items: try container.decode([ScanItem].self, forKey: .items))
     }
 }
 
@@ -50,24 +60,34 @@ public struct CategoryScanner: Sendable {
         progress: (@Sendable (Category) -> Void)? = nil,
         completed: (@Sendable (CategoryResult) -> Void)? = nil
     ) async -> [CategoryResult] {
-        // Run the single-pass dev-roots walk ONCE before dispatching
-        // categories to parallel tasks. This eliminates the 7+ redundant
-        // full-tree walks the old per-category approach did.
-        let cache = await devRootsScan()
-        return await withTaskGroup(of: CategoryResult.self) { group in
-            for category in Category.allCases {
-                if Task.isCancelled { break }
-                let cacheRef = cache
-                group.addTask {
-                    if Task.isCancelled { return CategoryResult(category: category, items: []) }
+        // The dev-roots categories share one walk (instead of one walk each),
+        // run as a single task alongside every other category so the walk
+        // doesn't hold up the Library scans.
+        await withTaskGroup(of: [CategoryResult].self) { group in
+            group.addTask {
+                let cache = await devRootsScan()
+                var results: [CategoryResult] = []
+                for category in Category.allCases where Self.devRootsCategories.contains(category) {
+                    if Task.isCancelled { break }
                     progress?(category)
-                    return await scanCached(category, devRootsCache: cacheRef)
+                    results.append(await scanCached(category, devRootsCache: cache))
+                }
+                return results
+            }
+            for category in Category.allCases where !Self.devRootsCategories.contains(category) {
+                if Task.isCancelled { break }
+                group.addTask {
+                    if Task.isCancelled { return [] }
+                    progress?(category)
+                    return [await scanCached(category, devRootsCache: [:])]
                 }
             }
             var results: [CategoryResult] = []
-            for await result in group {
-                completed?(result)
-                results.append(result)
+            for await batch in group {
+                for result in batch {
+                    completed?(result)
+                    results.append(result)
+                }
             }
             return results.sorted { $0.totalBytes > $1.totalBytes }
         }

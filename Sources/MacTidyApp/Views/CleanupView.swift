@@ -32,9 +32,10 @@ struct CleanupView: View {
             reviewError = nil
         }
         .sheet(item: $sheetPlan) { plan in
+            // No rescan: the cleanup already pruned trashed items from the
+            // results, and a full rescan would hide them behind the scan view.
             DeletionConfirmationSheet(title: sheetTitle, plan: plan) { _ in
                 selection.removeAll()
-                Task { await state.rescanCategories() }
             }
         }
         .sheet(isPresented: $showNodeInspector) { NodePackagesInspector() }
@@ -46,7 +47,7 @@ struct CleanupView: View {
         let nonEmpty = state.categoryResults.filter { $0.totalBytes > 0 }.sorted { $0.totalBytes > $1.totalBytes }
         let safe = nonEmpty.filter(\.category.isPreselectable)
         let review = nonEmpty.filter { !$0.category.isPreselectable }
-        let safeItems = state.categoryResults.flatMap(\.items).filter(\.isPreselectable)
+        let safeItems = state.safeItems
         let maxBytes = nonEmpty.first?.totalBytes ?? 1
 
         return Page("Cleanup",
@@ -217,7 +218,7 @@ private struct CategoryDetail: View {
 
     private func groupSection(_ group: ItemGroup, titled: Bool) -> some View {
         let all = group.items.allSatisfy { selection.contains($0.id) }
-        return SurfaceSection(titled ? group.id : nil) {
+        return SurfaceSection(titled ? group.id : nil, lazy: true) {
             if titled {
                 Text(group.bytes.formattedBytes)
                     .font(Theme.Font.caption.monospacedDigit()).foregroundStyle(.secondary)

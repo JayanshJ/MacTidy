@@ -5,7 +5,9 @@ import Foundation
 /// `DevTerminalActions.swift`). The scanner is read-only; the action is the
 /// destructive step.
 public struct DevToolInfo: Identifiable, Sendable {
-    public let id = UUID()
+    /// One row per tool, so a refresh updates rows in place instead of
+    /// rebuilding the list.
+    public var id: DevTool { tool }
     public let tool: DevTool
     /// Current cache size in bytes, or 0 if unmeasurable.
     public let cacheBytes: Int64

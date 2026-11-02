@@ -63,10 +63,13 @@ struct DeveloperTerminalTab: View {
             }
         }
         .task(id: "auto-refresh") {
+            // Only ports change on their own. Cache sizes (a `du` per tool)
+            // reload after a clean or a manual refresh.
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(30))
                 guard !Task.isCancelled else { break }
-                await load()
+                let fresh = await Task.detached { PortScanner.scan() }.value
+                if fresh != ports { ports = fresh }
             }
         }
     }

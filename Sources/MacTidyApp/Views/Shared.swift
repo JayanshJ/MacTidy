@@ -5,6 +5,25 @@ func showInFinder(_ url: URL) {
     NSWorkspace.shared.activateFileViewerSelecting([url])
 }
 
+/// Finder icons, cached by path. `NSWorkspace.icon(forFile:)` asks Launch
+/// Services each call, and list rows re-run their body on every checkbox
+/// click, so uncached lookups made big lists stutter.
+enum FileIcon {
+    private static let cache: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = 2000
+        return cache
+    }()
+
+    static func image(for url: URL) -> NSImage {
+        let key = url.path as NSString
+        if let cached = cache.object(forKey: key) { return cached }
+        let icon = NSWorkspace.shared.icon(forFile: url.path)
+        cache.setObject(icon, forKey: key)
+        return icon
+    }
+}
+
 /// Horizontal bar visualizing an item's share of the largest item in a list.
 /// Defaults to a 90pt fixed width for inline row use; pass `fillsWidth: true`
 /// to let it stretch to its container (used in category cards).
@@ -50,7 +69,7 @@ struct ScanItemRow: View {
             .labelsHidden()
             .toggleStyle(.checkbox)
 
-            Image(nsImage: NSWorkspace.shared.icon(forFile: item.url.path))
+            Image(nsImage: FileIcon.image(for: item.url))
                 .resizable()
                 .frame(width: 22, height: 22)
 
