@@ -16,6 +16,13 @@ struct DirectoryExplorerView: View {
     @State private var aiExplanation: ItemExplanation?
     @State private var aiReviewingItem: ScanItem?
     @State private var isReviewingWithAI = false
+    /// "Why is this big?": the folder asked about, what was measured, and the
+    /// AI's answer when a provider is set up.
+    @State private var whyBigItem: ScanItem?
+    @State private var whyBigProfile: FolderProfile?
+    @State private var whyBigAnswer: ItemExplanation?
+    @State private var isAskingWhyBig = false
+    @State private var whyBigTask: Task<Void, Never>?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -76,6 +83,11 @@ struct DirectoryExplorerView: View {
             set: { if !$0 { aiExplanation = nil; aiReviewingItem = nil; isReviewingWithAI = false } }
         )) {
             AIReviewSheet(item: aiReviewingItem, explanation: aiExplanation)
+        }
+        .sheet(item: $whyBigItem, onDismiss: { whyBigTask?.cancel() }) { item in
+            WhyBigSheet(folder: item.url, profile: whyBigProfile, answer: whyBigAnswer,
+                        isAsking: isAskingWhyBig, aiAvailable: state.advisor != nil,
+                        sendsNames: state.aiConfig.sendFilePaths)
         }
     }
 
@@ -150,6 +162,13 @@ struct DirectoryExplorerView: View {
         .buttonStyle(RowButtonStyle())
         .contextMenu {
                 Button("Show in Finder") { showInFinder(item.url) }
+                if AppSupportRules.isUnrecognized(item) {
+                    Button {
+                        askWhyBig(item)
+                    } label: {
+                        Label("Why Is This Big?", systemImage: "questionmark.circle")
+                    }
+                }
                 // AI review for any disk-browsing file — asks the configured
                 // advisor for a safe/review/keep verdict + one-line reason,
                 // same path as the category-view "Review with AI" button.
@@ -226,6 +245,27 @@ struct DirectoryExplorerView: View {
                 // spinner can never get stuck.
                 aiExplanation = explanation
             }
+        }
+    }
+
+    /// Measures the folder, then asks the AI if one is set up. With none, the
+    /// measurements are the answer.
+    private func askWhyBig(_ item: ScanItem) {
+        whyBigTask?.cancel()
+        whyBigProfile = nil
+        whyBigAnswer = nil
+        isAskingWhyBig = false
+        whyBigItem = item
+        whyBigTask = Task {
+            let profile = await FolderProfile.read(item.url)
+            guard !Task.isCancelled else { return }
+            whyBigProfile = profile
+            guard state.advisor != nil else { return }
+            isAskingWhyBig = true
+            let answer = await state.explainFolder(profile)
+            guard !Task.isCancelled else { return }
+            whyBigAnswer = answer
+            isAskingWhyBig = false
         }
     }
 

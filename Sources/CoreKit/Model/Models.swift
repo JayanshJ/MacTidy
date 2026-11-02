@@ -150,7 +150,7 @@ public enum Category: String, CaseIterable, Codable, Sendable, Identifiable {
         case .httpStorages:
             "Per-app HTTP storage and cookies in ~/Library/HTTPStorages. Apps recreate these; you may get logged out of some web views."
         case .groupContainers:
-            "Shared app data in ~/Library/Group Containers (e.g. shared between an app and its extension). Suggest-only: trashing resets the app group — check what each is before deleting."
+            "Shared app data in ~/Library/Group Containers (e.g. shared between an app and its extension). macOS's own groups aren't listed. Suggest-only: trashing resets the app group, so check what each is before deleting."
         }
     }
 

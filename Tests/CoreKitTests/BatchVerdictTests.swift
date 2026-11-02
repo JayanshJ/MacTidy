@@ -13,6 +13,9 @@ struct BatchVerdictTests {
         func explain(_ item: ScanItem, config: AIConfig) async throws -> ItemExplanation {
             ItemExplanation(summary: "mock note", verdict: .safe)
         }
+        func explainFolder(_ profile: FolderProfile, config: AIConfig) async throws -> ItemExplanation {
+            ItemExplanation(summary: "mock folder")
+        }
         func insights(for snapshot: SystemSnapshot, config: AIConfig) async throws -> [Insight] { [] }
         func testConnection(config: AIConfig) async -> String { "Connected" }
     }

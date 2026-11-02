@@ -180,7 +180,7 @@ public struct CategoryScanner: Sendable {
         case .httpStorages:
             items = await children(of: "Library/HTTPStorages", category)
         case .groupContainers:
-            items = await children(of: "Library/Group Containers", category)
+            items = await groupContainerItems()
         }
         return CategoryResult(category: category, items: items.filter { !ignore.contains($0.url) })
     }

@@ -45,6 +45,19 @@ struct OpenAICompatibleAdvisor: CleanAdvisor {
         return try parseExplanation(from: resp)
     }
 
+    func explainFolder(_ profile: FolderProfile, config: AIConfig) async throws -> ItemExplanation {
+        let body: [String: Any] = [
+            "model": model,
+            "messages": [
+                ["role": "system", "content": AdvisorPrompts.whyBigSystem],
+                ["role": "user", "content": AdvisorPrompts.whyBigUser(profile: profile, sendFilePaths: config.sendFilePaths)],
+            ],
+            "temperature": 0.2,
+        ]
+        let resp = try await HTTPClient.post(url: endpoint, headers: authHeaders(), body: body)
+        return try parseExplanation(from: resp)
+    }
+
     /// One batched call that verdicts every item, instead of N round-trips.
     /// Falls back to the default loop implementation if the model doesn't
     /// return a `verdict_items` tool call.

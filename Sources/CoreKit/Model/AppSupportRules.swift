@@ -103,14 +103,49 @@ public enum AppSupportRules {
         Named(owner: "zoom.us", path: "data/logs", kind: .whole, label: "Logs", risk: .safe) { _ in
             "Zoom's logs from earlier meetings. Only used for troubleshooting."
         },
+        webCache("zoom.us", "data/Cache"),
+        Named(owner: "zoom.us", path: "data/GPUCache", kind: .whole, label: "Graphics cache", risk: .safe) { _ in
+            "Compiled graphics shaders. Zoom rebuilds them automatically."
+        },
         Named(owner: "Steam", path: "appcache/httpcache", kind: .whole, label: "Web cache", risk: .safe) { _ in
             "Steam's store and library web cache. Downloaded again as you browse."
         },
         Named(owner: "Steam", path: "steamapps/shadercache", kind: .whole, label: "Game shader cache", risk: .caution) { _ in
             "Precompiled shaders for your games. Steam rebuilds them, but a game can stutter the first time you play it again."
         },
+        logs("Steam"),
         Named(owner: "CrashReporter", path: "", kind: .whole, label: "Crash report records", risk: .safe) { _ in
             "Records macOS keeps about app crashes it has already reported."
+        },
+        Named(owner: "Telegram Desktop", path: "tdata/user_data", kind: .whole, label: "Media cache", risk: .caution) { _ in
+            "Photos, videos and files Telegram has saved from your chats. It downloads them again when you open them, unless they've since been removed from the chat."
+        },
+        Named(owner: "Telegram Desktop", path: "tdata/emoji", kind: .whole, label: "Emoji images", risk: .safe) { _ in
+            "Emoji image sets. Telegram downloads them again when needed."
+        },
+        webCache("Microsoft Teams", "Cache"),
+        webCache("Microsoft", "Teams/Cache"),
+        webCache("Epic", "EpicGamesLauncher/Saved/webcache"),
+        logs("minecraft"),
+        webCache("minecraft", "webcache2"),
+        crashReports("minecraft", "crash-reports"),
+        logs("Blackmagic Design", "DaVinci Resolve/logs"),
+        crashReports("Blackmagic Design", "DaVinci Resolve/CrashDumps"),
+        Named(owner: "Oracle", path: "Java/Deployment/cache", kind: .whole, label: "Java download cache", risk: .safe) { _ in
+            "Files Java Web Start and applets downloaded. Java fetches them again if something still needs them."
+        },
+        logs("obs-studio"),
+        Named(owner: "obs-studio", path: "profiler_data", kind: .whole, label: "Performance recordings", risk: .safe) { _ in
+            "Performance measurements OBS Studio saved from earlier sessions. Only used for troubleshooting."
+        },
+        logs("qBittorrent"),
+        logs("itch"),
+        logs("Insomnia"),
+        logs("HandBrake", "EncodeLogs"),
+        logs("CapCut", "Log"),
+        logs("Adobe", "CRLogs"),
+        Named(owner: "Kodi", path: "userdata/Thumbnails", kind: .whole, label: "Thumbnails", risk: .safe) { _ in
+            "Artwork Kodi has cached for your library. Rebuilt as you browse it."
         },
     ] + editors.flatMap { editor in [
         Named(owner: editor, path: "CachedData", kind: .whole, label: "Compiled code cache", risk: .safe) { owner in
@@ -122,7 +157,31 @@ public enum AppSupportRules {
         Named(owner: editor, path: "logs", kind: .whole, label: "Logs", risk: .safe) { owner in
             "\(owner)'s logs from earlier sessions. Only used for troubleshooting."
         },
+        Named(owner: editor, path: "User/workspaceStorage", kind: .whole, label: "Per-folder state", risk: .caution) { owner in
+            "What \(owner) remembers about each folder you've opened: open tabs, extension data and, in AI editors, chat history. Each folder starts fresh after this."
+        },
+        Named(owner: editor, path: "User/History", kind: .whole, label: "Local file history", risk: .caution) { owner in
+            "Earlier versions of files you edited, shown in \(owner)'s Timeline. Your files stay, but you can't go back to those versions."
+        },
     ] }
+
+    private static func logs(_ owner: String, _ path: String = "logs") -> Named {
+        Named(owner: owner, path: path, kind: .whole, label: "Logs", risk: .safe) { name in
+            "\(name)'s logs from earlier sessions. Only used for troubleshooting."
+        }
+    }
+
+    private static func webCache(_ owner: String, _ path: String) -> Named {
+        Named(owner: owner, path: path, kind: .whole, label: "Web cache", risk: .safe) { name in
+            "\(name)'s web cache. Downloaded again when needed. Quit \(name) first."
+        }
+    }
+
+    private static func crashReports(_ owner: String, _ path: String) -> Named {
+        Named(owner: owner, path: path, kind: .whole, label: "Crash reports", risk: .safe) { name in
+            "Reports from earlier \(name) crashes. Only used for troubleshooting."
+        }
+    }
 
     // MARK: Owners
 
@@ -134,6 +193,10 @@ public enum AppSupportRules {
         "com.apple.wallpaper": "Wallpapers", "CrashReporter": "macOS",
         "Google/Chrome": "Google Chrome", "Google/Chrome Beta": "Google Chrome Beta",
         "BraveSoftware/Brave-Browser": "Brave", "com.operasoftware.Opera": "Opera",
+        "Telegram Desktop": "Telegram", "Microsoft/Teams": "Microsoft Teams",
+        "Epic/EpicGamesLauncher": "Epic Games Launcher", "minecraft": "Minecraft",
+        "Blackmagic Design/DaVinci Resolve": "DaVinci Resolve", "Oracle/Java": "Java",
+        "obs-studio": "OBS Studio", "itch": "itch.io",
     ]
 
     /// Bundle identifiers of the app owning a folder, for the running-app
@@ -152,6 +215,7 @@ public enum AppSupportRules {
         "Figma": ["com.figma.Desktop"], "Steam": ["com.valvesoftware.steam"],
         "obsidian": ["md.obsidian"], "Signal": ["org.whispersystems.signal-desktop"],
         "Postman": ["com.postmanlabs.mac"], "Microsoft Teams": ["com.microsoft.teams", "com.microsoft.teams2"],
+        "Microsoft/Teams": ["com.microsoft.teams", "com.microsoft.teams2"],
         "Codex": ["com.openai.codex"],
     ]
 
@@ -213,6 +277,12 @@ public enum AppSupportRules {
 
     /// Group title (`ScanItem.detail`) for leftovers of removed apps.
     public static let removedAppsGroup = "Apps no longer installed"
+
+    /// A folder MacTidy has nothing to say about, the kind "Why is this big?"
+    /// is for.
+    public static func isUnrecognized(_ item: ScanItem) -> Bool {
+        item.isDirectory && insight(for: item) == nil
+    }
 
     /// The item's finding, if any, else what its path says.
     public static func insight(for item: ScanItem) -> AppSupportInsight? {

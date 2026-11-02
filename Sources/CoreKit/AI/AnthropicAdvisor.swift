@@ -51,6 +51,24 @@ struct AnthropicAdvisor: CleanAdvisor {
         return try parseExplanation(from: resp)
     }
 
+    func explainFolder(_ profile: FolderProfile, config: AIConfig) async throws -> ItemExplanation {
+        let body: [String: Any] = [
+            "model": config.model.isEmpty ? AIProvider.anthropic.defaultModel : config.model,
+            "max_tokens": 300,
+            "system": AdvisorPrompts.whyBigSystem,
+            "messages": [
+                ["role": "user", "content": AdvisorPrompts.whyBigUser(profile: profile, sendFilePaths: config.sendFilePaths)],
+            ],
+            "temperature": 0.2,
+        ]
+        let headers: [String: String] = [
+            "x-api-key": apiKey,
+            "anthropic-version": "2023-06-01",
+        ]
+        let resp = try await HTTPClient.post(url: anthropicEndpoint, headers: headers, body: body)
+        return try parseExplanation(from: resp)
+    }
+
     func insights(for snapshot: SystemSnapshot, config: AIConfig) async throws -> [Insight] {
         let payload = try InsightPrompts.userPayload(snapshot: snapshot, sendFilePaths: config.sendFilePaths)
         let body: [String: Any] = [
