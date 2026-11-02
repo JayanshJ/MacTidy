@@ -155,6 +155,15 @@ public struct SafePathPolicy: Sendable {
         ".codex/auth.json", ".codex/config.toml",
         ".gemini/oauth_creds.json", ".gemini/settings.json",
         ".cache/huggingface/token",
+        // Beside caches MacTidy lists: API keys and publish tokens.
+        ".gem/credentials", ".nuget/NuGet/NuGet.Config", ".ivy2/.credentials",
+        ".cabal/config", ".stack/config.yaml", ".stack/upload", ".hex/hex.config",
+        ".lmstudio/credentials",
+        ".hermes/.env", ".hermes/auth.json", ".hermes/config.yaml", ".hermes/pairing", ".hermes/backups",
+        ".agent-reach/state.json", ".agent-reach/config.yaml",
+        // Inside ~/.local/share, where any other child can be listed.
+        ".local/share/opencode/auth.json", ".local/share/atuin/key",
+        ".local/share/keyrings", ".local/share/python_keyring", ".local/share/gopass",
     ]
 
     /// Folders in Application Support that macOS and iCloud keep their own
