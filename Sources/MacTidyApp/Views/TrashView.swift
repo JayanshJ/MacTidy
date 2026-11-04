@@ -4,7 +4,7 @@ import CoreKit
 /// The visible half of the Trash undo: everything MacTidy has moved to the
 /// Trash, with per-item Restore (moves it back to its original path) and
 /// Dismiss (leaves it in the Trash, just clears the log entry). Nothing here
-/// empties the Trash — that's the user's call in Finder.
+/// offers permanent removal only through the confirmed Finder action.
 struct TrashView: View {
     @Environment(AppState.self) private var state
     @State private var errorMessage: String?
@@ -12,12 +12,24 @@ struct TrashView: View {
 
     var body: some View {
         Page("Recently Trashed",
-             subtitle: "Everything MacTidy moved to the Trash. Restore puts it back where it was. MacTidy never empties the Trash.") {
+             subtitle: "Everything MacTidy moved to the Trash. Restore puts it back where it was. Emptying Trash permanently removes the ability to restore.") {
             if !state.recentTrashed.isEmpty {
                 Button("Clear List") { state.dismissAllTrashed() }
                     .help("Remove all entries from this list. The items stay in the Trash.")
             }
         } content: {
+            TrashNudgeCard()
+            if let message = state.trashEmptyingMessage {
+                Text(message).font(Theme.Font.caption).foregroundStyle(.secondary)
+            }
+            if let measurement = state.trashSpaceMeasurement {
+                if let change = measurement.change {
+                    Text("Observed free-space change: \(change < 0 ? "−" : "+")\(abs(change).formattedBytes) · \(measurement.date.formatted()). Other disk activity can affect this measurement.")
+                        .font(Theme.Font.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("Free-space measurement unavailable.").font(Theme.Font.caption)
+                }
+            }
             if state.recentTrashed.isEmpty {
                 EmptyStateView(symbol: "arrow.uturn.backward.circle", title: "Nothing trashed yet",
                                message: "Items you clean show up here, ready to restore with one click.")
@@ -80,7 +92,7 @@ struct TrashView: View {
             if restoringID == record.id {
                 ProgressView().controlSize(.small)
             } else {
-                Button("Restore") { restore(record) }
+                Button("Restore") { restore(record) }.disabled(state.isEmptyingTrash)
                 Button {
                     state.dismissTrashed(record)
                 } label: {

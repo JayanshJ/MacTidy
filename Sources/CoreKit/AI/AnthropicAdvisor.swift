@@ -19,17 +19,16 @@ struct AnthropicAdvisor: CleanAdvisor {
             "max_tokens": 1024,
             "system": AdvisorPrompts.system,
             "messages": [
-                ["role": "user", "content": AdvisorPrompts.planUser(intent: intent, scanJSON: scanJSON)],
+                ["role": "user", "content": AdvisorPrompts.planUser(intent: intent, scanJSON: scanJSON) + "\nUse the select_items tool to provide your selection."],
             ],
             "tools": [selectItemsTool],
-            "tool_choice": ["type": "tool", "name": "select_items"],
-            "temperature": 0.2,
+            "tool_choice": ["type": "auto"],
         ]
         let headers: [String: String] = [
             "x-api-key": apiKey,
             "anthropic-version": "2023-06-01",
         ]
-        let resp = try await HTTPClient.post(url: anthropicEndpoint, headers: headers, body: body)
+        let resp = try await HTTPClient.post(url: anthropicEndpoint, headers: headers, body: Self.compatibleBody(body))
         return try parsePlan(from: resp, categories: categories)
     }
 
@@ -41,13 +40,12 @@ struct AnthropicAdvisor: CleanAdvisor {
             "messages": [
                 ["role": "user", "content": AdvisorPrompts.explainUser(item: item, sendFilePaths: config.sendFilePaths)],
             ],
-            "temperature": 0.2,
         ]
         let headers: [String: String] = [
             "x-api-key": apiKey,
             "anthropic-version": "2023-06-01",
         ]
-        let resp = try await HTTPClient.post(url: anthropicEndpoint, headers: headers, body: body)
+        let resp = try await HTTPClient.post(url: anthropicEndpoint, headers: headers, body: Self.compatibleBody(body))
         return try parseExplanation(from: resp)
     }
 
@@ -59,13 +57,12 @@ struct AnthropicAdvisor: CleanAdvisor {
             "messages": [
                 ["role": "user", "content": AdvisorPrompts.whyBigUser(profile: profile, sendFilePaths: config.sendFilePaths)],
             ],
-            "temperature": 0.2,
         ]
         let headers: [String: String] = [
             "x-api-key": apiKey,
             "anthropic-version": "2023-06-01",
         ]
-        let resp = try await HTTPClient.post(url: anthropicEndpoint, headers: headers, body: body)
+        let resp = try await HTTPClient.post(url: anthropicEndpoint, headers: headers, body: Self.compatibleBody(body))
         return try parseExplanation(from: resp)
     }
 
@@ -75,32 +72,30 @@ struct AnthropicAdvisor: CleanAdvisor {
             "model": config.model.isEmpty ? AIProvider.anthropic.defaultModel : config.model,
             "max_tokens": 1024,
             "system": InsightPrompts.system,
-            "messages": [["role": "user", "content": payload]],
+            "messages": [["role": "user", "content": payload + "\nUse the propose_insights tool to provide your suggestions."]],
             "tools": [InsightPrompts.anthropicTool],
-            "tool_choice": ["type": "tool", "name": "propose_insights"],
-            "temperature": 0.3,
+            "tool_choice": ["type": "auto"],
         ]
         let headers: [String: String] = [
             "x-api-key": apiKey,
             "anthropic-version": "2023-06-01",
         ]
-        let resp = try await HTTPClient.post(url: anthropicEndpoint, headers: headers, body: body)
+        let resp = try await HTTPClient.post(url: anthropicEndpoint, headers: headers, body: Self.compatibleBody(body))
         return try parseInsights(from: resp, snapshot: snapshot)
     }
 
     func testConnection(config: AIConfig) async -> String {
         let body: [String: Any] = [
             "model": config.model.isEmpty ? AIProvider.anthropic.defaultModel : config.model,
-            "max_tokens": 5,
+            "max_tokens": 128,
             "messages": [["role": "user", "content": "Reply with the single word: ok"]],
-            "temperature": 0,
         ]
         let headers: [String: String] = [
             "x-api-key": apiKey,
             "anthropic-version": "2023-06-01",
         ]
         do {
-            let resp = try await HTTPClient.post(url: anthropicEndpoint, headers: headers, body: body, timeout: 10)
+            let resp = try await HTTPClient.post(url: anthropicEndpoint, headers: headers, body: Self.compatibleBody(body), timeout: 30)
             if let text = extractText(from: resp), !text.isEmpty {
                 return "Connected — model replied: \(text)"
             }
@@ -111,6 +106,18 @@ struct AnthropicAdvisor: CleanAdvisor {
         } catch {
             return "Failed: \(error.localizedDescription)"
         }
+    }
+
+    /// Sonnet 5.5 does not support sampling parameters or forced tools and
+    /// defaults to up-front thinking, which can consume small reply budgets.
+    static func compatibleBody(_ body: [String: Any]) -> [String: Any] {
+        var result = body
+        result.removeValue(forKey: "temperature")
+        let model = (result["model"] as? String ?? "").lowercased()
+        if model.hasPrefix("claude-sonnet-5-5") {
+            result["thinking"] = ["type": "between_tools"]
+        }
+        return result
     }
 
     private var selectItemsTool: [String: Any] {

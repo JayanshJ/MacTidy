@@ -55,19 +55,15 @@ enum InsightPrompts {
             """)
         }
 
-        // Top processes by RAM — sanitized: name, RSS, CPU, and whether it's
-        // a user app (has a bundle path). No paths unless opted in.
-        let top = snapshot.processes
-            .filter { $0.residentBytes > 50 * 1024 * 1024 }  // >50MB only
-            .prefix(40)
-        var procLines: [String] = []
-        for p in top {
-            var line = "- name: \(p.name), rss: \(p.residentBytes.formattedBytes), cpu: \(String(format: "%.1f", p.cpuPercent))%"
-            line += p.appBundlePath != nil ? ", type: userApp" : ", type: system"
-            if sendFilePaths, let path = p.appBundlePath { line += ", bundle: \(path)" }
-            procLines.append(line)
+        let apps = RunningAppMemory.grouped(snapshot.processes)
+        var appLines: [String] = []
+        for app in apps.prefix(40) {
+            var line = "- name: \(app.name), physical footprint: \(app.footprintBytes?.formattedBytes ?? "unavailable"), idle: \(app.isSafeToQuit)"
+            if sendFilePaths { line += ", bundle: \(app.path)" }
+            appLines.append(line)
         }
-        parts.append("Top processes by RAM:\n" + procLines.joined(separator: "\n"))
+        parts.append("App memory (includes helpers; release is approximate):\n" + appLines.joined(separator: "\n"))
+        parts.append("Memory pressure: \(snapshot.memoryPressure?.displayName ?? "unavailable"). Suggest quitting only when pressure or swap is elevated and the app is idle.")
 
         // Boot-volume pressure — drives "disk almost full" framing. Just the
         // totals + used fraction; no paths.
@@ -213,18 +209,18 @@ public enum InsightResolver {
                 let names = (entry["quitApps"] as? [String]) ?? []
                 // Enforce the denylist: never propose quitting a denied name,
                 // and only allow names that are actually running user apps.
-                let safe = names.filter { name in
-                    !ProcessDenylist.isDenied(name)
-                    && snapshot.processes.contains { $0.name == name && $0.appBundlePath != nil }
+                let candidates = MemoryAdvice.candidates(processes: snapshot.processes,
+                    pressure: snapshot.memoryPressure, swapBytes: snapshot.memory?.swapUsedBytes ?? 0)
+                let safe = Array(Set(names)).sorted().filter { name in
+                    candidates.filter { $0.name == name }.count == 1
                 }
                 guard !safe.isEmpty else { continue }
-                let ram = safe.flatMap { name in
-                    snapshot.processes.filter { $0.name == name }
-                }.reduce(0) { $0 + $1.residentBytes }
+                let ram = candidates.filter { safe.contains($0.name) }
+                    .reduce(Int64(0)) { $0 + ($1.footprintBytes ?? 0) }
                 results.append(Insight(kind: kind == .disk ? .processes : kind,
                                        reasoning: reasoning,
                                        action: .quitApps(names: safe),
-                                       reclaimableBytes: bytes > 0 ? bytes : ram,
+                                       reclaimableBytes: ram,
                                        priority: priority))
             default:  // observe
                 results.append(Insight(kind: kind, reasoning: reasoning,

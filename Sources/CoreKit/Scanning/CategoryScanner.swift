@@ -52,6 +52,16 @@ public struct CategoryScanner: Sendable {
         self.screenshotMinAgeDays = screenshotMinAgeDays
     }
 
+    static func distinctRoots(_ roots: [URL]) -> [URL] {
+        var accepted: [URL] = []
+        for root in Set(roots.map { $0.standardizedFileURL }).sorted(by: { $0.path.count < $1.path.count }) {
+            guard (try? root.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true,
+                  !accepted.contains(where: { root.path == $0.path || root.path.hasPrefix($0.path + "/") }) else { continue }
+            accepted.append(root)
+        }
+        return accepted
+    }
+
     /// Conventional project folders that exist on this machine.
     public static var defaultDevRoots: [URL] {
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -72,14 +82,14 @@ public struct CategoryScanner: Sendable {
             group.addTask {
                 let cache = await devRootsScan()
                 var results: [CategoryResult] = []
-                for category in Category.allCases where Self.devRootsCategories.contains(category) {
+                for category in Category.allCases where Self.devRootsCategories.contains(category) || category == .bigFiles {
                     if Task.isCancelled { break }
                     progress?(category)
                     results.append(await scanCached(category, devRootsCache: cache))
                 }
                 return results
             }
-            for category in Category.allCases where !Self.devRootsCategories.contains(category) {
+            for category in Category.allCases where !Self.devRootsCategories.contains(category) && category != .bigFiles {
                 if Task.isCancelled { break }
                 group.addTask {
                     if Task.isCancelled { return [] }
@@ -110,9 +120,11 @@ public struct CategoryScanner: Sendable {
 
     /// The real scan method. `devRootsCache` carries pre-computed results
     /// from a single-pass dev-roots walk (populated by `scanAll`). When
-    /// empty (e.g. when scanning a single category), the build-dir categories
-    /// fall back to the old per-category walks.
+    /// empty, build categories use the same shared classification walk.
     private func scanCached(_ category: Category, devRootsCache: [Category: [ScanItem]]) async -> CategoryResult {
+        if Self.devRootsCategories.contains(category), devRootsCache[category] == nil {
+            return await scanCached(category, devRootsCache: await devRootsScan())
+        }
         let items: [ScanItem]
         switch category {
         case .xcodeDerivedData:
@@ -128,19 +140,19 @@ public struct CategoryScanner: Sendable {
         case .homebrewCache:
             items = homebrewCache()
         case .nodeModules:
-            items = devRootsCache[.nodeModules] ?? buildDirs(named: "node_modules", siblingMarkers: ["package.json"], category: .nodeModules)
+            items = devRootsCache[.nodeModules] ?? []
         case .rustTargets:
-            items = devRootsCache[.rustTargets] ?? buildDirs(named: "target", siblingMarkers: ["Cargo.toml"], category: .rustTargets)
+            items = devRootsCache[.rustTargets] ?? []
         case .podDirs:
-            items = devRootsCache[.podDirs] ?? buildDirs(named: "Pods", siblingMarkers: ["Podfile"], category: .podDirs)
+            items = devRootsCache[.podDirs] ?? []
         case .swiftBuildDirs:
-            items = devRootsCache[.swiftBuildDirs] ?? buildDirs(named: ".build", siblingMarkers: ["Package.swift"], category: .swiftBuildDirs)
+            items = devRootsCache[.swiftBuildDirs] ?? []
         case .gradleBuildDirs:
-            items = devRootsCache[.gradleBuildDirs] ?? buildDirs(named: "build", siblingMarkers: ["build.gradle", "build.gradle.kts"], category: .gradleBuildDirs)
+            items = devRootsCache[.gradleBuildDirs] ?? []
         case .pythonCaches:
-            items = devRootsCache[.pythonCaches] ?? pythonCaches()
+            items = devRootsCache[.pythonCaches] ?? []
         case .jsBuildDirs:
-            items = devRootsCache[.jsBuildDirs] ?? jsBuildDirs()
+            items = devRootsCache[.jsBuildDirs] ?? []
         case .containerCaches:
             items = await containerCaches()
         case .xcodeArchives:
@@ -148,13 +160,13 @@ public struct CategoryScanner: Sendable {
         case .mailDownloads:
             items = await mailDownloads()
         case .mavenTarget:
-            items = devRootsCache[.mavenTarget] ?? buildDirs(named: "target", siblingMarkers: ["pom.xml"], category: .mavenTarget)
+            items = devRootsCache[.mavenTarget] ?? []
         case .phpVendor:
-            items = devRootsCache[.phpVendor] ?? buildDirs(named: "vendor", siblingMarkers: ["composer.json"], category: .phpVendor)
+            items = devRootsCache[.phpVendor] ?? []
         case .flutterDartTool:
-            items = devRootsCache[.flutterDartTool] ?? buildDirs(named: ".dart_tool", siblingMarkers: ["pubspec.yaml"], category: .flutterDartTool)
+            items = devRootsCache[.flutterDartTool] ?? []
         case .unityLibrary:
-            items = devRootsCache[.unityLibrary] ?? unityLibrary()
+            items = devRootsCache[.unityLibrary] ?? []
         case .androidSystemImages:
             items = await androidSystemImages()
         case .staleScreenshots:
@@ -168,7 +180,7 @@ public struct CategoryScanner: Sendable {
         case .appSupport:
             items = await appSupportItems()
         case .bigFiles:
-            items = await bigFiles()
+            items = await bigFiles(devRootsCache: devRootsCache)
         case .simulatorDevices:
             items = await children(of: "Library/Developer/CoreSimulator/Devices", category)
         case .systemLogs:

@@ -8,6 +8,7 @@ struct CleanupView: View {
     @State private var sheetPlan: DeletionPlan?
     @State private var sheetTitle = "Move selected items to the Trash?"
     @State private var showNodeInspector = false
+    @State private var showTargetPlan = false
     @State private var reviewing = false
     @State private var reviewError: String?
 
@@ -40,6 +41,7 @@ struct CleanupView: View {
                 selection.removeAll()
             }
         }
+        .sheet(isPresented: $showTargetPlan) { TargetCleanupView() }
         .sheet(isPresented: $showNodeInspector) { NodePackagesInspector() }
     }
 
@@ -62,6 +64,8 @@ struct CleanupView: View {
                     subtitle: "\(state.totalReclaimable.formattedBytes) across \(nonEmpty.count) categories. Everything goes to the Trash, so it can be put back.") {
             Button { showNodeInspector = true } label: { Label("Node Packages", systemImage: "shippingbox") }
                 .help("Find orphaned and unused npm packages and prune them safely.")
+            Button("Free up X GB…") { showTargetPlan = true }
+                .disabled(state.categoryResults.isEmpty)
             Button("Clean Safe Items") {
                 sheetTitle = "Clean everything that's safe?"
                 sheetPlan = DeletionPlan(items: safeItems)

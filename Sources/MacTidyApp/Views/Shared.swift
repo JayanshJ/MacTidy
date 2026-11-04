@@ -186,6 +186,9 @@ struct ScanItemRow: View {
         } else if let detail = item.detail {
             parts.append(item.finding == nil ? "in \(detail)" : detail)
         }
+        if item.finding == BuildOutput.finding { parts.append("git-ignored build output · review before rebuilding") }
+        if item.finding == BuildOutput.xcodeFinding { parts.append("Xcode build output · review before rebuilding") }
+        if RecurringCleanup.isRecentBuild(item) { parts.append("Built recently; likely to grow back") }
         if let modified = item.lastModified {
             parts.append("modified \(modified.formatted(date: .abbreviated, time: .omitted))")
         }

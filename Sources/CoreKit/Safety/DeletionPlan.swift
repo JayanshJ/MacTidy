@@ -45,6 +45,7 @@ public struct SkippedRecord: Identifiable, Sendable {
     public let id = UUID()
     public let url: URL
     public let reason: String
+    public init(url: URL, reason: String) { self.url = url; self.reason = reason }
 }
 
 public struct DeletionOutcome: Sendable {

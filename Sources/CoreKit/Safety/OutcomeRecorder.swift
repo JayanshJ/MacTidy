@@ -44,7 +44,8 @@ public enum OutcomeRecorder {
             date: date,
             kind: cleanupKind,
             reclaimedBytes: outcome.reclaimedBytes,
-            itemCount: outcome.trashed.count
+            itemCount: outcome.trashed.count,
+            paths: outcome.trashed.map { $0.original.standardizedFileURL.path }
         )
     }
 

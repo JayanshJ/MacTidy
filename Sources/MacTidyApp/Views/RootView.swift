@@ -31,6 +31,10 @@ struct RootView: View {
             // size nudge with the actual Trash.
             state.refreshLogs()
         }
+        .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didActivateApplicationNotification)) { _ in
+            if !SnapshotHarness.isActive { state.memory.observeActivity() }
+        }
+        .task { await state.memory.run() }
         .task {
             if SnapshotHarness.isActive {
                 await SnapshotHarness.run(state: state)

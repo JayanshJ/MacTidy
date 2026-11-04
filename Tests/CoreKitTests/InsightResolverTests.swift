@@ -39,11 +39,11 @@ struct InsightResolverTests {
         ])
         let procs: [RunningProcess] = [
             RunningProcess(pid: 100, name: "Slack", appBundlePath: "/Applications/Slack.app",
-                           residentBytes: 800_000_000, cpuPercent: 0.1, idleSeconds: 3600),
+                           residentBytes: 800_000_000, cpuPercent: 0.1, idleSeconds: 3600, physicalFootprintBytes: 600_000_000),
             RunningProcess(pid: 1, name: "kernel_task", appBundlePath: nil,
                            residentBytes: 2_000_000_000, cpuPercent: 5, idleSeconds: 0),
         ]
-        return SystemSnapshot(categories: [cat], memory: nil, processes: procs)
+        return SystemSnapshot(categories: [cat], memory: nil, processes: procs, memoryPressure: .warning)
     }
 
     @Test func quitInsightFiltersDeniedAndSystemProcesses() {

@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// One running process with its resource footprint. Read-only — killing is
 /// a separate, user-confirmed step. The honest framing: "freeing RAM" on
@@ -9,27 +10,28 @@ public struct RunningProcess: Identifiable, Sendable, Hashable {
     public let name: String
     /// The app bundle path if this process belongs to a .app, else nil.
     public let appBundlePath: String?
-    /// Resident memory in bytes (RSS) — real RAM held.
+    /// RSS is retained for diagnostics; app memory uses physicalFootprintBytes.
     public let residentBytes: Int64
-    /// CPU percent (0–100 * one core), averaged; 0 when idle.
     public let cpuPercent: Double
-    /// Seconds since the process last became frontmost / was used, when
-    /// available (0 means unknown or active). Kept for future frontmost-
-    /// tracking; currently unused by `isSafeToQuit` which gates on CPU.
     public let idleSeconds: Double
+    public let physicalFootprintBytes: Int64?
+    public let executablePath: String?
+
+    public init(pid: Int32, name: String, appBundlePath: String?, residentBytes: Int64,
+                cpuPercent: Double, idleSeconds: Double,
+                physicalFootprintBytes: Int64? = nil, executablePath: String? = nil) {
+        self.pid = pid; self.name = name; self.appBundlePath = appBundlePath
+        self.residentBytes = residentBytes; self.cpuPercent = cpuPercent
+        self.idleSeconds = idleSeconds; self.physicalFootprintBytes = physicalFootprintBytes
+        self.executablePath = executablePath
+    }
 
     public var id: Int32 { pid }
 
-    /// Whether the process is safe to suggest quitting: a user app (has a
-    /// bundle path), not in the system denylist, and currently CPU-quiet
-    /// (below the idle CPU threshold). We use CPU-quietness as the idle
-    /// proxy because frontmost-tracking (`idleSeconds`) is not yet wired up
-    /// — it's always 0, so the old `idleSeconds >= threshold` check never
-    /// fired. A process under 1% CPU is almost certainly not actively in use.
     public var isSafeToQuit: Bool {
-        appBundlePath != nil
-            && !ProcessDenylist.isDenied(name)
+        appBundlePath != nil && !ProcessDenylist.isDenied(name)
             && cpuPercent < ProcessScanner.idleCpuThreshold
+            && idleSeconds >= ProcessScanner.idleThresholdSeconds
     }
 
     public var isSystemEssential: Bool {
@@ -64,12 +66,10 @@ public enum ProcessDenylist {
 /// (RSS, CPU, command) — no private API, no entitlements needed. Degrades
 /// gracefully: a `ps` failure yields an empty list, never a crash.
 public enum ProcessScanner {
-    /// A process is considered "idle" if it hasn't been frontmost for this
-    /// long. Currently unused by `isSafeToQuit` (which gates on CPU), but
-    /// kept for future frontmost-tracking implementation.
+    /// Minimum observed time away from the frontmost app.
     public static let idleThresholdSeconds: Double = 300
 
-    /// A process is considered CPU-quiet (and thus a candidate for "idle")
+    /// CPU-quiet is an additional gate, never evidence of inactivity.
     /// if its CPU usage is below this percentage. 1% is a conservative bar —
     /// it catches background helpers and parked apps while excluding
     /// actively-running dev servers, builds, and media playback.
@@ -80,10 +80,15 @@ public enum ProcessScanner {
         public let usedBytes: Int64
         public let freeBytes: Int64
         public let swapUsedBytes: Int64
+
+        public init(totalBytes: Int64, usedBytes: Int64, freeBytes: Int64, swapUsedBytes: Int64) {
+            self.totalBytes = totalBytes; self.usedBytes = usedBytes
+            self.freeBytes = freeBytes; self.swapUsedBytes = swapUsedBytes
+        }
     }
 
     /// Returns the current process list, sorted by resident RAM descending.
-    public static func scan() -> [RunningProcess] {
+    public static func scan(activity: AppActivity = AppActivity(), now: Date = Date()) -> [RunningProcess] {
         guard let output = Shell.run("/bin/ps", ["-axo", "pid,rss,%cpu,comm"]) else {
             return []
         }
@@ -105,7 +110,9 @@ public enum ProcessScanner {
                 appBundlePath: bundlePath,
                 residentBytes: rssKB * 1024,
                 cpuPercent: cpu,
-                idleSeconds: 0
+                idleSeconds: bundlePath.map { activity.idleSeconds(for: $0, now: now) } ?? 0,
+                physicalFootprintBytes: physicalFootprint(pid: pid),
+                executablePath: comm
             ))
         }
         return procs.sorted { $0.residentBytes > $1.residentBytes }
@@ -115,19 +122,31 @@ public enum ProcessScanner {
     /// executable is inside `Foo.app/Contents/...`, attributes to Foo.app so
     /// helper/renderer processes roll up to their parent app.
     static func attribute(comm: String) -> (name: String, bundlePath: String?) {
-        var url = URL(fileURLWithPath: comm)
-        for _ in 0..<8 {
-            if url.pathExtension == "app" {
-                let appName = url.deletingPathExtension().lastPathComponent
-                let path = FileManager.default.fileExists(atPath: url.path) ? url.path : nil
-                return (appName, path)
-            }
-            let parent = url.deletingLastPathComponent()
-            if parent.path == "/" || parent.path == url.path { break }
-            url = parent
+        // The outermost bundle owns nested Electron helper apps.
+        let components = URL(fileURLWithPath: comm).pathComponents
+        if let index = components.firstIndex(where: { $0.hasSuffix(".app") }) {
+            let path = NSString.path(withComponents: Array(components[...index]))
+            return (URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent, path)
         }
         // No .app ancestor — system process; use the bare executable name.
         return ((comm as NSString).lastPathComponent, nil)
+    }
+
+    public static func footprint(forExecutable path: String, in processes: [RunningProcess]) -> Int64? {
+        let matches = processes.filter { $0.executablePath == path }
+        guard !matches.isEmpty, matches.allSatisfy({ $0.physicalFootprintBytes != nil }) else { return nil }
+        return matches.reduce(0) { $0 + ($1.physicalFootprintBytes ?? 0) }
+    }
+
+    public static func physicalFootprint(pid: Int32) -> Int64? {
+        var usage = rusage_info_v2()
+        let result = withUnsafeMutablePointer(to: &usage) { pointer in
+            pointer.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) {
+                proc_pid_rusage(pid, RUSAGE_INFO_V2, $0)
+            }
+        }
+        guard result == 0, usage.ri_phys_footprint <= UInt64(Int64.max) else { return nil }
+        return Int64(usage.ri_phys_footprint)
     }
 
     /// System-wide memory snapshot from `vm_stat` + `sysctl`. Returns nil if

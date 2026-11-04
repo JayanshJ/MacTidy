@@ -34,6 +34,20 @@ enum SnapshotHarness {
         let granted = FDAStatus(granted: true, issues: [],
                                 signing: SigningInfo(identifier: "com.jayansh.mactidy", cdhash: nil, isAdHoc: false))
         let results = Fixtures.results()
+        state.memory.pressure = .warning
+        state.memory.summary = ProcessScanner.MemorySummary(totalBytes: 24_000_000_000,
+            usedBytes: 19_000_000_000, freeBytes: 5_000_000_000, swapUsedBytes: 1_500_000_000)
+        state.memory.processes = [
+            RunningProcess(pid: 100, name: "Browser", appBundlePath: "/Applications/Browser.app",
+                residentBytes: 4_000_000_000, cpuPercent: 0.1, idleSeconds: 900,
+                physicalFootprintBytes: 2_000_000_000),
+            RunningProcess(pid: 101, name: "Browser", appBundlePath: "/Applications/Browser.app",
+                residentBytes: 2_000_000_000, cpuPercent: 0.1, idleSeconds: 900,
+                physicalFootprintBytes: 600_000_000),
+            RunningProcess(pid: 200, name: "Editor", appBundlePath: "/Applications/Editor.app",
+                residentBytes: 2_000_000_000, cpuPercent: 4, idleSeconds: 0,
+                physicalFootprintBytes: 900_000_000),
+        ]
         state.projects = Fixtures.projects(results)
         // Two scans a few days apart so Overview shows what's growing.
         var older = results
@@ -120,7 +134,24 @@ enum SnapshotHarness {
             }
         }
         // Standalone surfaces: rendered in a throwaway window of their own.
+        let targetPreview = TargetCleanup(results: results, targetBytes: 5_000_000_000,
+            policy: SafePathPolicy(home: URL(fileURLWithPath: "/Users/demo")))
         let standalone: [(String, CGSize, AnyView)] = [
+            ("sheet-target", CGSize(width: 660, height: 560),
+             AnyView(TargetCleanupView(preview: targetPreview))),
+            ("sheet-disk-accounting", CGSize(width: 620, height: 460),
+             AnyView(DiskAccountingView(preview: DiskAccounting(parts: [
+                 .init(name: "Home Library", bytes: 26_000_000_000),
+                 .init(name: "Other home files", bytes: 29_000_000_000),
+                 .init(name: "Applications", bytes: 12_000_000_000),
+                 .init(name: "Shared Library", bytes: 2_000_000_000),
+                 .init(name: "macOS System volume", bytes: 14_000_000_000),
+             ], pressure: DiskPressure(totalBytes: 494_000_000_000, freeBytes: 374_000_000_000),
+                physicalFree: 370_000_000_000, snapshotCount: 2)))),
+            ("trash-nudge", CGSize(width: 900, height: 180),
+             AnyView(TrashNudgeCard().padding(Theme.Spacing.lg))),
+            ("memory", CGSize(width: 760, height: 460),
+             AnyView(MemoryCard(quitSheet: .constant(nil)).padding(Theme.Spacing.lg))),
             ("settings", CGSize(width: 640, height: 600), AnyView(SettingsView())),
             ("sheet-confirm", CGSize(width: 600, height: 540),
              AnyView(DeletionConfirmationSheet(title: "Clean everything that's safe?",

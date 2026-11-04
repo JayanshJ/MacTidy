@@ -48,33 +48,3 @@ public enum MemoryPressure {
         return .parse(rawValue: raw)
     }
 }
-
-/// The one deliberate memory action MacTidy offers beyond quitting idle apps:
-/// purging the disk cache via `/usr/sbin/purge`. Honest contract: this drops
-/// file caches so inactive memory shows as free, but caches rebuild — the
-/// effect is temporary and can make subsequent launches slower. It's gated
-/// behind an admin prompt (purge needs root) and never run automatically.
-public enum MemoryMaintenance {
-    public enum PurgeResult: Equatable, Sendable {
-        case purged
-        case adminPromptCancelled
-        case failed(String)
-    }
-
-    /// Runs `purge` via the standard macOS admin-auth dialog. Non-throwing.
-    public static func purgeDiskCache() -> PurgeResult {
-        // Single quoted command through do shell script; purge takes no args.
-        let script = "/usr/sbin/purge"
-        let escaped = script.replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        let appleScript = "do shell script \"\(escaped)\" with administrator privileges"
-        guard let out = Shell.run("/usr/bin/osascript", ["-e", appleScript]) else {
-            return .failed("osascript unavailable")
-        }
-        if out.succeeded { return .purged }
-        if out.stderr.contains("User canceled") || out.stderr.contains("-128") {
-            return .adminPromptCancelled
-        }
-        return .failed(Shell.humanReadableAppleScriptError(out.stderr.isEmpty ? out.stdout : out.stderr))
-    }
-}

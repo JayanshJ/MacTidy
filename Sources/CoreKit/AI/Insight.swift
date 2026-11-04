@@ -9,6 +9,7 @@ public struct SystemSnapshot: Sendable {
     public let categories: [CategoryResult]
     public let memory: ProcessScanner.MemorySummary?
     public let processes: [RunningProcess]
+    public let memoryPressure: MemoryPressureLevel?
     /// Free/total space on the boot volume — drives the "disk is almost full"
     /// insight. nil when the capacities couldn't be read.
     public let diskPressure: DiskPressure?
@@ -20,11 +21,13 @@ public struct SystemSnapshot: Sendable {
     public init(categories: [CategoryResult],
                 memory: ProcessScanner.MemorySummary?,
                 processes: [RunningProcess],
+                memoryPressure: MemoryPressureLevel? = nil,
                 diskPressure: DiskPressure? = nil,
                 launchItems: [LaunchItem]? = nil) {
         self.categories = categories
         self.memory = memory
         self.processes = processes
+        self.memoryPressure = memoryPressure
         self.diskPressure = diskPressure
         self.launchItems = launchItems
     }

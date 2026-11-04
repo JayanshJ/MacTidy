@@ -34,6 +34,7 @@ final class AppState {
     /// notifications. Owned here so Settings can bind its toggles and the
     /// menu bar panel can read its summary.
     let monitor = SpaceMonitor()
+    let memory = AppMemoryState()
 
     /// Self-update: checks GitHub Releases for a newer MacTidy and installs
     /// it in place. Owned here so Settings can bind it and the launch check
@@ -127,6 +128,35 @@ final class AppState {
     /// and its dashboard gate update live after a trash (and after the user
     /// empties the Trash in Finder) instead of only on first appear.
     var trashBytes: Int64 = 0
+    var isEmptyingTrash = false
+    private var activeTrashOperations = 0
+    var isTrashBusy: Bool { activeTrashOperations > 0 }
+    var trashEmptyingMessage: String?
+    var trashSpaceMeasurement: TrashSpaceMeasurement? = UserDefaults.standard.data(forKey: "MacTidy.trashSpaceMeasurement")
+        .flatMap { try? JSONDecoder().decode(TrashSpaceMeasurement.self, from: $0) }
+
+    /// Manual, confirmed Finder action only. Never used by schedules or cleanup plans.
+    func emptyTrash() async {
+        guard !isEmptyingTrash, !isTrashBusy, !SnapshotHarness.isActive else { return }
+        isEmptyingTrash = true
+        defer { isEmptyingTrash = false }
+        let result = await Task.detached(priority: .userInitiated) {
+            let before = TrashEmptying.freeBytes()
+            let result = TrashEmptying.emptyUsingFinder()
+            return (result, TrashSpaceMeasurement(before: before, after: TrashEmptying.freeBytes()))
+        }.value
+        trashSpaceMeasurement = result.1
+        if let data = try? JSONEncoder().encode(result.1) {
+            UserDefaults.standard.set(data, forKey: "MacTidy.trashSpaceMeasurement")
+        }
+        switch result.0 {
+        case .completed:
+            trashEmptyingMessage = "Finder finished emptying Trash. Items still present remain restorable."
+        case .cancelled: trashEmptyingMessage = "Empty Trash cancelled."
+        case .failed(let error): trashEmptyingMessage = "Finder could not finish: " + error
+        }
+        refreshLogs()
+    }
     /// The most recent outcome, for the Undo toast.
     var lastUndoableOutcome: (records: [TrashRecord], label: String)?
 
@@ -686,6 +716,13 @@ final class AppState {
         extraAllowedRoots: [URL] = [],
         kind: TrashRecord.Kind = .deletion
     ) async -> DeletionOutcome {
+        guard !isEmptyingTrash, !SnapshotHarness.isActive else {
+            return DeletionOutcome(trashed: [], skipped: plan.candidates.map {
+                SkippedRecord(url: $0.url, reason: "Trash is being emptied; try again afterward.")
+            }, reclaimedBytes: 0)
+        }
+        activeTrashOperations += 1
+        defer { activeTrashOperations -= 1 }
         let executor = DeletionExecutor(
             policy: SafePathPolicy(extraAllowedRoots: extraAllowedRoots)
         )
@@ -743,6 +780,9 @@ final class AppState {
     /// every item on top of that. Returns nil when nothing is due.
     @discardableResult
     func runScheduledIfDue(now: Date = Date()) async -> ScheduledRunResult? {
+        guard !isEmptyingTrash, !SnapshotHarness.isActive else { return nil }
+        activeTrashOperations += 1
+        defer { activeTrashOperations -= 1 }
         // Re-read from disk in case a Settings edit landed since init.
         let jobs = scheduleStore.load()
         guard !jobs.isEmpty else { return nil }
@@ -878,21 +918,26 @@ final class AppState {
     /// is configured or the call fails — so the Insights panel is useful even
     /// without AI. Never throws.
     func generateInsights() async -> [Insight] {
+        if SnapshotHarness.isActive {
+            return DeterministicInsights.from(SystemSnapshot(categories: categoryResults,
+                memory: memory.summary, processes: memory.processes, memoryPressure: memory.pressure))
+        }
         // Run the snapshot-gathering work off the main thread — ProcessScanner
         // stats ~500 processes, DiskPressure reads sysctl, and LaunchItemsAuditor
         // walks plist dirs. The old code ran all of this on @MainActor.
+        await memory.refresh()
+        let processes = memory.processes, memorySummary = memory.summary, memoryPressure = memory.pressure
         let categories = categoryResults
         let snapshot = await Task.detached {
             // A stat + realpath per scan item: thousands of syscalls.
             let freshCategories = Self.prunedForMissingFiles(categories)
-            let processes = await Task.detached { ProcessScanner.scan() }.value
-            let memory = await Task.detached { ProcessScanner.memorySummary() }.value
             let pressure = await Task.detached { DiskPressure.current() }.value
             let launch = await Task.detached { LaunchItemsAuditor.audit() }.value
             return SystemSnapshot(
                 categories: freshCategories,
-                memory: memory,
+                memory: memorySummary,
                 processes: processes,
+                memoryPressure: memoryPressure,
                 diskPressure: pressure,
                 launchItems: launch
             )
@@ -916,6 +961,13 @@ final class AppState {
         _ set: DuplicateSet,
         extraAllowedRoots: [URL] = []
     ) async -> CloneDeduplicator.Outcome {
+        guard !isEmptyingTrash, !SnapshotHarness.isActive else {
+            return CloneDeduplicator.Outcome(deduplicated: [], skipped: set.physicalGroups.dropFirst().flatMap { $0 }.map {
+                SkippedRecord(url: $0.url, reason: "Trash is being emptied; try again afterward.")
+            }, reclaimedBytes: 0)
+        }
+        activeTrashOperations += 1
+        defer { activeTrashOperations -= 1 }
         let outcome = await Task.detached(priority: .userInitiated) {
             CloneDeduplicator.deduplicate(
                 set,
@@ -930,6 +982,9 @@ final class AppState {
     /// it from the log.
     @discardableResult
     func restore(_ record: TrashRecord) throws -> URL {
+        guard !isEmptyingTrash else {
+            throw Restorer.RestoreError.restoreFailed("Trash is being emptied; try again afterward.")
+        }
         let destination = try Restorer.restore(record)
         trashLog.remove(record.id)
         recentTrashed = trashLog.load()
@@ -942,6 +997,9 @@ final class AppState {
     /// rewrites the log and re-sizes the Trash once. Returns the records that
     /// could not be restored; they stay in the log.
     func restore(_ records: [TrashRecord]) async -> [TrashRecord] {
+        guard !isEmptyingTrash else { return records }
+        activeTrashOperations += 1
+        defer { activeTrashOperations -= 1 }
         let results = await Task.detached(priority: .userInitiated) {
             records.map { record in (record, (try? Restorer.restore(record)) != nil) }
         }.value
@@ -949,25 +1007,6 @@ final class AppState {
         recentTrashed = trashLog.load()
         refreshTrashBytes()
         return results.filter { !$0.1 }.map(\.0)
-    }
-
-    // MARK: - Memory maintenance
-
-    /// The most recent disk-cache purge outcome, surfaced inline on the
-    /// Memory card. Nil until the user runs one this session.
-    var lastPurgeResult: MemoryMaintenance.PurgeResult?
-
-    /// Runs `purge` (disk cache) via an admin prompt — the only memory action
-    /// beyond quitting idle apps. Non-throwing; result lands in
-    /// `lastPurgeResult` for the UI.
-    @discardableResult
-    func purgeDiskCache() async -> MemoryMaintenance.PurgeResult {
-        // Blocks for the whole admin password prompt plus `purge` itself.
-        let result = await Task.detached(priority: .userInitiated) {
-            MemoryMaintenance.purgeDiskCache()
-        }.value
-        lastPurgeResult = result
-        return result
     }
 
     /// Dismisses a record from the Recently Trashed list without restoring
@@ -1001,6 +1040,11 @@ final class AppState {
                 return (trashLog.load(), cleanupLog.load())
             }.value
             if trashed != recentTrashed { recentTrashed = trashed }
+            if let undo = lastUndoableOutcome {
+                let present = Set(trashed.map(\.id))
+                let remaining = undo.records.filter { present.contains($0.id) }
+                lastUndoableOutcome = remaining.isEmpty ? nil : (remaining, undo.label)
+            }
             if history != cleanupHistory { cleanupHistory = history }
         }
         refreshTrashBytes()
@@ -1216,7 +1260,7 @@ final class AppState {
               let config = try? JSONDecoder().decode(AIConfig.self, from: data) else {
             return AIConfig()
         }
-        return config
+        return config.replacingRetiredDefault
     }
 
     /// Resolves the current `aiConfig` to a concrete advisor, or nil when no

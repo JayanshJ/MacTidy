@@ -20,19 +20,23 @@ public struct CleanupEntry: Identifiable, Sendable, Codable, Hashable {
     public let kind: Kind
     public let reclaimedBytes: Int64
     public let itemCount: Int
+    /// Successful original paths, for detecting output that returns after cleanup.
+    public let paths: [String]?
 
     public init(
         id: UUID = UUID(),
         date: Date = Date(),
         kind: Kind,
         reclaimedBytes: Int64,
-        itemCount: Int
+        itemCount: Int,
+        paths: [String]? = nil
     ) {
         self.id = id
         self.date = date
         self.kind = kind
         self.reclaimedBytes = reclaimedBytes
         self.itemCount = itemCount
+        self.paths = paths
     }
 }
 

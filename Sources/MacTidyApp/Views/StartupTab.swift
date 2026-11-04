@@ -73,6 +73,11 @@ struct DashboardStartup: View {
                         .lineLimit(1).truncationMode(.middle)
                 }
             }
+            if let program = item.program {
+                Text(ProcessScanner.footprint(forExecutable: program, in: state.memory.processes)?.formattedBytes ?? "Unavailable")
+                    .font(Theme.Font.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    .help("Current memory of processes whose executable exactly matches this item. Shared helpers cannot always be attributed.")
+            }
             Spacer(minLength: Theme.Spacing.lg)
             switch action {
             case .disable: Button("Disable") { disable(item) }
@@ -87,6 +92,7 @@ struct DashboardStartup: View {
     private func reload() {
         isLoading = true
         Task {
+            await state.memory.refresh()
             let (audited, parked) = await Task.detached {
                 (LaunchItemsAuditor.audit(), LaunchItemsAuditor.disabledItems())
             }.value

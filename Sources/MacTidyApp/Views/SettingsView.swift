@@ -85,6 +85,10 @@ struct SettingsView: View {
             if ollamaDetection == nil { refreshOllamaModels() }
             refreshStoredKeyStatus()
         }
+        .onChange(of: state.aiConfig.model) { _, _ in
+            keyStatus = nil
+            connectionStatus = nil
+        }
         .onChange(of: state.aiConfig.provider) { _, _ in
             apiKeyInput = ""
             keyStatus = nil

@@ -266,6 +266,7 @@ extension ScanItem {
         // Application Support items carry their own knowledge; anything there
         // MacTidy doesn't recognise (a whole app folder from an older saved
         // scan) is app data, never safe by default.
+        if finding == BuildOutput.finding || finding == BuildOutput.xcodeFinding { return .caution }
         if category == .appSupport { return AppSupportRules.insight(for: self)?.risk ?? .caution }
         // Trashing a group container resets every app that shares it.
         if category == .groupContainers { return .caution }

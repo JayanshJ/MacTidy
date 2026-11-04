@@ -17,6 +17,9 @@ public enum CloneDeduplicator {
         public let deduplicated: [TrashedRecord]
         public let skipped: [SkippedRecord]
         public let reclaimedBytes: Int64
+        public init(deduplicated: [TrashedRecord], skipped: [SkippedRecord], reclaimedBytes: Int64) {
+            self.deduplicated = deduplicated; self.skipped = skipped; self.reclaimedBytes = reclaimedBytes
+        }
     }
 
     public enum DedupError: Error, LocalizedError {

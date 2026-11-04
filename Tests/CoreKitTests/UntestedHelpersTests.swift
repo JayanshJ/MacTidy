@@ -39,9 +39,8 @@ struct UntestedHelpersTests {
     @Test func attributeHandlesNestedAppBundle() {
         let (name, _) = ProcessScanner.attribute(
             comm: "/Applications/Some App.app/Contents/Frameworks/Helper.app/Contents/MacOS/Helper")
-        // The FIRST .app ancestor wins (walks up from the leaf), so this
-        // should attribute to "Helper", not "Some App".
-        #expect(name == "Helper")
+        // Nested helpers belong to the outermost app for memory rollups.
+        #expect(name == "Some App")
     }
 
     // MARK: - Shell.find

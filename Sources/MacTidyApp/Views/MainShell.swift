@@ -247,6 +247,7 @@ private struct ScanToolbarButton: View {
 struct OverviewView: View {
     @Environment(AppState.self) private var state
     @State private var confirmPlan: DeletionPlan?
+    @State private var showDiskAccounting = false
     @State private var pressure: DiskPressure? = SnapshotHarness.isActive ? DiskPressure.current() : nil
 
     var body: some View {
@@ -269,6 +270,9 @@ struct OverviewView: View {
                 hero(safeBytes: safeBytes, safeCount: safe.count, reviewBytes: reviewBytes)
                 if let pressure, pressure.isAvailable { capacity(pressure, safe: safeBytes, review: reviewBytes) }
                 if state.trashBytes >= TrashNudgeCard.threshold { TrashNudgeCard() }
+                Button("Where disk space goes…") { showDiskAccounting = true }
+                    .buttonStyle(.link)
+                returnedItems
                 growing
                 appSupportCard
                 if !ranked.isEmpty { breakdown(ranked) }
@@ -282,11 +286,25 @@ struct OverviewView: View {
             .frame(maxWidth: .infinity)
         }
         .background(Theme.canvas)
+        .sheet(isPresented: $showDiskAccounting) { DiskAccountingView() }
         .sheet(item: $confirmPlan) { plan in
             // No rescan: the cleanup already pruned trashed items from the results.
             DeletionConfirmationSheet(title: "Clean everything that's safe?", plan: plan)
         }
         .task(id: DiskPressure.refreshKey(state)) { pressure = await DiskPressure.load() }
+    }
+
+    @ViewBuilder
+    private var returnedItems: some View {
+        let returned = RecurringCleanup.returned(items: state.categoryResults.flatMap(\.items), history: state.cleanupHistory)
+        if !returned.isEmpty {
+            SurfaceSection("Returned after cleanup", footer: "These paths were cleaned within seven days and are present again. They may have rebuilt or been restored; cleaning again may not help.") {
+                ForEach(Array(returned.prefix(3))) { item in
+                    HStack { Text(item.url.lastPathComponent); Spacer(); Text(item.sizeBytes.formattedBytes).foregroundStyle(.secondary) }
+                        .padding(Theme.Spacing.md)
+                }
+            }
+        }
     }
 
     @ViewBuilder

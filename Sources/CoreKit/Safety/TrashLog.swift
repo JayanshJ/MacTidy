@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// One persistently recorded item MacTidy moved to the Trash, so it can be
 /// surfaced in the "Recently Trashed" list and restored on demand. The
@@ -126,7 +127,6 @@ public final class TrashLog: @unchecked Sendable {
     /// number of records pruned.
     @discardableResult
     public func pruneMissing() -> Int {
-        let fm = FileManager.default
         return queue.sync {
             guard let data = try? Data(contentsOf: fileURL),
                   var entries = try? JSONDecoder().decode([TrashRecord].self, from: data)
@@ -134,7 +134,10 @@ public final class TrashLog: @unchecked Sendable {
             let before = entries.count
             entries.removeAll { record in
                 guard let trash = record.trashLocation else { return true }
-                return !fm.fileExists(atPath: trash.path)
+                var info = stat()
+                if lstat(trash.path, &info) == 0 { return false }
+                // Permission denial is not proof of deletion.
+                return errno == ENOENT || errno == ENOTDIR
             }
             let pruned = before - entries.count
             guard pruned > 0 else { return 0 }

@@ -77,6 +77,36 @@ Any new destructive feature must route through `SafePathPolicy` + `Trasher` (or
 `CloneDeduplicator`), and record to `TrashLog`/`CleanupLog` via `AppState`. Never
 bypass the policy, never call `removeItem`, never `rm`.
 
+### Memory, target plans and permanent Trash disposal
+
+`AppMemory` groups processes by their outermost app bundle and uses
+`proc_pid_rusage` physical footprints, with unknown measurements shown as
+unavailable. `AppMemoryState` observes frontmost app changes for the session;
+quit suggestions require five observed idle minutes, low aggregate CPU, and
+warning/critical pressure or at least 1 GB swap. The quit sheet rechecks these
+conditions and requests a graceful quit. Bounded session samples flag sustained
+memory growth over two hours as a possible leak. File-cache purging is removed.
+
+`TargetCleanup` orders scan items by recovery cost for a user-entered target.
+Only `isPreselectable` items start checked. Caution/Danger items always require
+explicit selection, and the final plan uses the normal deletion pipeline.
+`BuildOutput` recognizes git-ignored `dist`, `out`, and `build` directories only
+when no descendant is tracked, plus `.build` beside an xcodeproj; new findings
+are Caution. Dev roots are deduplicated. Big files also cover Documents, Desktop
+and Movies; installers, screenshots and build trees retain their own owner.
+`CleanupEntry.paths` is optional for old logs and enables returned-path nudges.
+`DiskAccounting` is a user-triggered read-only estimate, with shared APFS blocks,
+unreadable data and the unexplained remainder explicitly labelled.
+
+**Owner-approved exception (2026-11-03):** `TrashEmptying` delegates permanent
+emptying to Finder, only from `AppState.emptyTrash` after a manual confirmation.
+It is never part of a scan, deletion plan or schedule, and never runs in snapshot
+mode. The confirmation covers all Trash, including files from other apps and
+connected disks, and explicitly says there is no undo. Reconcile `TrashLog` and
+the Undo toast afterward, including partial failures. Record the observed change
+in free blocks separately from estimated cleanup bytes; do not add it to the
+reclaimed total again. Never test this by emptying the owner's Trash.
+
 ### Cleanup source registry
 
 `Sources/CoreKit/Model/CleanSource.swift` is the declarative table behind

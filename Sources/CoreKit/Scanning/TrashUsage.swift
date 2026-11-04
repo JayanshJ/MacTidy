@@ -2,9 +2,8 @@ import Foundation
 
 /// Read-only sizing of the user's macOS Trash (`~/.Trash`). Used by the
 /// Overview nudge that points out the Trash itself holds reclaimable space —
-/// MacTidy moves everything *to* the Trash but never empties it (an explicit
-/// invariant), so reminding the user to empty it in Finder closes the reclaim
-/// loop honestly.
+/// MacTidy moves cleanup items *to* the Trash; a separate confirmed Finder action
+/// can empty it. Measuring the Trash keeps the space estimate honest.
 ///
 /// This is display-only: it never deletes, never empties, never modifies the
 /// Trash in any way.

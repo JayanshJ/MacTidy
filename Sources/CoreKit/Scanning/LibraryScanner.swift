@@ -77,10 +77,14 @@ extension CategoryScanner {
     /// Library is excluded so this doesn't overlap the dedicated Library
     /// categories (caches, backups, Application Support, …). Build/VCS trees
     /// are skipped inside `largeFiles` for the same reason. Suggest-only.
-    func bigFiles() async -> [ScanItem] {
-        let roots = [home.appending(path: "Downloads")] + devRoots
+    func bigFiles(devRootsCache: [Category: [ScanItem]] = [:]) async -> [ScanItem] {
+        let roots = Self.distinctRoots(["Downloads", "Documents", "Desktop", "Movies"].map { home.appending(path: $0) } + devRoots)
+        let cache = devRootsCache.isEmpty ? await devRootsScan() : devRootsCache
+        let excluded = cache.values.flatMap { $0 }.filter(\.isDirectory).map(\.url)
+        let claimed = Set((oldInstallers() + staleScreenshots()).map { $0.url.standardizedFileURL.path })
         return await Task.detached {
-            DiskScanner.largeFiles(under: roots, minSize: 100 * 1024 * 1024)
+            DiskScanner.largeFiles(under: roots, minSize: 100 * 1024 * 1024, excludedDirectories: excluded)
+                .filter { !claimed.contains($0.url.standardizedFileURL.path) }
         }.value
     }
 

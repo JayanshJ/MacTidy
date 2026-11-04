@@ -43,7 +43,7 @@ public enum AIProvider: String, CaseIterable, Sendable, Identifiable, Codable {
         case .none: ""
         case .ollama: "llama3.2"
         case .openai: "gpt-4o-mini"
-        case .anthropic: "claude-3-5-sonnet-latest"
+        case .anthropic: "claude-sonnet-5-5"
         }
     }
 }
@@ -74,6 +74,15 @@ public struct AIConfig: Sendable, Codable, Equatable {
         self.model = model
         self.ollamaBaseURL = ollamaBaseURL
         self.sendFilePaths = sendFilePaths
+    }
+
+    /// Migrate the former built-in Anthropic default, which Anthropic retired.
+    public var replacingRetiredDefault: AIConfig {
+        var result = self
+        if provider == .anthropic && model == "claude-3-5-sonnet-latest" {
+            result.model = AIProvider.anthropic.defaultModel
+        }
+        return result
     }
 
     public static let defaultOllamaURL = "http://localhost:11434"

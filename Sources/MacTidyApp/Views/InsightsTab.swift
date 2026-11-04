@@ -159,7 +159,7 @@ struct QuitConfirmationSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Quit these apps?").font(.system(size: 17, weight: .semibold))
-            Text("A graceful quit (not force-kill), so each app can save its state. You can reopen them anytime.")
+            Text("Requests a graceful quit so each app can save its work. Apps may ask you to save or decline to quit. Only apps still idle are eligible.")
                 .foregroundStyle(.secondary)
             List {
                 ForEach(apps, id: \.self) { name in
@@ -200,13 +200,18 @@ struct QuitConfirmationSheet: View {
         // it runs off the main thread and results appear one by one.
         isQuitting = true
         Task {
-            for name in apps {
-                let escaped = name.replacingOccurrences(of: "\"", with: "\\\"")
-                let script = "tell application \"\(escaped)\" to quit"
-                let ok = await Task.detached {
-                    Shell.run("/usr/bin/osascript", ["-e", script])?.succeeded ?? false
-                }.value
-                results.append((name, ok))
+            await state.memory.refresh()
+            for name in Set(apps).sorted() {
+                let matches = state.memory.candidates.filter { $0.name == name }
+                guard matches.count == 1, let candidate = matches.first,
+                      candidate.path != NSWorkspace.shared.frontmostApplication?.bundleURL?.path,
+                      let running = NSWorkspace.shared.runningApplications.first(where: {
+                          $0.bundleURL?.path == candidate.path && $0.activationPolicy == .regular
+                      }) else {
+                    results.append((name, false))
+                    continue
+                }
+                results.append((name, running.processIdentifier != ProcessInfo.processInfo.processIdentifier && running.terminate()))
             }
             isQuitting = false
             done = true

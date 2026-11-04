@@ -85,6 +85,7 @@ public enum DiskScanner {
         under roots: [URL],
         minSize: Int64 = 100 * 1024 * 1024,
         maxResults: Int = 250,
+        excludedDirectories: [URL] = [],
         progress: (@Sendable (ScanProgress) -> Void)? = nil
     ) -> [ScanItem] {
         let keys: Set<URLResourceKey> = [
@@ -94,7 +95,8 @@ public enum DiskScanner {
         var found: [ScanItem] = []
         let fm = FileManager.default
 
-        for root in roots {
+        let excluded = Set(excludedDirectories.map { $0.standardizedFileURL.path })
+        for root in CategoryScanner.distinctRoots(roots) {
             guard let enumerator = fm.enumerator(
                 at: root,
                 includingPropertiesForKeys: Array(keys),
@@ -114,7 +116,11 @@ public enum DiskScanner {
             while let url = enumerator.nextObject() as? URL {
                 if Task.isCancelled { break }
                 if url.hasDirectoryPath,
-                   skipDirs.contains(url.lastPathComponent) {
+                   (skipDirs.contains(url.lastPathComponent) || excluded.contains(url.standardizedFileURL.path)) {
+                    enumerator.skipDescendants()
+                    continue
+                }
+                if (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true {
                     enumerator.skipDescendants()
                     continue
                 }
