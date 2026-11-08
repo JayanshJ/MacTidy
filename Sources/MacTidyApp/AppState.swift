@@ -35,6 +35,8 @@ final class AppState {
     /// menu bar panel can read its summary.
     let monitor = SpaceMonitor()
     let memory = AppMemoryState()
+    /// Shared for the app session so navigating away preserves journal streams.
+    let diskMapIndex = DiskMapIndex()
 
     /// Self-update: checks GitHub Releases for a newer MacTidy and installs
     /// it in place. Owned here so Settings can bind it and the launch check

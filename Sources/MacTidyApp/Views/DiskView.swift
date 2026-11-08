@@ -9,6 +9,8 @@ struct DirectoryExplorerView: View {
     @State private var isScanning = false
     @State private var scanTask: Task<Void, Never>?
     @State private var sizeCache = DiskMapSizeCache()
+    @State private var showingCachedSizes = false
+    @State private var hasIncompleteResults = false
     @State private var sheetPlan: DeletionPlan?
     /// Why the safety policy would refuse an item, by item: shown as a lock
     /// instead of offering a Trash that can only fail.
@@ -59,7 +61,8 @@ struct DirectoryExplorerView: View {
                     Picker("Age", selection: $ageFilter) { ForEach(DiskMapAge.allCases, id: \.self) { Text($0.rawValue).tag($0) } }.labelsHidden().frame(width: 125)
                 }
                 HStack {
-                    if isScanning { ProgressView().controlSize(.small); Text("Measuring…").font(Theme.Font.caption).foregroundStyle(.secondary) }
+                    if isScanning || showingCachedSizes { ProgressView().controlSize(.small); Text(showingCachedSizes ? "Showing previous scan · checking changes…" : "Measuring…").font(Theme.Font.caption).foregroundStyle(.secondary) }
+                    if hasIncompleteResults && !isScanning { Text("Some folders could not be fully measured").font(Theme.Font.caption).foregroundStyle(.secondary) }
                     if !selection.isEmpty {
                         Text("\(selection.count) selected").font(Theme.Font.caption)
                         Button("Clear All") { selection.removeAll() }
@@ -406,18 +409,33 @@ struct DirectoryExplorerView: View {
         items = []
         refusals = [:]
         counts = [:]
+        showingCachedSizes = false
+        hasIncompleteResults = false
         scanTask = Task {
-            for await item in DiskMapScanner.scan(root: target, cache: sizeCache) {
+            for await event in state.diskMapIndex.scan(root: target) {
                 guard !Task.isCancelled else { return }
-                items.append(item)
-                if item.isDirectory {
-                    Task {
-                        let count = await Task.detached { DiskMapDetails.childCount(at: item.url) }.value
-                        if root == target, let count { counts[item.id] = count }
-                    }
-                } else { counts[item.id] = 0 }
-                items.sort { $0.sizeBytes > $1.sizeBytes }
-                refusals.merge(Self.refusals(for: [item], extraRoots: extraRoots)) { _, new in new }
+                switch event {
+                case .cached(let previous):
+                    showingCachedSizes = true
+                    items = previous.map(\.item)
+                    counts = Dictionary(uniqueKeysWithValues: previous.map { ($0.item.id, $0.itemCount) })
+                    refusals = Self.refusals(for: items, extraRoots: extraRoots)
+                case .presented(_, let validating):
+                    isScanning = false
+                    showingCachedSizes = validating
+                case .measured(let aggregate):
+                    let item = aggregate.item
+                    if let index = items.firstIndex(where: { $0.id == item.id }) { items[index] = item }
+                    else { items.append(item) }
+                    counts[item.id] = aggregate.itemCount
+                    refusals.merge(Self.refusals(for: [item], extraRoots: extraRoots)) { _, new in new }
+                case .finished(let aggregates, let complete):
+                    items = aggregates.map(\.item)
+                    hasIncompleteResults = !complete
+                    counts = Dictionary(uniqueKeysWithValues: aggregates.map { ($0.item.id, $0.itemCount) })
+                    refusals = Self.refusals(for: items, extraRoots: extraRoots)
+                    showingCachedSizes = false
+                }
             }
             if !Task.isCancelled { isScanning = false }
         }

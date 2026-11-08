@@ -18,13 +18,19 @@ TEST_FLAGS := $(if $(CLT_FRAMEWORKS),-Xswiftc -F -Xswiftc $(CLT_FRAMEWORKS),)
 # fall back to ad-hoc otherwise.
 SIGN_IDENTITY := $(shell security find-identity -v -p codesigning 2>/dev/null | grep -q "MacTidy Signing" && echo "MacTidy Signing" || echo "-")
 
-.PHONY: build test app run cert clean release
+.PHONY: build test benchmark benchmark-scale app run cert clean release
 
 build:
 	swift build -c release
 
 test:
-	swift test $(TEST_FLAGS)
+	swift test $(TEST_FLAGS) $(TEST_ARGS)
+
+benchmark:
+	MACTIDY_BENCHMARK=1 $(MAKE) test TEST_ARGS="--filter DiskMapBenchmarkTests --no-parallel"
+
+benchmark-scale:
+	MACTIDY_SCALE_BENCHMARK=1 $(MAKE) test TEST_ARGS="--filter DiskMapScaleBenchmarkTests --no-parallel"
 
 # Wrap the SwiftPM binary into a real .app bundle and ad-hoc sign it
 # (codesign -s -). Never add the App Sandbox entitlement — it breaks
