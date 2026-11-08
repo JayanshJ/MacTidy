@@ -186,6 +186,13 @@ public enum HandledElsewhere {
         }
     }
 
+    /// Also protect ancestors that could contain a managed location. This is
+    /// deliberately conservative for wildcard rules and needs no disk reads.
+    public static func overlapsManagedLocation(_ url: URL, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> Bool {
+        guard let parts = relativeComponents(of: url, home: home) else { return false }
+        return rules.contains { rule in matches(parts, rule.components) }
+    }
+
     /// Whether a folder directly in ~/Library/Group Containers holds something
     /// handled elsewhere. The Group containers category leaves those out, so
     /// their bytes are listed once, and nobody is offered WhatsApp's whole

@@ -67,44 +67,42 @@ struct TreemapView: View {
         .help("\(tile.item.url.lastPathComponent) — \(tile.item.sizeBytes.formattedBytes)")
     }
 
-    /// Recursive binary-split layout: split the longest axis at the point that
-    /// halves the byte total, recurse each side. Produces squarish tiles whose
-    /// areas are proportional to size. Degenerate (zero-size) items are
-    /// dropped so they don't get invisible slivers.
+    /// Bruls et al. squarified layout: add each item to a row while doing so
+    /// improves its worst aspect ratio, then lay that row along the short side.
     static func layout(_ items: [ScanItem], in rect: CGRect) -> [(rect: CGRect, item: ScanItem)] {
-        let sized = items.filter { $0.sizeBytes > 0 }
-        guard let first = sized.first else { return [] }
-        guard sized.count > 1 else { return [(rect, first)] }
-
-        let total = sized.reduce(Int64(0)) { $0 + $1.sizeBytes }
-        guard total > 0 else { return [] }
-
-        // Find the split index whose cumulative total first reaches half.
-        var cum: Int64 = 0
-        var split = 0
-        let half = total / 2
-        for (i, item) in sized.enumerated() {
-            cum += item.sizeBytes
-            if cum >= half { split = i; break }
+        let sized = items.filter { $0.sizeBytes > 0 }.sorted { $0.sizeBytes > $1.sizeBytes }
+        let total = sized.reduce(0.0) { $0 + Double($1.sizeBytes) }
+        guard total > 0, rect.width > 0, rect.height > 0 else { return [] }
+        var remaining = sized.map { ($0, CGFloat(Double($0.sizeBytes) / total) * rect.width * rect.height) }
+        var area = rect
+        var output: [(rect: CGRect, item: ScanItem)] = []
+        func worst(_ row: [(ScanItem, CGFloat)], _ side: CGFloat) -> CGFloat {
+            guard !row.isEmpty, side > 0 else { return .infinity }
+            let sum = row.reduce(CGFloat.zero) { $0 + $1.1 }
+            guard let small = row.map(\.1).min(), let large = row.map(\.1).max(), small > 0 else { return .infinity }
+            return max(side * side * large / (sum * sum), sum * sum / (side * side * small))
         }
-        split = min(max(split, 0), sized.count - 2)
-        let left = Array(sized[0...split])
-        let right = Array(sized[(split + 1)...])
-        let leftTotal = left.reduce(Int64(0)) { $0 + $1.sizeBytes }
-        let leftFrac = CGFloat(leftTotal) / CGFloat(total)
-
-        if rect.width >= rect.height {
-            let lw = rect.width * leftFrac
-            let leftRect = CGRect(x: rect.minX, y: rect.minY, width: lw, height: rect.height)
-            let rightRect = CGRect(x: rect.minX + lw, y: rect.minY,
-                                   width: rect.width - lw, height: rect.height)
-            return layout(left, in: leftRect) + layout(right, in: rightRect)
-        } else {
-            let lh = rect.height * leftFrac
-            let leftRect = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: lh)
-            let rightRect = CGRect(x: rect.minX, y: rect.minY + lh,
-                                   width: rect.width, height: rect.height - lh)
-            return layout(left, in: leftRect) + layout(right, in: rightRect)
+        while !remaining.isEmpty {
+            let side = min(area.width, area.height)
+            guard side > 0 else { break }
+            var row = [remaining.removeFirst()]
+            while let next = remaining.first, worst(row + [next], side) <= worst(row, side) {
+                row.append(remaining.removeFirst())
+            }
+            let sum = row.reduce(CGFloat.zero) { $0 + $1.1 }
+            let horizontal = area.width < area.height
+            let thickness = sum / side
+            var offset: CGFloat = 0
+            for (item, value) in row {
+                let length = value / thickness
+                let tile = horizontal
+                    ? CGRect(x: area.minX + offset, y: area.minY, width: length, height: thickness)
+                    : CGRect(x: area.minX, y: area.minY + offset, width: thickness, height: length)
+                output.append((tile, item)); offset += length
+            }
+            if horizontal { area.origin.y += thickness; area.size.height -= thickness }
+            else { area.origin.x += thickness; area.size.width -= thickness }
         }
+        return output
     }
 }
