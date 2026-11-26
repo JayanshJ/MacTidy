@@ -23,6 +23,7 @@ struct DashboardUninstaller: View {
     @State private var selectedAppID: String?
     @State private var leftoverSelection = Set<UUID>()
     @State private var sheetPlan: DeletionPlan?
+    @State private var inspectTarget: InspectAppTarget?
     @State private var leftovers: [ScanItem] = []
     @State private var isLoadingLeftovers = false
     @State private var actions: [UninstallAction] = []
@@ -80,6 +81,9 @@ struct DashboardUninstaller: View {
                 leftovers = []
                 actions = []
             }
+        }
+        .sheet(item: $inspectTarget) { target in
+            AppInspectorSheet(appURL: target.url)
         }
     }
 
@@ -165,6 +169,10 @@ struct DashboardUninstaller: View {
                                 if let id = entry.app.bundleID {
                                     Text(id).font(.system(size: 11, design: .monospaced)).foregroundStyle(.tertiary)
                                 }
+                            }
+                            Spacer()
+                            Button("Inspect…") {
+                                inspectTarget = InspectAppTarget(url: entry.app.url)
                             }
                         }
                         if isLoadingLeftovers {

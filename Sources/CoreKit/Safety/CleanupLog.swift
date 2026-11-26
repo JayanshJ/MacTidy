@@ -13,6 +13,7 @@ public struct CleanupEntry: Identifiable, Sendable, Codable, Hashable {
         case dockerBuilderCache
         case timeMachine
         case devTerminal
+        case systemMaintenance
     }
 
     public let id: UUID

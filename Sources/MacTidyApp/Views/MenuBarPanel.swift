@@ -22,6 +22,7 @@ struct MenuBarPanel: View {
             header
             summary
             freeSpaceRow
+            vitalsStrip
             if !topCategories.isEmpty {
                 VStack(alignment: .leading, spacing: Theme.Spacing.sm + 2) {
                     let largest = topCategories.first?.totalBytes ?? 1
@@ -38,26 +39,72 @@ struct MenuBarPanel: View {
         .tint(Theme.accent)
         .task {
             state.monitor.start()
+            // A scheduled scan-only run may have written a newer scan.
+            state.reloadScanIfUpdatedElsewhere()
             await refreshDiskPressure()
-            // Keep the free-space ticker live while the popover is open —
-            // a user who empties Trash or frees space in another app should
-            // see the number update without reopening the panel. 30s cadence
-            // is cheap (one volume attribute probe) and smooth.
+            // Keep the free-space ticker and vitals live while the popover
+            // is open — 10s cadence is cheap and keeps CPU/battery fresh.
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(30))
+                try? await Task.sleep(for: .seconds(10))
                 if Task.isCancelled { break }
                 await refreshDiskPressure()
             }
         }
     }
 
-    /// Re-probes the boot volume's free bytes off the main actor and republishes
-    /// `diskPressure`. Called on appear, on a 30s loop while the popover is
-    /// open, and after "Quick check now" so the free-space line stays live
-    /// (the original loaded it once and went stale for the life of the view).
+    /// Re-probes the boot volume's free bytes and system vitals off the main actor.
     private func refreshDiskPressure() async {
-        let pressure = await Task.detached { DiskPressure.current() }.value
-        diskPressure = pressure
+        async let pressure = Task.detached { DiskPressure.current() }.value
+        async let vitalsRefresh: Void = state.vitals.refresh()
+        diskPressure = await pressure
+        _ = await vitalsRefresh
+    }
+
+    @ViewBuilder
+    private var vitalsStrip: some View {
+        let snap = state.vitals.snapshot
+        let memPressure = state.memory.pressure ?? state.vitals.memoryPressure
+        if snap != nil || memPressure != nil {
+            Button {
+                state.section = .vitals
+                openWindow(id: "main")
+                NSApp.activate(ignoringOtherApps: true)
+            } label: {
+                HStack(spacing: Theme.Spacing.md) {
+                    if let usage = snap?.cpu.usagePercent {
+                        vitalMetric("CPU", "\(Int(usage.rounded()))%")
+                    }
+                    if let memPressure {
+                        vitalMetric("Memory", memPressure.displayName)
+                    }
+                    if let batt = snap?.battery {
+                        vitalMetric(batt.isCharging ? "Charging" : "Battery", "\(batt.chargePercent)%")
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, Theme.Spacing.sm + 2)
+                .padding(.vertical, Theme.Spacing.sm)
+                .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.smallRadius, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: Theme.smallRadius, style: .continuous)
+                        .strokeBorder(Theme.hairline, lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func vitalMetric(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(value)
+                .font(Theme.Font.caption.weight(.semibold).monospacedDigit())
+            Text(label)
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+        }
     }
 
     // MARK: - Header

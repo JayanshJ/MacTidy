@@ -2,12 +2,14 @@ import Foundation
 
 public enum RecurringCleanup {
     /// A restored item is not evidence of regrowth; the message says "returned".
-    public static func returned(items: [ScanItem], history: [CleanupEntry], now: Date = Date()) -> [ScanItem] {
+    public static func returned(items: [ScanItem], history: [CleanupEntry], now: Date = Date(),
+                                within: TimeInterval = 7 * 86400,
+                                minimumBytes: Int64 = 100 * 1024 * 1024) -> [ScanItem] {
         let recentPaths = Set(history.filter {
             $0.kind == .deletion && now.timeIntervalSince($0.date) >= 0
-                && now.timeIntervalSince($0.date) <= 7 * 86400
+                && now.timeIntervalSince($0.date) <= within
         }.flatMap { $0.paths ?? [] })
-        return items.filter { $0.sizeBytes >= 100 * 1024 * 1024 && recentPaths.contains($0.url.standardizedFileURL.path) }
+        return items.filter { $0.sizeBytes >= minimumBytes && recentPaths.contains($0.url.standardizedFileURL.path) }
             .sorted { $0.sizeBytes > $1.sizeBytes }
     }
 

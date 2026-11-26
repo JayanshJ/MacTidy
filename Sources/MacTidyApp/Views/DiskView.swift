@@ -17,6 +17,7 @@ struct DirectoryExplorerView: View {
     @State private var refusals: [UUID: String] = [:]
     @State private var renderAsMap = false
     @State private var selectedItem: ScanItem?
+    @State private var hoveredID: UUID?
     @State private var itemCount: Int?
     @State private var counts: [UUID: Int] = [:]
     @State private var history: [URL] = []
@@ -97,7 +98,12 @@ struct DirectoryExplorerView: View {
             if let selectedItem { inspector(selectedItem) }
         }
         .background(Theme.canvas)
-        .onAppear { if !CommandLine.arguments.contains("--snapshot") { rescan(); startSearch() } }
+        .onAppear {
+            guard !CommandLine.arguments.contains("--snapshot") else { return }
+            // A deep link changes root, and onChange(of: root) scans it.
+            if !openRequestedTarget() { rescan(); startSearch() }
+        }
+        .onChange(of: state.diskMapTarget) { _ = openRequestedTarget() }
         .onDisappear { scanTask?.cancel(); searchTask?.cancel(); whyBigTask?.cancel() }
         .onChange(of: root) { rescan(); startSearch() }
         .onChange(of: searchText) { startSearch() }
@@ -167,7 +173,7 @@ struct DirectoryExplorerView: View {
     private var list: some View {
         VStack(spacing: 0) {
             ForEach(Array(sortedItems.enumerated()), id: \.element.id) { index, item in
-                if index > 0 { RowDivider(inset: 50) }
+                if index > 0 { RowDivider(inset: 80) }
                 explorerRow(item)
             }
         }
@@ -176,46 +182,64 @@ struct DirectoryExplorerView: View {
 
     private func explorerRow(_ item: ScanItem) -> some View {
         HStack(spacing: Theme.Spacing.md) {
-            if eligible(item) {
-                Toggle("Select \(item.url.lastPathComponent)", isOn: Binding(
-                    get: { selection[item.id] != nil },
-                    set: { selected in setSelected(item, selected) }
-                )).labelsHidden().toggleStyle(.checkbox)
-            } else { Image(systemName: "lock.fill").foregroundStyle(.tertiary).frame(width: 16) }
+            Group {
+                if eligible(item) {
+                    Toggle("Select \(item.url.lastPathComponent)", isOn: Binding(
+                        get: { selection[item.id] != nil },
+                        set: { selected in setSelected(item, selected) }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.checkbox)
+                } else {
+                    Image(systemName: "lock.fill")
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            .frame(width: 18, alignment: .center)
+
             Button { selectedItem = item } label: {
-            HStack(spacing: Theme.Spacing.md) {
-                Image(nsImage: FileIcon.image(for: item.url))
-                    .resizable().frame(width: 22, height: 22)
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: Theme.Spacing.sm) {
-                        Text(item.url.lastPathComponent).font(Theme.Font.bodyStrong).lineLimit(1)
-                        if let refusal = refusals[item.id] {
-                            Image(systemName: "lock.fill")
-                                .font(.system(size: 10))
-                                .foregroundStyle(.tertiary)
-                                .help(refusal)
+                HStack(spacing: Theme.Spacing.md) {
+                    Image(nsImage: FileIcon.image(for: item.url))
+                        .resizable().frame(width: 22, height: 22)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: Theme.Spacing.sm) {
+                            Text(item.url.lastPathComponent).font(Theme.Font.bodyStrong).lineLimit(1)
+                            if let refusal = refusals[item.id] {
+                                Image(systemName: "lock.fill")
+                                    .font(.system(size: 10))
+                                    .foregroundStyle(.tertiary)
+                                    .help(refusal)
+                            }
+                        }
+                        if let note = note(for: item) {
+                            Text(note).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
                         }
                     }
-                    if let note = note(for: item) {
-                        Text(note).font(Theme.Font.caption).foregroundStyle(.secondary).lineLimit(1)
-                    }
+                    Spacer(minLength: Theme.Spacing.lg)
+                    Meter(fraction: fraction(of: item)).frame(width: 140)
+                    Text(item.sizeBytes.formattedBytes)
+                        .font(Theme.Font.body.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .frame(width: 80, alignment: .trailing)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                        .opacity(item.isDirectory ? 1 : 0)
                 }
-                Spacer(minLength: Theme.Spacing.lg)
-                Meter(fraction: fraction(of: item)).frame(width: 140)
-                Text(item.sizeBytes.formattedBytes)
-                    .font(Theme.Font.body.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .frame(width: 80, alignment: .trailing)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.tertiary)
-                    .opacity(item.isDirectory ? 1 : 0)
+                .padding(.vertical, Theme.Spacing.sm + 2)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, Theme.Spacing.lg)
-            .padding(.vertical, Theme.Spacing.sm + 2)
+            .buttonStyle(.plain)
+            .simultaneousGesture(TapGesture(count: 2).onEnded { if item.isDirectory { navigate(to: item.url) } })
         }
-        .buttonStyle(RowButtonStyle())
-        .simultaneousGesture(TapGesture(count: 2).onEnded { if item.isDirectory { navigate(to: item.url) } })
+        .padding(.horizontal, Theme.Spacing.lg)
+        .background(hoveredID == item.id ? Theme.surfaceHover : Color.clear)
+        .onHover { hovering in
+            if hovering {
+                hoveredID = item.id
+            } else if hoveredID == item.id {
+                hoveredID = nil
+            }
         }
         .contextMenu {
                 if item.isDirectory { Button("Open Folder") { navigate(to: item.url) } }
@@ -376,6 +400,16 @@ struct DirectoryExplorerView: View {
                 } else { counts[item.id] = 0 }
             }
         }
+    }
+
+    /// Opens the folder another page asked for (`AppState.openInDiskMap`).
+    /// Returns whether root changed.
+    private func openRequestedTarget() -> Bool {
+        guard let target = state.diskMapTarget else { return false }
+        state.diskMapTarget = nil
+        guard target.standardizedFileURL != root.standardizedFileURL else { return false }
+        navigate(to: target.standardizedFileURL)
+        return true
     }
 
     private func navigate(to url: URL) {

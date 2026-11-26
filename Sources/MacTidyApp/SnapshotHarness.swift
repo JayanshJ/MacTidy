@@ -37,6 +37,19 @@ enum SnapshotHarness {
         state.memory.pressure = .warning
         state.memory.summary = ProcessScanner.MemorySummary(totalBytes: 24_000_000_000,
             usedBytes: 19_000_000_000, freeBytes: 5_000_000_000, swapUsedBytes: 1_500_000_000)
+        state.vitals.snapshot = SystemVitals.Snapshot(
+            cpu: SystemVitals.CPUVitals(
+                usagePercent: 24, load1m: 1.84, load5m: 1.62, load15m: 1.41,
+                coreCount: 10, uptimeSeconds: 194_400, chipName: "Apple M4"
+            ),
+            thermal: .nominal,
+            battery: SystemVitals.BatteryVitals(
+                chargePercent: 76, isCharging: false, isPluggedIn: false, isFullyCharged: false,
+                cycleCount: 98, designCycleCount: 1000, designCapacityMAh: 4629, maxCapacityMAh: 4537,
+                adapterWatts: nil, timeRemainingMinutes: 312
+            )
+        )
+        state.vitals.memoryPressure = .warning
         state.memory.processes = [
             RunningProcess(pid: 100, name: "Browser", appBundlePath: "/Applications/Browser.app",
                 residentBytes: 4_000_000_000, cpuPercent: 0.1, idleSeconds: 900,
@@ -69,6 +82,7 @@ enum SnapshotHarness {
         func main(_ section: SidebarItem, drill: CoreKit.Category? = nil, project: String? = nil,
                   showingElsewhere: Bool = false, scanHistory: [ScanSnapshot]? = nil) -> () -> Void {
             {
+                state.updates.phase = .idle
                 state.selectedProjectID = project
                 state.fdaStatus = granted
                 state.flowPhase = .dashboard
@@ -106,6 +120,21 @@ enum SnapshotHarness {
             }),
             ("overview", main(.overview)),
             ("overview-nohistory", main(.overview, scanHistory: [ScanSnapshot(results: results)])),
+            ("update-ready", {
+                main(.overview)()
+                state.updates.phase = .readyToRelaunch(UpdateChecker.ReleaseManifest(
+                    version: .init("9.9.9"), releaseName: "MacTidy 9.9.9", notes: "",
+                    htmlURL: UpdateChecker.latestReleasePageURL, downloadURL: nil, downloadSize: 0))
+            }),
+            ("changes", {
+                main(.changes)()
+                // One node_modules folder came back after a cleanup last week.
+                if let back = results.first(where: { $0.category == .nodeModules })?.items.first {
+                    state.cleanupHistory = [CleanupEntry(date: Date().addingTimeInterval(-5 * 86_400), kind: .deletion,
+                                                         reclaimedBytes: back.sizeBytes, itemCount: 1,
+                                                         paths: [back.url.standardizedFileURL.path])]
+                }
+            }),
             ("cleanup", main(.cleanup)),
             ("cleanup-elsewhere", main(.cleanup, showingElsewhere: true)),
             ("cleanup-detail", main(.cleanup, drill: .xcodeDerivedData)),
@@ -141,13 +170,17 @@ enum SnapshotHarness {
              AnyView(TargetCleanupView(preview: targetPreview))),
             ("sheet-disk-accounting", CGSize(width: 620, height: 460),
              AnyView(DiskAccountingView(preview: DiskAccounting(parts: [
-                 .init(name: "Home Library", bytes: 26_000_000_000),
-                 .init(name: "Other home files", bytes: 29_000_000_000),
-                 .init(name: "Applications", bytes: 12_000_000_000),
-                 .init(name: "Shared Library", bytes: 2_000_000_000),
+                 .init(name: "Home Library", bytes: 26_000_000_000, destination: .folder(URL(fileURLWithPath: "/Users/demo/Library"))),
+                 .init(name: "Other home files", bytes: 29_000_000_000, destination: .folder(URL(fileURLWithPath: "/Users/demo"))),
+                 .init(name: "Trash", bytes: 3_100_000_000, destination: .trash),
+                 .init(name: "Applications", bytes: 12_000_000_000, destination: .folder(URL(fileURLWithPath: "/Applications"))),
+                 .init(name: "Shared Library", bytes: 2_000_000_000, destination: .folder(URL(fileURLWithPath: "/Library"))),
                  .init(name: "macOS System volume", bytes: 14_000_000_000),
              ], pressure: DiskPressure(totalBytes: 494_000_000_000, freeBytes: 374_000_000_000),
                 physicalFree: 370_000_000_000, snapshotCount: 2)))),
+            ("sheet-schedule-scanonly", CGSize(width: 520, height: 520),
+             AnyView(ScheduleEditor(job: ScheduledJob(mode: .scanOnly, cadence: .daily, hour: 9), isNew: true,
+                                    onSave: { _ in }, onDelete: {}))),
             ("trash-nudge", CGSize(width: 900, height: 180),
              AnyView(TrashNudgeCard().padding(Theme.Spacing.lg))),
             ("memory", CGSize(width: 760, height: 460),

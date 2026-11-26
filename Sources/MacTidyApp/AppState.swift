@@ -35,6 +35,7 @@ final class AppState {
     /// menu bar panel can read its summary.
     let monitor = SpaceMonitor()
     let memory = AppMemoryState()
+    let vitals = AppVitalsState()
     /// Shared for the app session so navigating away preserves journal streams.
     let diskMapIndex = DiskMapIndex()
 
@@ -63,6 +64,20 @@ final class AppState {
     /// Days after which screenshot files on ~/Desktop are considered stale.
     var screenshotMinAgeDays: Int {
         didSet { UserDefaults.standard.set(screenshotMinAgeDays, forKey: "MacTidy.screenshotMinAgeDays") }
+    }
+
+    /// Show the Overview nudge for old installers in Downloads and Desktop.
+    var showInstallersNudge: Bool {
+        didSet { UserDefaults.standard.set(showInstallersNudge, forKey: "MacTidy.showInstallersNudge") }
+    }
+
+    /// One-shot request to open a folder in Disk Map; `DiskView` consumes and
+    /// clears it. Set through `openInDiskMap`.
+    var diskMapTarget: URL?
+
+    func openInDiskMap(_ url: URL) {
+        diskMapTarget = url
+        section = .diskMap
     }
 
     /// Cached AI batch verdicts keyed by item UUID, persisted across tab switches (IMP-15).
@@ -269,6 +284,7 @@ final class AppState {
         self.logRetentionDays = UserDefaults.standard.object(forKey: "MacTidy.logRetentionDays") as? Int ?? 0
         self.installerMinAgeDays = UserDefaults.standard.object(forKey: "MacTidy.installerMinAgeDays") as? Int ?? 30
         self.screenshotMinAgeDays = UserDefaults.standard.object(forKey: "MacTidy.screenshotMinAgeDays") as? Int ?? 30
+        self.showInstallersNudge = UserDefaults.standard.object(forKey: "MacTidy.showInstallersNudge") as? Bool ?? true
         self.aiConfig = Self.loadAIConfig()
         if let ts = UserDefaults.standard.object(forKey: "MacTidy.lastScanDate") as? Double {
             self.lastScanDate = Date(timeIntervalSince1970: ts)
@@ -375,6 +391,7 @@ final class AppState {
     /// Relaunch" path) hangs for tens of seconds.
     func prepareForTermination() {
         monitor.cancel()
+        vitals.cancel()
         scanTask?.cancel()
         updates.cancelInFlight()
     }
@@ -828,6 +845,16 @@ final class AppState {
         // single-sourced. `recordOutcome` ignores empty-trash outcomes, so a
         // scheduled run that found nothing trashes nothing and logs nothing.
         recordOutcome(result.outcome, plan: result.plan, kind: .deletion)
+        // A scan-only job keeps scan history and the menu bar fresh. It runs
+        // after the cleanup so the snapshot shows what is left, and through
+        // the normal full scan, so nothing is filtered out (a filtered scan
+        // would later read as growth). It deletes nothing.
+        // Without Full Disk Access the scan would see less, overwrite the
+        // saved scan and later read as growth, so it is skipped.
+        if result.wantsFullScan && fdaGranted {
+            await rescanCategories()
+            Self.persistQueue.sync {} // the headless process quits right after
+        }
         // Stamp lastRun/nextRun for the jobs that fired, then persist + rewrite
         // the plist so launchd's next fire reflects the updated schedule.
         var updated = jobs
@@ -1030,6 +1057,32 @@ final class AppState {
         lastUndoableOutcome = nil
     }
 
+    /// Picks up a scan a scheduled scan-only run wrote while this window was
+    /// open (that run is a separate process): reloads the saved scan and
+    /// history when the shared last-scan date is newer than ours.
+    func reloadScanIfUpdatedElsewhere() {
+        guard !SnapshotHarness.isActive, !isScanningCategories,
+              let ts = UserDefaults.standard.object(forKey: "MacTidy.lastScanDate") as? Double else { return }
+        let saved = Date(timeIntervalSince1970: ts)
+        guard saved > (lastScanDate ?? .distantPast).addingTimeInterval(1) else { return }
+        let scanURL = lastScanURL, elsewhereURL = lastElsewhereURL, store = scanHistoryStore
+        Task {
+            let (results, elsewhere, history) = await Task.detached(priority: .utility) {
+                let elsewhere = (try? Data(contentsOf: elsewhereURL))
+                    .flatMap { try? JSONDecoder().decode([ScanItem].self, from: $0) }
+                return (Self.loadLastScan(from: scanURL), elsewhere, store.load())
+            }.value
+            guard !isScanningCategories, let results else { return }
+            let ignored = IgnoreList.load()
+            categoryResults = ignored.filter(results)
+            if let elsewhere { elsewhereItems = elsewhere.filter { !ignored.contains($0.url) } }
+            scanHistory = history
+            lastScanDate = saved
+            scanStatus = "Last scan: \(saved.formatted(date: .omitted, time: .shortened)) (scheduled)"
+            refreshAppSupportBytes()
+        }
+    }
+
     func refreshLogs() {
         // Reconcile the Recently Trashed list with the actual Trash: drop
         // entries whose Trash location no longer exists (the user emptied the
@@ -1228,7 +1281,7 @@ final class AppState {
         }
     }
 
-    private static func loadLastScan(from url: URL) -> [CategoryResult]? {
+    nonisolated private static func loadLastScan(from url: URL) -> [CategoryResult]? {
         guard let data = try? Data(contentsOf: url),
               let results = try? JSONDecoder().decode([CategoryResult].self, from: data)
         else { return nil }

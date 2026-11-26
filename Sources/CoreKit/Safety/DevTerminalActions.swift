@@ -206,3 +206,30 @@ public struct NpmPruneAction: ShellAction {
         return Shell.run(npm, ["prune", "--prefix", projectDir.path])
     }
 }
+
+/// Flushes the macOS DNS resolver cache (`dscacheutil -flushcache` and
+/// `killall -HUP mDNSResponder` via the standard admin prompt).
+public struct FlushDNSCacheAction: ShellAction {
+    public let id = UUID()
+    public var displayName: String { "DNS cache" }
+    public var commandSummary: String { "dscacheutil -flushcache && sudo killall -HUP mDNSResponder" }
+    public var reversible: Bool { false }
+    public var estimatedBytes: Int64 { 0 }
+
+    public init() {}
+
+    public func run() -> Shell.Output? {
+        let flushOut = Shell.run("/usr/bin/dscacheutil", ["-flushcache"])
+        let appleScript = "do shell script \"killall -HUP mDNSResponder\" with administrator privileges"
+        guard let mdnsOut = Shell.run("/usr/bin/osascript", ["-e", appleScript]) else {
+            return flushOut
+        }
+        if !mdnsOut.succeeded {
+            let msg = (mdnsOut.stderr.contains("User canceled") || mdnsOut.stderr.contains("-128"))
+                ? "Administrator permission was cancelled."
+                : Shell.humanReadableAppleScriptError(mdnsOut.stderr.isEmpty ? mdnsOut.stdout : mdnsOut.stderr)
+            return Shell.Output(stdout: flushOut?.stdout ?? "", stderr: msg, exitCode: mdnsOut.exitCode)
+        }
+        return Shell.Output(stdout: flushOut?.stdout ?? "", stderr: "", exitCode: 0)
+    }
+}

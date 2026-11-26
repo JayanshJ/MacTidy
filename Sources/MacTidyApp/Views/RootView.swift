@@ -30,6 +30,7 @@ struct RootView: View {
             // inactive — reconcile the Recently Trashed list and the Trash
             // size nudge with the actual Trash.
             state.refreshLogs()
+            state.reloadScanIfUpdatedElsewhere()
         }
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didActivateApplicationNotification)) { _ in
             if !SnapshotHarness.isActive { state.memory.observeActivity() }
@@ -43,12 +44,10 @@ struct RootView: View {
             if state.fdaGranted && state.autoScanOnLaunch && state.categoryResults.isEmpty {
                 await state.rescanCategories()
             }
-            // Self-update check on launch (gated by a persisted toggle so the
-            // user can turn off the network call in Settings). The check only
-            // resolves an "available" phase; it never auto-installs.
-            if state.updates.checkOnLaunch && state.updates.phase == .idle {
-                state.updates.check()
-            }
+            // Self-update checks (gated by a persisted toggle so the user can
+            // turn off the network call in Settings). A found update is
+            // installed when the app quits, never while it is running.
+            state.updates.startAutomaticChecks()
         }
     }
 }

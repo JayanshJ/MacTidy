@@ -15,13 +15,19 @@ import Foundation
 /// table; the `Build Cache` row's `SIZE` is what we report. Returns nil
 /// when Docker is unavailable or the value can't be parsed.
 public enum DockerBuilderCache {
-    /// Best-effort reclaimable bytes from `docker builder df`. Returns nil
-    /// when Docker isn't available or the size can't be parsed.
+    /// Best-effort reclaimable bytes from `docker system df` (falling back to
+    /// `docker builder df` on older CLIs where BuildKit isn't in `system df`).
+    /// Returns nil when Docker isn't available or the size can't be parsed.
     public static func reclaimableBytes() -> Int64? {
         guard let docker = Shell.find("docker") else { return nil }
-        guard let output = Shell.run(docker, ["builder", "df"]),
-              output.succeeded else { return nil }
-        return parseReclaimableBytes(output.stdout)
+        for args in [["system", "df"], ["builder", "df"]] {
+            if let output = Shell.run(docker, args),
+               output.succeeded,
+               let bytes = parseReclaimableBytes(output.stdout) {
+                return bytes
+            }
+        }
+        return nil
     }
 
     /// Parses `docker builder df` stdout for the `Build Cache` reclaimable

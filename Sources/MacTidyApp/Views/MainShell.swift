@@ -4,11 +4,11 @@ import CoreKit
 // MARK: - Navigation model
 
 enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
-    case overview, cleanup, insights
+    case overview, cleanup, vitals, insights
     case projects, devTools, docker
     case uninstaller, appStorage, loginItems
-    case duplicates, diskMap, timeMachine
-    case trash, history
+    case duplicates, diskMap, timeMachine, maintenance
+    case changes, trash, history
 
     var id: String { rawValue }
 
@@ -16,6 +16,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .overview: "Overview"
         case .cleanup: "Cleanup"
+        case .vitals: "Vitals"
         case .insights: "Insights"
         case .projects: "Projects"
         case .devTools: "Dev Tools"
@@ -26,6 +27,8 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
         case .duplicates: "Duplicates"
         case .diskMap: "Disk Map"
         case .timeMachine: "Snapshots"
+        case .maintenance: "Maintenance"
+        case .changes: "What Changed"
         case .trash: "Recently Trashed"
         case .history: "Cleanup Log"
         }
@@ -35,6 +38,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .overview: "gauge.with.dots.needle.33percent"
         case .cleanup: "sparkles.rectangle.stack"
+        case .vitals: "waveform.path.ecg"
         case .insights: "lightbulb"
         case .projects: "folder"
         case .devTools: "terminal"
@@ -45,6 +49,8 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
         case .duplicates: "doc.on.doc"
         case .diskMap: "square.grid.3x3.square"
         case .timeMachine: "clock.arrow.circlepath"
+        case .maintenance: "wrench.and.screwdriver"
+        case .changes: "chart.line.uptrend.xyaxis"
         case .trash: "arrow.uturn.backward.circle"
         case .history: "list.bullet.rectangle"
         }
@@ -63,11 +69,11 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
         }
         var items: [SidebarItem] {
             switch self {
-            case .main: [.overview, .cleanup, .insights]
+            case .main: [.overview, .cleanup, .vitals, .insights]
             case .developer: [.projects, .devTools, .docker]
             case .apps: [.uninstaller, .appStorage, .loginItems]
-            case .files: [.duplicates, .diskMap, .timeMachine]
-            case .history: [.trash, .history]
+            case .files: [.duplicates, .diskMap, .timeMachine, .maintenance]
+            case .history: [.changes, .trash, .history]
             }
         }
     }
@@ -102,6 +108,7 @@ struct MainShell: View {
             .navigationSplitViewColumnWidth(min: 200, ideal: 216, max: 260)
         } detail: {
             VStack(spacing: 0) {
+                UpdateBanner()
                 if state.fdaSkipped && !state.fdaGranted { LimitedModeBanner() }
                 detail
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -131,6 +138,7 @@ struct MainShell: View {
         switch state.section {
         case .overview: OverviewView()
         case .cleanup: CleanupView()
+        case .vitals: VitalsView()
         case .insights: InsightsTab()
         case .projects: ProjectsView()
         case .devTools: DeveloperTerminalTab()
@@ -141,7 +149,9 @@ struct MainShell: View {
         case .duplicates: DuplicatesView()
         case .diskMap: DirectoryExplorerView()
         case .timeMachine: SystemTab()
+        case .maintenance: MaintenanceTab()
         case .trash: TrashView()
+        case .changes: WhatChangedView()
         case .history: CleanupHistoryView()
         }
     }
@@ -274,6 +284,7 @@ struct OverviewView: View {
                     .buttonStyle(.link)
                 returnedItems
                 growing
+                installersNudge
                 appSupportCard
                 if !ranked.isEmpty { breakdown(ranked) }
                 HandledElsewhereLink()
@@ -292,6 +303,36 @@ struct OverviewView: View {
             DeletionConfirmationSheet(title: "Clean everything that's safe?", plan: plan)
         }
         .task(id: DiskPressure.refreshKey(state)) { pressure = await DiskPressure.load() }
+    }
+
+    /// Old .dmg/.pkg installers past the cutoff in Settings. Leads to the
+    /// category; turned off in Settings.
+    @ViewBuilder
+    private var installersNudge: some View {
+        if state.showInstallersNudge, let nudge = DownloadsHygiene.nudge(results: state.categoryResults) {
+            SurfaceSection {
+                Button {
+                    state.section = .cleanup
+                    state.showingElsewhere = false
+                    state.drilledCategory = .oldInstallers
+                } label: {
+                    HStack(spacing: Theme.Spacing.md) {
+                        Image(systemName: CoreKit.Category.oldInstallers.symbol)
+                            .font(.system(size: 14)).foregroundStyle(.secondary).frame(width: 20)
+                        Text("\(nudge.count) installer\(nudge.count == 1 ? "" : "s") older than \(state.installerMinAgeDays) days in Downloads and Desktop")
+                            .font(Theme.Font.bodyStrong)
+                        Spacer()
+                        Text(nudge.bytes.formattedBytes)
+                            .font(Theme.Font.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 10, weight: .semibold)).foregroundStyle(.tertiary)
+                    }
+                    .padding(.horizontal, Theme.Spacing.lg)
+                    .padding(.vertical, Theme.Spacing.md)
+                }
+                .buttonStyle(RowButtonStyle())
+            }
+        }
     }
 
     @ViewBuilder
@@ -395,7 +436,10 @@ struct OverviewView: View {
         case .steady:
             EmptyView()
         case .growing(let nudges):
-            SurfaceSection("Growing") {
+            SurfaceSection("Growing", accessory: {
+                Button("What Changed?") { state.section = .changes }
+                    .buttonStyle(.link).font(Theme.Font.caption)
+            }) {
                 ForEach(Array(nudges.enumerated()), id: \.element.id) { index, nudge in
                     if index > 0 { RowDivider(inset: 48) }
                     Button {

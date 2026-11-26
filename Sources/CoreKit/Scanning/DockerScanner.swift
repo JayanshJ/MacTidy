@@ -70,19 +70,51 @@ public struct DockerComposeProject: Identifiable, Sendable, Hashable {
     }
 }
 
+public struct DockerVolume: Identifiable, Sendable, Hashable {
+    public let name: String
+    public let links: Int
+    public let sizeBytes: Int64
+    public var id: String { name }
+    public var inUse: Bool { links > 0 }
+
+    public init(name: String, links: Int, sizeBytes: Int64) {
+        self.name = name
+        self.links = links
+        self.sizeBytes = sizeBytes
+    }
+}
+
+public struct DockerContext: Identifiable, Sendable, Hashable {
+    public let name: String
+    public let isCurrent: Bool
+    public let endpoint: String
+    public var id: String { name }
+
+    public init(name: String, isCurrent: Bool, endpoint: String) {
+        self.name = name
+        self.isCurrent = isCurrent
+        self.endpoint = endpoint
+    }
+}
+
 public struct DockerState: Sendable {
     public let images: [DockerImage]
     public let containers: [DockerContainer]
     public let projects: [DockerComposeProject]
+    public let volumes: [DockerVolume]
+    public let contexts: [DockerContext]
     /// Heuristic attributions for standalone (non-compose) images, keyed by
     /// image id. Images with no container and no resolvable project get no
     /// entry (they're truly "orphaned"); the UI treats a missing key as
     /// orphaned. See `DockerScanner.parseAttributions`.
     public let attributions: [String: DockerImageAttribution]
 
-    public init(images: [DockerImage], containers: [DockerContainer]) {
+    public init(images: [DockerImage], containers: [DockerContainer],
+                volumes: [DockerVolume] = [], contexts: [DockerContext] = []) {
         self.images = images
         self.containers = containers
+        self.volumes = volumes
+        self.contexts = contexts
         // Group images by compose project label, ignoring nil/empty.
         let grouped = Dictionary(grouping: images.filter { !($0.composeProject?.isEmpty ?? true) },
                                  by: { $0.composeProject! })
@@ -109,9 +141,12 @@ public struct DockerState: Sendable {
     /// attributions (from `DockerScanner.parseAttributions`). Kept internal
     /// to the scan path; the plain initializer above is for tests/empty state.
     public init(images: [DockerImage], containers: [DockerContainer],
-                attributions: [String: DockerImageAttribution]) {
+                attributions: [String: DockerImageAttribution],
+                volumes: [DockerVolume] = [], contexts: [DockerContext] = []) {
         self.images = images
         self.containers = containers
+        self.volumes = volumes
+        self.contexts = contexts
         let grouped = Dictionary(grouping: images.filter { !($0.composeProject?.isEmpty ?? true) },
                                  by: { $0.composeProject! })
         self.projects = grouped.map { name, imgs in
@@ -158,24 +193,111 @@ public enum DockerScanner {
               imagesRaw.succeeded else { return nil }
         let containersRaw = Shell.run(docker, ["ps", "-a", "--format",
                 "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Status}}"])
+
+        let rawImages = parseImages(imagesRaw.stdout) { _ in "" }
+        let imageIDs = Array(Set(rawImages.map(\.id)))
+        var projectLabels: [String: String] = [:]
+        if !imageIDs.isEmpty,
+           let inspectOut = Shell.run(docker, ["image", "inspect", "--format",
+                "{{.ID}}\t{{ index .Config.Labels \"com.docker.compose.project\" }}"] + imageIDs),
+           inspectOut.succeeded {
+            projectLabels = parseBatchedInspect(inspectOut.stdout)
+        }
         let images = parseImages(imagesRaw.stdout) { id in
-            guard let inspect = Shell.run(docker, ["image", "inspect", id, "--format",
-                    "{{ index .Config.Labels \"com.docker.compose.project\" }}"]),
-                  inspect.succeeded else { return "" }
-            return inspect.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            projectLabels[id] ?? ""
         }
+
         let containers = parseContainers(containersRaw?.stdout ?? "")
-        // Container inspect gives working dir + bind mounts for the
-        // non-compose attribution heuristic. One `docker inspect` per
-        // container (cheap; containers are few). Read-only.
-        let attributions = parseAttributions(images: images, containers: containers) { containerID in
-            guard let inspect = Shell.run(docker, ["inspect", "--type", "container",
-                    containerID, "--format",
-                    "{{.Config.WorkingDir}}|{{range .Mounts}}{{if eq .Type \"bind\"}}{{.Source}},{{end}}{{end}}"]),
-                  inspect.succeeded else { return "" }
-            return inspect.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let containerIDs = Array(Set(containers.map(\.id)))
+        var containerInspects: [String: String] = [:]
+        if !containerIDs.isEmpty,
+           let inspectOut = Shell.run(docker, ["inspect", "--type", "container", "--format",
+                "{{.ID}}\t{{.Config.WorkingDir}}|{{range .Mounts}}{{if eq .Type \"bind\"}}{{.Source}},{{end}}{{end}}"] + containerIDs),
+           inspectOut.succeeded {
+            containerInspects = parseBatchedInspect(inspectOut.stdout)
         }
-        return DockerState(images: images, containers: containers, attributions: attributions)
+        let attributions = parseAttributions(images: images, containers: containers) { shortID in
+            if let exact = containerInspects[shortID] { return exact }
+            return containerInspects.first { $0.key.hasPrefix(shortID) }?.value ?? ""
+        }
+
+        let dfVerbose = Shell.run(docker, ["system", "df", "-v"])
+        let volumes = (dfVerbose?.succeeded == true)
+            ? parseVolumesFromSystemDF(dfVerbose?.stdout ?? "")
+            : []
+        let contextOut = Shell.run(docker, ["context", "ls", "--format",
+                "{{.Name}}\t{{.Current}}\t{{.DockerEndpoint}}"])
+        let contexts = (contextOut?.succeeded == true)
+            ? parseContexts(contextOut?.stdout ?? "")
+            : []
+
+        return DockerState(
+            images: images,
+            containers: containers,
+            attributions: attributions,
+            volumes: volumes,
+            contexts: contexts
+        )
+    }
+
+    public static func switchContext(_ name: String) -> Shell.Output? {
+        guard let docker = Shell.find("docker") else { return nil }
+        return Shell.run(docker, ["context", "use", name])
+    }
+
+    public static func parseBatchedInspect(_ raw: String) -> [String: String] {
+        var out: [String: String] = [:]
+        for line in raw.split(separator: "\n", omittingEmptySubsequences: true) {
+            guard let tab = line.firstIndex(of: "\t") else { continue }
+            let id = String(line[..<tab]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let value = String(line[line.index(after: tab)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !id.isEmpty { out[id] = value }
+        }
+        return out
+    }
+
+    public static func parseVolumesFromSystemDF(_ raw: String) -> [DockerVolume] {
+        var inVolumes = false
+        var seenHeader = false
+        var volumes: [DockerVolume] = []
+        for rawLine in raw.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("Local Volumes space usage:") {
+                inVolumes = true
+                seenHeader = false
+                continue
+            }
+            guard inVolumes else { continue }
+            if line.isEmpty {
+                if seenHeader { break }
+                continue
+            }
+            if line.hasPrefix("VOLUME NAME") {
+                seenHeader = true
+                continue
+            }
+            if line.hasPrefix("Build cache usage:") { break }
+            let cols = line.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+            guard cols.count >= 3, let links = Int(cols[1]) else { continue }
+            volumes.append(DockerVolume(
+                name: cols[0],
+                links: links,
+                sizeBytes: parseSize(cols[2])
+            ))
+        }
+        return volumes.sorted { $0.sizeBytes > $1.sizeBytes }
+    }
+
+    public static func parseContexts(_ raw: String) -> [DockerContext] {
+        raw.split(separator: "\n", omittingEmptySubsequences: true).compactMap { line in
+            let cols = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+            guard cols.count >= 3 else { return nil }
+            return DockerContext(
+                name: cols[0],
+                isCurrent: cols[1].lowercased() == "true",
+                endpoint: cols[2]
+            )
+        }
     }
 
     /// Raw `docker system df` table for the secondary detail view. Returns

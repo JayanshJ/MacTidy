@@ -155,15 +155,16 @@ struct UpdateInstallerTests {
 
     // MARK: - swapHelperScript
 
-    @Test func swapHelperScriptUsesRmRfNotFinder() {
+    @Test func swapHelperScriptNeverDeletesAndAvoidsFinder() {
         let script = UpdateInstaller.swapHelperScript(
             newAppURL: URL(fileURLWithPath: "/tmp/new/MacTidy.app"),
             installURL: URL(fileURLWithPath: "/Applications/MacTidy.app"),
             currentPID: 4242
         )
-        // The whole point of the v1.6.3 fix: the helper must `rm -rf` the old
-        // bundle, NOT `osascript … Finder delete` (which hung for minutes).
-        #expect(script.contains("rm -rf \"$DEST\"") == true)
+        // The old bundle is moved aside, so a failed install can put it back.
+        // Finder was dropped in v1.6.3 because `delete` hung for minutes.
+        #expect(script.contains("mv \"$DEST\" \"$BACKUP\"") == true)
+        #expect(script.contains("rm ") == false)
         #expect(script.contains("osascript") == false)
         #expect(script.contains("Finder") == false)
     }
@@ -177,7 +178,6 @@ struct UpdateInstallerTests {
         #expect(script.contains("mv \"$NEW_APP\" \"$DEST\"") == true)
         #expect(script.contains("xattr -dr com.apple.quarantine \"$DEST\"") == true)
         #expect(script.contains("open \"$DEST\"") == true)        // relaunch
-        #expect(script.contains("rm -f \"$0\"") == true)          // self-delete
     }
 
     @Test func swapHelperScriptWaitsForOwnPID() {
@@ -199,6 +199,107 @@ struct UpdateInstallerTests {
         )
         #expect(script.contains("NEW_APP=\"/staging/MacTidy.app\"") == true)
         #expect(script.contains("DEST=\"/Applications/MacTidy.app\"") == true)
+    }
+
+    // MARK: - Running the helper
+
+    /// Runs the real script against fake bundles in a temp folder.
+    private func runHelper(new: URL, dest: URL, in dir: URL) throws -> (status: Int32, failure: String?) {
+        let marker = dir.appending(path: "failed.txt")
+        let script = dir.appending(path: "swap.sh")
+        try UpdateInstaller.swapHelperScript(newAppURL: new, installURL: dest, currentPID: 999_999, relaunch: false,
+                                             logURL: dir.appending(path: "update.log"), failureMarkerURL: marker)
+            .write(to: script, atomically: true, encoding: .utf8)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = [script.path]
+        try process.run()
+        process.waitUntilExit()
+        return (process.terminationStatus, try? String(contentsOf: marker, encoding: .utf8))
+    }
+
+    private func sign(_ app: URL) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/codesign")
+        process.arguments = ["--force", "--sign", "-", app.path]
+        try process.run()
+        process.waitUntilExit()
+        #expect(process.terminationStatus == 0)
+    }
+
+    private func version(of app: URL) -> String? {
+        NSDictionary(contentsOfFile: app.appending(path: "Contents/Info.plist").path)?["CFBundleShortVersionString"] as? String
+    }
+
+    @Test func helperInstallsTheNewBundleAndKeepsTheOldAside() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let stagingDir = dir.appending(path: "staging")
+        let installDir = dir.appending(path: "Applications")
+        try FileManager.default.createDirectory(at: stagingDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: installDir, withIntermediateDirectories: true)
+        let new = try makeBundle(in: stagingDir, version: "2.0.0")
+        let dest = try makeBundle(in: installDir, version: "1.0.0")
+        try sign(new)
+
+        let result = try runHelper(new: new, dest: dest, in: dir)
+
+        #expect(result.status == 0)
+        #expect(result.failure == nil)
+        #expect(version(of: dest) == "2.0.0")
+        #expect(version(of: stagingDir.appending(path: "MacTidy-previous.app")) == "1.0.0")
+    }
+
+    @Test func helperPutsTheOldBundleBackWhenTheNewOneIsBad() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let stagingDir = dir.appending(path: "staging")
+        let installDir = dir.appending(path: "Applications")
+        try FileManager.default.createDirectory(at: stagingDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: installDir, withIntermediateDirectories: true)
+        let new = try makeBundle(in: stagingDir, version: "2.0.0")   // unsigned
+        let dest = try makeBundle(in: installDir, version: "1.0.0")
+
+        let result = try runHelper(new: new, dest: dest, in: dir)
+
+        #expect(result.status == 1)
+        #expect(result.failure != nil)
+        #expect(version(of: dest) == "1.0.0")
+    }
+
+    @Test func helperKeepsTheOldBundleWhenItCannotBeMoved() throws {
+        let dir = try makeTempDir()
+        let stagingDir = dir.appending(path: "staging")
+        let installDir = dir.appending(path: "Applications")
+        try FileManager.default.createDirectory(at: stagingDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: installDir, withIntermediateDirectories: true)
+        let new = try makeBundle(in: stagingDir, version: "2.0.0")
+        let dest = try makeBundle(in: installDir, version: "1.0.0")
+        try sign(new)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: installDir.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: installDir.path)
+            try? FileManager.default.removeItem(at: dir)
+        }
+
+        let result = try runHelper(new: new, dest: dest, in: dir)
+
+        #expect(result.status == 1)
+        #expect(result.failure?.contains("Permission denied") == true)
+        #expect(version(of: dest) == "1.0.0")
+        #expect(version(of: new) == "2.0.0")
+    }
+
+    @Test func onlyTheInstalledCopyInstallsItself() {
+        let installed = URL(fileURLWithPath: "/Applications/MacTidy.app")
+        #expect(UpdateInstaller.canInstallAutomatically(runningBundle: installed, installURL: installed))
+        #expect(!UpdateInstaller.canInstallAutomatically(
+            runningBundle: URL(fileURLWithPath: "/Users/me/Developer/MacTidy/dist/MacTidy.app"), installURL: installed))
+    }
+
+    @Test func failureMessagePointsToAppManagementWhenBlocked() {
+        #expect(UpdateInstaller.failureMessage("mv: rename: Operation not permitted\n").contains("App Management"))
+        #expect(UpdateInstaller.failureMessage("disk full").contains("disk full"))
     }
 
     // MARK: - helpers

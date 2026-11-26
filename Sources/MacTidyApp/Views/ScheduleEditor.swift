@@ -32,6 +32,20 @@ struct ScheduleEditor: View {
         VStack(spacing: 0) {
             Form {
                 Section {
+                    Picker("Action", selection: $job.mode) {
+                        ForEach(ScheduleMode.allCases) { Text($0.displayName).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                } footer: {
+                    Text(job.mode == .scanOnly
+                         ? "Scans everything and records it to scan history, so What Changed and the menu bar stay current. Nothing is moved to the Trash. Skipped while MacTidy lacks Full Disk Access, so partial scans never look like change."
+                         : "Moves the safe items in the categories below to the Trash.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                Section {
                     Picker("Repeat", selection: $job.cadence) {
                         ForEach(ScheduleCadence.allCases) { c in
                             Text(c.displayName).tag(c)
@@ -45,7 +59,9 @@ struct ScheduleEditor: View {
                 } header: {
                     Text("When")
                 } footer: {
-                    Text("MacTidy wakes at this hour via launchd, runs the safe categories below, then quits. The app does not need to be open.")
+                    Text(job.mode == .scanOnly
+                         ? "MacTidy wakes at this hour via launchd, scans, then quits. The app does not need to be open."
+                         : "MacTidy wakes at this hour via launchd, runs the safe categories below, then quits. The app does not need to be open.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
 
@@ -66,6 +82,7 @@ struct ScheduleEditor: View {
                     }
                 }
 
+                if job.mode == .clean {
                 Section {
                     ForEach(safeCategories, id: \.self) { cat in
                         Toggle(isOn: Binding(
@@ -93,6 +110,7 @@ struct ScheduleEditor: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
+                }
             }
             .formStyle(.grouped)
 
@@ -110,13 +128,16 @@ struct ScheduleEditor: View {
                     .keyboardShortcut(.cancelAction)
                 Button("Save") {
                     var saved = job
+                    // A scan-only job holds no categories, so switching it
+                    // back to Clean later starts from an explicit choice.
+                    if saved.mode == .scanOnly { saved.categories = [] }
                     saved.nextRun = SchedulePlanner.nextRun(for: saved, after: Date())
                     onSave(saved)
                     dismiss()
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
-                .disabled(job.categories.isEmpty)
+                .disabled(job.mode == .clean && job.categories.isEmpty)
             }
             .padding(12)
         }

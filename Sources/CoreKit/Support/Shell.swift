@@ -33,12 +33,35 @@ public enum Shell {
         )
     }
 
-    public static func find(_ name: String) -> String? {
-        for dir in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"] {
+    public static func find(
+        _ name: String,
+        in directories: [String] = defaultSearchDirectories()
+    ) -> String? {
+        for dir in directories {
             let candidate = "\(dir)/\(name)"
             if FileManager.default.isExecutableFile(atPath: candidate) { return candidate }
         }
         return nil
+    }
+
+    /// Fixed search directories (never `$PATH`), covering Homebrew, system
+    /// paths, and Docker Desktop / OrbStack / Rancher Desktop CLI locations.
+    public static func defaultSearchDirectories(
+        home: String = FileManager.default.homeDirectoryForCurrentUser.path
+    ) -> [String] {
+        [
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin",
+            "\(home)/.docker/bin",
+            "/Applications/Docker.app/Contents/Resources/bin",
+            "\(home)/.orbstack/bin",
+            "/Applications/OrbStack.app/Contents/MacOS/xbin",
+            "\(home)/.rd/bin",
+        ]
     }
 
     /// Unwraps osascript's wrapper error so the UI shows the real message.

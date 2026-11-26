@@ -8,10 +8,14 @@ public struct ScheduledRunResult: Sendable {
     public let firedJobs: [UUID]
     public let plan: DeletionPlan
     public let outcome: DeletionOutcome
-    public init(firedJobs: [UUID], plan: DeletionPlan, outcome: DeletionOutcome) {
+    /// A scan-only job fired: the caller runs a full read-only scan and
+    /// records it to scan history, after any cleanup so it shows the result.
+    public let wantsFullScan: Bool
+    public init(firedJobs: [UUID], plan: DeletionPlan, outcome: DeletionOutcome, wantsFullScan: Bool = false) {
         self.firedJobs = firedJobs
         self.plan = plan
         self.outcome = outcome
+        self.wantsFullScan = wantsFullScan
     }
 }
 
@@ -37,18 +41,25 @@ public enum ScheduledRunner {
         scan: ScanCategories,
         executor: DeletionExecutor
     ) async -> ScheduledRunResult? {
-        // A job is "due" when it's enabled, has at least one safe category,
-        // and its nextRun is at or before `now` (or has never been computed —
-        // covers the first fire after enabling).
+        // A job is "due" when it's runnable (enabled, and a clean job has at
+        // least one safe category) and its nextRun is at or before `now` (or
+        // has never been computed — covers the first fire after enabling).
         let due = jobs.filter { job in
-            guard job.enabled, !job.categories.isEmpty else { return false }
+            guard job.isRunnable else { return false }
             guard let next = job.nextRun else { return true }
             return next <= now
         }
         guard !due.isEmpty else { return nil }
+        let wantsFullScan = due.contains { $0.mode == .scanOnly }
 
-        // Union of categories across all due jobs — one scan, not one per job.
-        let categories: Set<Category> = Set(due.flatMap { $0.categories })
+        // Union of categories across due *clean* jobs — one scan, not one per
+        // job. A scan-only job never contributes, even with categories set.
+        let categories: Set<Category> = Set(due.filter { $0.mode == .clean }.flatMap { $0.categories })
+        guard !categories.isEmpty else {
+            return ScheduledRunResult(firedJobs: due.map(\.id), plan: DeletionPlan(items: []),
+                                      outcome: DeletionOutcome(trashed: [], skipped: [], reclaimedBytes: 0),
+                                      wantsFullScan: wantsFullScan)
+        }
         let results = await scan(categories)
         // Only the requested categories; the scan may return others (tests),
         // so filter to be precise.
@@ -60,6 +71,7 @@ public enum ScheduledRunner {
 
         let plan = DeletionPlan(items: items)
         let outcome = executor.execute(plan)
-        return ScheduledRunResult(firedJobs: due.map(\.id), plan: plan, outcome: outcome)
+        return ScheduledRunResult(firedJobs: due.map(\.id), plan: plan, outcome: outcome,
+                                  wantsFullScan: wantsFullScan)
     }
 }

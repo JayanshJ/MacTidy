@@ -22,6 +22,8 @@ struct DeveloperTerminalTab: View {
     @Environment(AppState.self) private var state
     @State private var ports: [PortEntry] = []
     @State private var devTools: [DevToolInfo] = []
+    @State private var network: NetworkSnapshot?
+    @State private var showAllConnections = false
     @State private var isLoading = false
     /// Drives the action sheet via `.sheet(item:)` — avoids the race where
     /// `.sheet(isPresented:)` captures stale state (the "small rounded square"
@@ -38,6 +40,8 @@ struct DeveloperTerminalTab: View {
             Button { Task { await load() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
         } content: {
             portsSection
+            networkSection
+            connectionsSection
             cachesSection
             if dockerAvailable { dockerVolumeSection }
         }
@@ -58,6 +62,9 @@ struct DeveloperTerminalTab: View {
                 ports = state.devPorts
                 devTools = state.devTools
                 dockerAvailable = state.dockerAvailability == .available
+                if network == nil, !SnapshotHarness.isActive {
+                    network = await Task.detached { NetworkScanner.scan() }.value
+                }
             } else {
                 await load()
             }
@@ -167,6 +174,133 @@ struct DeveloperTerminalTab: View {
         }
     }
 
+    // MARK: - Network & DNS
+
+    @ViewBuilder
+    private var networkSection: some View {
+        SurfaceSection("Network & DNS") {
+            Button("Flush DNS…") {
+                actionTrigger = DevActionTrigger(
+                    title: "Flush macOS DNS cache?",
+                    actions: [FlushDNSCacheAction()],
+                    kind: .devTerminal,
+                    note: "Clears cached DNS records and restarts mDNSResponder (asks for admin password)."
+                )
+            }
+            .buttonStyle(.link)
+            .font(Theme.Font.caption)
+        } content: {
+            if let net = network {
+                if net.interfaces.isEmpty && net.dnsServers.isEmpty && net.gateway == nil {
+                    Text("No active network interfaces detected.")
+                        .font(Theme.Font.body)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(Theme.Spacing.lg)
+                } else {
+                    if !net.interfaces.isEmpty {
+                        HStack(spacing: Theme.Spacing.md) {
+                            Text("Interfaces").font(Theme.Font.bodyStrong).frame(width: 110, alignment: .leading)
+                            HStack(spacing: Theme.Spacing.md) {
+                                ForEach(net.interfaces.prefix(4)) { iface in
+                                    HStack(spacing: 4) {
+                                        Text(iface.name)
+                                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                        Text(iface.address)
+                                            .font(.system(size: 11, design: .monospaced))
+                                            .foregroundStyle(.secondary)
+                                        if iface.isPrimary {
+                                            Badge(text: "Primary", tint: Theme.accent)
+                                        }
+                                    }
+                                }
+                            }
+                            Spacer()
+                        }
+                        .padding(.horizontal, Theme.Spacing.lg)
+                        .padding(.vertical, Theme.Spacing.md)
+                    }
+                    if let gateway = net.gateway {
+                        RowDivider()
+                        HStack(spacing: Theme.Spacing.md) {
+                            Text("Gateway").font(Theme.Font.bodyStrong).frame(width: 110, alignment: .leading)
+                            Text(gateway)
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                            if let iface = net.defaultInterface {
+                                Text("via \(iface)")
+                                    .font(Theme.Font.caption)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            Spacer()
+                        }
+                        .padding(.horizontal, Theme.Spacing.lg)
+                        .padding(.vertical, Theme.Spacing.md)
+                    }
+                    if !net.dnsServers.isEmpty {
+                        RowDivider()
+                        HStack(spacing: Theme.Spacing.md) {
+                            Text("DNS servers").font(Theme.Font.bodyStrong).frame(width: 110, alignment: .leading)
+                            Text(net.dnsServers.prefix(5).joined(separator: "  ·  "))
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                            Spacer()
+                        }
+                        .padding(.horizontal, Theme.Spacing.lg)
+                        .padding(.vertical, Theme.Spacing.md)
+                    }
+                }
+            } else {
+                ProgressView()
+                    .frame(maxWidth: .infinity)
+                    .padding(Theme.Spacing.lg)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var connectionsSection: some View {
+        if let connections = network?.connections, !connections.isEmpty {
+            let visible = showAllConnections ? connections : Array(connections.prefix(8))
+            SurfaceSection("Active outbound connections") {
+                if connections.count > 8 {
+                    Button(showAllConnections ? "Show top 8" : "Show all (\(connections.count))") {
+                        showAllConnections.toggle()
+                    }
+                    .buttonStyle(.link)
+                    .font(Theme.Font.caption)
+                } else {
+                    Text("\(connections.count)")
+                        .font(Theme.Font.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            } content: {
+                ForEach(Array(visible.enumerated()), id: \.element.id) { i, conn in
+                    if i > 0 { RowDivider() }
+                    HStack(spacing: Theme.Spacing.md) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(conn.processName).font(Theme.Font.bodyStrong).lineLimit(1)
+                            Text("PID \(conn.pid)")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .frame(width: 180, alignment: .leading)
+                        Text(conn.remoteEndpoint)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                    }
+                    .padding(.horizontal, Theme.Spacing.lg)
+                    .padding(.vertical, Theme.Spacing.sm)
+                }
+            }
+        }
+    }
+
     // MARK: - Package caches
 
     @ViewBuilder
@@ -272,10 +406,12 @@ struct DeveloperTerminalTab: View {
         async let portScan = Task.detached { PortScanner.scan() }.value
         async let toolScan = DevToolScanner.scan()
         async let docker = Task.detached { DockerScanner.availability() == .available }.value
-        let (p, t, d) = await (portScan, toolScan, docker)
+        async let netScan = Task.detached { NetworkScanner.scan() }.value
+        let (p, t, d, n) = await (portScan, toolScan, docker, netScan)
         ports = p
         devTools = t
         dockerAvailable = d
+        network = n
         isLoading = false
     }
 }

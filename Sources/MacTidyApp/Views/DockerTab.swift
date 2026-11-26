@@ -36,6 +36,9 @@ struct DashboardDocker: View {
         Page("Docker",
              subtitle: "Images, containers and build cache. Removing runs docker commands directly, so it can't be undone from the Trash.") {
             if isLoading { ProgressView().controlSize(.small) }
+            if let contexts = dockerState?.contexts, !contexts.isEmpty {
+                contextControl(contexts)
+            }
             if dockerState?.containers.isEmpty == false {
                 Button(selectingContainers ? "Done" : "Select Containers") {
                     selectingContainers.toggle()
@@ -160,6 +163,24 @@ struct DashboardDocker: View {
                 ForEach(Array(stopped.enumerated()), id: \.element.id) { i, c in
                     if i > 0 { RowDivider() }
                     dockerContainerRow(c)
+                }
+            }
+        }
+        if !ds.volumes.isEmpty {
+            let unused = ds.volumes.filter { !$0.inUse }
+            SurfaceSection("Volumes") {
+                if !unused.isEmpty {
+                    let unusedBytes = unused.reduce(Int64(0)) { $0 + $1.sizeBytes }
+                    Button("Prune Unused (\(unusedBytes.formattedBytes))…") {
+                        sheetTrigger = SheetTrigger(actions: [DockerVolumePruneAction(estimatedBytes: unusedBytes)])
+                    }
+                    .buttonStyle(.link)
+                    .font(Theme.Font.caption)
+                }
+            } content: {
+                ForEach(Array(ds.volumes.enumerated()), id: \.element.id) { i, vol in
+                    if i > 0 { RowDivider() }
+                    dockerVolumeRow(vol)
                 }
             }
         }
@@ -296,6 +317,62 @@ struct DashboardDocker: View {
         .padding(.vertical, Theme.Spacing.md)
     }
 
+    @ViewBuilder
+    private func contextControl(_ contexts: [DockerContext]) -> some View {
+        let current = contexts.first(where: \.isCurrent)?.name ?? contexts.first?.name ?? ""
+        if contexts.count > 1 {
+            Picker("Context", selection: Binding(
+                get: { current },
+                set: { next in
+                    guard next != current else { return }
+                    Task {
+                        _ = await Task.detached { DockerScanner.switchContext(next) }.value
+                        await scan()
+                    }
+                }
+            )) {
+                ForEach(contexts) { ctx in
+                    Text(ctx.name).tag(ctx.name)
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .fixedSize()
+            .help("Active Docker context")
+        } else if !current.isEmpty {
+            Badge(text: current, tint: .secondary)
+                .help("Active Docker context")
+        }
+    }
+
+    private func dockerVolumeRow(_ volume: DockerVolume) -> some View {
+        HStack(spacing: Theme.Spacing.md) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: Theme.Spacing.sm) {
+                    Text(volume.name).font(Theme.Font.bodyStrong).lineLimit(1)
+                    Badge(
+                        text: volume.inUse ? "In use" : "Unused",
+                        tint: volume.inUse ? Theme.accent : Theme.Status.caution
+                    )
+                }
+                Text(volume.inUse ? "Attached to \(volume.links) container\(volume.links == 1 ? "" : "s")" : "Not referenced by any container")
+                    .font(Theme.Font.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text(volume.sizeBytes.formattedBytes)
+                .font(Theme.Font.body.monospacedDigit())
+                .foregroundStyle(.secondary)
+            Button("Remove…") {
+                sheetTrigger = SheetTrigger(actions: [DockerVolumeRemoveAction(volume: volume)])
+            }
+            .disabled(volume.inUse)
+            .help(volume.inUse ? "Stop and remove attached containers first." : "Remove this unused volume.")
+        }
+        .padding(.horizontal, Theme.Spacing.lg)
+        .padding(.vertical, Theme.Spacing.md)
+    }
+
     private func toggleContainer(_ c: DockerContainer) {
         if selectedContainerIDs.contains(c.id) {
             selectedContainerIDs.remove(c.id)
@@ -308,10 +385,14 @@ struct DashboardDocker: View {
         isLoading = true
         let snapshot = await DockerSnapshot.load()
         availability = snapshot.availability
+        state.dockerAvailability = snapshot.availability
         if snapshot.availability == .available {
             dockerState = snapshot.state
             dfTable = snapshot.dfTable
             builderCacheBytes = snapshot.builderCacheBytes
+            state.dockerState = snapshot.state
+            state.dockerDfTable = snapshot.dfTable
+            state.dockerBuilderCacheBytes = snapshot.builderCacheBytes
             // Drop selections for containers that no longer exist after the
             // rescan (e.g. removed out-of-band or by a prior cleanup).
             if let ds = dockerState {
@@ -320,12 +401,23 @@ struct DashboardDocker: View {
             }
         } else {
             dockerState = nil
+            state.dockerState = nil
+            state.dockerDfTable = nil
+            state.dockerBuilderCacheBytes = nil
         }
         isLoading = false
     }
 
     private func openDocker() {
-        NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: "/Applications/Docker.app"),
+        let appURL = [
+            "/Applications/Docker.app",
+            "/Applications/OrbStack.app",
+            "/Applications/Rancher Desktop.app",
+        ]
+        .map { URL(fileURLWithPath: $0) }
+        .first { FileManager.default.fileExists(atPath: $0.path) }
+        ?? URL(fileURLWithPath: "/Applications/Docker.app")
+        NSWorkspace.shared.openApplication(at: appURL,
                                            configuration: NSWorkspace.OpenConfiguration())
         // Launching the app isn't enough — Docker Desktop's daemon takes
         // tens of seconds to accept commands. Poll `availability()` until

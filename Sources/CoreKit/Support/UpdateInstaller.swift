@@ -77,15 +77,43 @@ public enum UpdateInstaller {
         }
     }
 
-    /// Generates the detached swap-helper script that replaces the installed
-    /// app after the current process quits. Pure — returns the script text so
-    /// the caller writes it to a temp file and launches it. Tests pin the
-    /// script's contract: it must `rm -rf` the old bundle (NOT Finder-delete),
-    /// `mv` the new one in, strip quarantine, relaunch, and self-delete.
+    /// Self-install only replaces the copy that is actually running, so a build
+    /// launched from `dist/` or a translocated copy never touches `/Applications`.
+    public static func canInstallAutomatically(runningBundle: URL, installURL: URL) -> Bool {
+        runningBundle.standardizedFileURL.path == installURL.standardizedFileURL.path
+    }
+
+    public static var logURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Logs/MacTidy-update.log")
+    }
+
+    /// The helper writes why an install failed here; the next launch reads it.
+    public static var failureMarkerURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Logs/MacTidy-update-failed.txt")
+    }
+
+    /// What to tell the user about a failed install. macOS blocks apps from
+    /// changing other apps unless App Management allows it.
+    public static func failureMessage(_ error: String) -> String {
+        let detail = error.trimmingCharacters(in: .whitespacesAndNewlines)
+        if detail.contains("Operation not permitted") || detail.contains("Permission denied") {
+            return "macOS blocked the update. Allow MacTidy in System Settings → Privacy & Security → App Management, then quit MacTidy again."
+        }
+        return "The update couldn't be installed, so your current version was kept. \(detail)"
+    }
+
+    /// Generates the detached helper that replaces the installed app after the
+    /// current process quits. Pure — the caller writes it to a temp file and
+    /// launches it. The old bundle stays in place until the new one can be moved
+    /// in, and any failure puts it back. It deletes nothing: the old bundle ends
+    /// up in the temp folder, which macOS clears.
     public static func swapHelperScript(
         newAppURL: URL,
         installURL: URL,
-        currentPID: Int32
+        currentPID: Int32,
+        relaunch: Bool = true,
+        logURL: URL = UpdateInstaller.logURL,
+        failureMarkerURL: URL = UpdateInstaller.failureMarkerURL
     ) -> String {
         return """
         #!/bin/sh
@@ -94,14 +122,28 @@ public enum UpdateInstaller {
 
         NEW_APP="\(newAppURL.path)"
         DEST="\(installURL.path)"
-        LOG="$HOME/Library/Logs/MacTidy-update.log"
-        exec >>"$LOG" 2>&1
+        BACKUP="$(dirname "$NEW_APP")/MacTidy-previous.app"
+        FAILURE_MARKER="\(failureMarkerURL.path)"
+        RELAUNCH=\(relaunch ? 1 : 0)
+        exec >>"\(logURL.path)" 2>&1
         log "=== swap helper started (old pid \(currentPID)) ==="
 
-        # Wait for the old process to exit on its own. The app calls
-        # NSApp.terminate, which should return promptly, but if anything
-        # keeps the run loop alive we don't want to hang forever — after the
-        # graceful wait we force-kill so the swap can proceed.
+        finish() {
+            if [ "$RELAUNCH" = 1 ]; then
+                open "$DEST"
+                log "relaunched"
+            fi
+            exit "$1"
+        }
+        fail() {
+            log "FAILED: $1"
+            printf '%s\\n' "$1" > "$FAILURE_MARKER"
+            finish 1
+        }
+
+        # Wait for the old process to exit. The helper only starts once the app
+        # is quitting, so after the graceful wait we force-kill to let the swap
+        # proceed if something keeps the run loop alive.
         i=0
         while [ $i -lt 150 ]; do
             if ! kill -0 \(currentPID) 2>/dev/null; then break; fi
@@ -116,19 +158,27 @@ public enum UpdateInstaller {
         log "old process gone, swapping"
 
         if [ -e "$DEST" ]; then
-            rm -rf "$DEST"
-            log "old app removed"
+            if ! err=$(mv "$DEST" "$BACKUP" 2>&1); then fail "$err"; fi
+            log "old app moved aside"
         fi
 
-        mv "$NEW_APP" "$DEST"
+        if ! err=$(mv "$NEW_APP" "$DEST" 2>&1); then
+            [ -e "$BACKUP" ] && mv "$BACKUP" "$DEST"
+            fail "$err"
+        fi
         log "new app moved"
 
         xattr -dr com.apple.quarantine "$DEST" 2>/dev/null || true
 
-        open "$DEST"
-        log "relaunched"
+        if ! err=$(/usr/bin/codesign -v "$DEST" 2>&1); then
+            if [ -e "$BACKUP" ]; then
+                mv "$DEST" "$NEW_APP" && mv "$BACKUP" "$DEST"
+            fi
+            fail "$err"
+        fi
+        log "update installed"
 
-        rm -f "$0"
+        finish 0
         """
     }
 }

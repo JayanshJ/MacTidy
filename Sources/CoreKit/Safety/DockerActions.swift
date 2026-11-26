@@ -108,3 +108,20 @@ public struct DockerContainerRemoveAction: ShellAction {
         }
     }
 }
+
+/// Removes one Docker volume by name (`docker volume rm <name>`). Irreversible.
+public struct DockerVolumeRemoveAction: ShellAction {
+    public let id = UUID()
+    public let volume: DockerVolume
+    public var displayName: String { "volume \(volume.name)" }
+    public var commandSummary: String { "docker volume rm \(volume.name)" }
+    public var reversible: Bool { false }
+    public var estimatedBytes: Int64 { volume.sizeBytes }
+
+    public init(volume: DockerVolume) { self.volume = volume }
+
+    public func run() -> Shell.Output? {
+        guard let docker = Shell.find("docker") else { return nil }
+        return Shell.run(docker, ["volume", "rm", volume.name])
+    }
+}

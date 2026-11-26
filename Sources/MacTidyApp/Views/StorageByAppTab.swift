@@ -12,6 +12,7 @@ struct StorageByAppTab: View {
     @State private var isLoading = false
     @State private var selectedAppID: String?
     @State private var sheetPlan: DeletionPlan?
+    @State private var inspectTarget: InspectAppTarget?
     /// Apps that look forgotten but keep a lot of data, by app id.
     @State private var suggestions: [String: UninstallSuggestion] = [:]
 
@@ -40,6 +41,9 @@ struct StorageByAppTab: View {
             ) { _ in
                 Task { await load() }
             }
+        }
+        .sheet(item: $inspectTarget) { target in
+            AppInspectorSheet(appURL: target.url)
         }
     }
 
@@ -126,6 +130,9 @@ struct StorageByAppTab: View {
                                 .font(Theme.Font.body).foregroundStyle(.secondary)
                         }
                         Spacer()
+                        Button("Inspect…") {
+                            inspectTarget = InspectAppTarget(url: entry.app.url)
+                        }
                         Button("Trash Caches…") {
                             let caches = entry.paths.filter { $0.bucket == .caches }
                             sheetPlan = DeletionPlan(items: caches.map { ScanItem(url: $0.url, sizeBytes: $0.sizeBytes, isDirectory: true) })

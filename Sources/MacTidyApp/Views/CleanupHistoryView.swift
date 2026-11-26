@@ -56,6 +56,7 @@ struct CleanupHistoryView: View {
         case .dockerBuilderCache: "Docker build cache"
         case .timeMachine: "Time Machine snapshots"
         case .devTerminal: "Developer tools"
+        case .systemMaintenance: "System maintenance"
         }
     }
 

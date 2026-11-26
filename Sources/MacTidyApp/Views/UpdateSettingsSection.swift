@@ -16,8 +16,15 @@ struct UpdateSettingsSection: View {
     var body: some View {
         @Bindable var updates = state.updates
         Section {
-            Toggle("Check for updates on launch", isOn: $updates.checkOnLaunch)
-                .help("Quietly checks GitHub for a newer release when the app opens. Never auto-installs.")
+            Toggle("Check for updates automatically", isOn: $updates.checkOnLaunch)
+                .help("Checks GitHub for a newer release when the app opens and once a day.")
+            Toggle("Download and install updates automatically", isOn: $updates.installAutomatically)
+                .disabled(!updates.checkOnLaunch)
+                .help("Downloads new versions in the background and installs them when you quit MacTidy.")
+            if !state.updates.canInstallAutomatically {
+                Text("Automatic install needs MacTidy in /Applications.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
 
             HStack {
                 Text("Installed version")
@@ -28,11 +35,16 @@ struct UpdateSettingsSection: View {
 
             statusRow
 
+            if let failure = state.updates.lastInstallFailure {
+                Label(failure, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+            }
+
             actionsRow
         } header: {
             Text("Updates")
         } footer: {
-            Text("Checks the MacTidy GitHub repository for a newer release. Updates download over HTTPS and replace the app in /Applications, then relaunch. They are not notarized (the app is self-signed), so the quarantine flag is removed on install — the trust root is HTTPS plus your own GitHub release.")
+            Text("Checks the MacTidy GitHub repository for a newer release. Updates download over HTTPS and replace the app in /Applications when it quits. They are not notarized (the app is self-signed), so the quarantine flag is removed on install — the trust root is HTTPS plus your own GitHub release.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -76,7 +88,7 @@ struct UpdateSettingsSection: View {
         case .installing:
             HStack { ProgressView().controlSize(.small); Text("Verifying…") }
         case .readyToRelaunch(let m):
-            Label("v\(m.version.raw) is ready — quit to apply and relaunch.",
+            Label("v\(m.version.raw) is ready. It installs when you quit.",
                   systemImage: "checkmark.circle.fill")
                 .foregroundStyle(Theme.Status.good)
         case .failed(let msg):
@@ -120,9 +132,8 @@ struct UpdateSettingsSection: View {
                     // Close the Settings sheet first — terminating with a
                     // modal sheet still presented can hang the run loop and
                     // the app never quits. Give the dismissal animation a beat
-                    // to finish, then terminate. The swap helper (already
-                    // spawned during download-and-install) is waiting for this
-                    // process to exit; once it does, it swaps the bundle and
+                    // to finish, then start the swap helper and terminate. Once
+                    // this process exits, the helper swaps the bundle and
                     // relaunches.
                     dismiss()
                     Task { @MainActor in
@@ -148,5 +159,37 @@ struct UpdateSettingsSection: View {
         case .checking, .downloading, .installing: return true
         default: return false
         }
+    }
+}
+
+/// Shown above every screen, so an update doesn't stay hidden in Settings.
+struct UpdateBanner: View {
+    @Environment(AppState.self) private var state
+
+    var body: some View {
+        if let failure = state.updates.lastInstallFailure {
+            banner(symbol: "exclamationmark.triangle.fill", color: Theme.Status.caution, text: failure) {
+                Button("Dismiss") { state.updates.lastInstallFailure = nil }
+            }
+        } else if case .readyToRelaunch(let manifest) = state.updates.phase {
+            banner(symbol: "arrow.up.circle.fill", color: Theme.accent,
+                   text: "MacTidy \(manifest.version.raw) is ready. It installs when you quit.") {
+                Button("Relaunch Now") { state.updates.relaunchToApply() }
+                    .disabled(state.isTrashBusy || state.isEmptyingTrash)
+            }
+        }
+    }
+
+    private func banner<Action: View>(symbol: String, color: Color, text: String,
+                                      @ViewBuilder action: () -> Action) -> some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            Image(systemName: symbol).foregroundStyle(color)
+            Text(text).font(.callout)
+            Spacer()
+            action().controlSize(.small)
+        }
+        .padding(.horizontal, Theme.Spacing.md)
+        .padding(.vertical, Theme.Spacing.sm)
+        .background(color.opacity(0.12))
     }
 }

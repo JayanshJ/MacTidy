@@ -24,7 +24,7 @@ public enum LaunchAgentWriter {
     /// leave a dead agent behind. Returns true on a filesystem change.
     @discardableResult
     public static func write(for jobs: [ScheduledJob]) throws -> Bool {
-        let enabled = jobs.filter { $0.enabled && !$0.categories.isEmpty }
+        let enabled = jobs.filter(\.isRunnable)
         guard !enabled.isEmpty else {
             return remove()
         }
@@ -53,7 +53,7 @@ public enum LaunchAgentWriter {
         // the run-scheduled flag so the app performs the cleanup headlessly.
         let executablePath = Bundle.main.bundlePath + "/Contents/MacOS/MacTidy"
         var calIntervals: [[String: Int]] = []
-        for job in enabledJobs where !job.categories.isEmpty {
+        for job in enabledJobs where job.isRunnable {
             switch job.cadence {
             case .daily:
                 calIntervals.append(["Hour": job.hour])

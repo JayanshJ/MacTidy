@@ -16,7 +16,10 @@ struct MacTidyApp: App {
                     delegate.appState = state
                     state.applyAppearance()
                     delegate.sizeMainWindow()
-                    if !SnapshotHarness.isActive { state.monitor.start() }
+                    if !SnapshotHarness.isActive {
+                        state.monitor.start()
+                        state.vitals.start()
+                    }
                 }
         }
         .windowToolbarStyle(.unified(showsTitle: false))
@@ -25,12 +28,19 @@ struct MacTidyApp: App {
                 .environment(state)
                 .tint(Theme.accent)
         }
-        // The resident menu bar presence: quick-check summary + open/scan.
+        // The resident menu bar presence: quick-check summary, vitals & open/scan.
         // `internaldrive` (a disk glyph) echoes the app icon's "mostly-empty
         // disk = space reclaimed" mark and reads as storage cleanup at 16px.
-        MenuBarExtra("MacTidy", systemImage: "internaldrive") {
+        MenuBarExtra {
             MenuBarPanel()
                 .environment(state)
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "internaldrive")
+                if let label = state.vitals.menuBarText(appMemoryPressure: state.memory.pressure) {
+                    Text(label).monospacedDigit()
+                }
+            }
         }
         .menuBarExtraStyle(.window)
         .commands {

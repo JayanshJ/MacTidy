@@ -3,8 +3,8 @@ import AppKit
 import CoreKit
 
 /// The app-layer half of self-update: fetches the latest GitHub release,
-/// downloads the `MacTidy.app.zip` asset, verifies it, then swaps it into
-/// `/Applications` via a detached helper script and relaunches.
+/// downloads the `MacTidy.app.zip` asset, verifies it and holds it ready. A
+/// detached helper script swaps it into `/Applications` once the app quits.
 ///
 /// The pure manifest/version logic lives in CoreKit (`UpdateChecker`); this
 /// type owns the network, the filesystem verification, and the swap.
@@ -29,7 +29,7 @@ final class UpdateManager {
         case available(UpdateChecker.ReleaseManifest)
         case downloading(progress: Double)           // 0...1
         case installing
-        case readyToRelaunch(UpdateChecker.ReleaseManifest)  // helper spawned; quit to apply
+        case readyToRelaunch(UpdateChecker.ReleaseManifest)  // verified; applied on quit
         case failed(String)
         case noDownloadableAsset(UpdateChecker.ReleaseManifest)  // release exists, no zip → open page
     }
@@ -40,10 +40,49 @@ final class UpdateManager {
         didSet { UserDefaults.standard.set(checkOnLaunch, forKey: "MacTidy.update.checkOnLaunch") }
     }
 
+    /// Persisted: download new versions in the background and install on quit.
+    var installAutomatically: Bool {
+        didSet { UserDefaults.standard.set(installAutomatically, forKey: "MacTidy.update.installAutomatically") }
+    }
+    /// Why the previous install failed, read from the helper's marker file.
+    var lastInstallFailure: String?
+
     private var task: Task<Void, Never>?
+    private var automaticChecks: Task<Void, Never>?
+    /// The verified bundle waiting for the app to quit.
+    private var stagedApp: URL?
+    private var helperSpawned = false
 
     init() {
         self.checkOnLaunch = UserDefaults.standard.object(forKey: "MacTidy.update.checkOnLaunch") as? Bool ?? true
+        self.installAutomatically = UserDefaults.standard.object(forKey: "MacTidy.update.installAutomatically") as? Bool ?? true
+        let marker = UpdateInstaller.failureMarkerURL
+        if let failure = try? String(contentsOf: marker, encoding: .utf8) {
+            lastInstallFailure = UpdateInstaller.failureMessage(failure)
+            try? FileManager.default.removeItem(at: marker)
+        }
+    }
+
+    /// True only when the running copy is the one the helper would replace.
+    var canInstallAutomatically: Bool {
+        UpdateInstaller.canInstallAutomatically(runningBundle: Bundle.main.bundleURL, installURL: Self.installURL)
+    }
+
+    /// Checks on launch and once a day while running, since the app stays alive
+    /// in the menu bar. Quiet: a failed background check shows nothing.
+    func startAutomaticChecks() {
+        guard automaticChecks == nil else { return }
+        automaticChecks = Task {
+            while !Task.isCancelled {
+                if checkOnLaunch {
+                    switch phase {
+                    case .idle, .upToDate, .failed, .available: check(silent: true)
+                    default: break
+                    }
+                }
+                try? await Task.sleep(for: .seconds(24 * 3600))
+            }
+        }
     }
 
     // MARK: - Check
@@ -54,21 +93,24 @@ final class UpdateManager {
     }
 
     /// Fetches the latest release manifest and sets `phase` accordingly.
-    func check() {
+    func check(silent: Bool = false) {
         task?.cancel()
-        phase = .checking
+        if !silent { phase = .checking }
         task = Task {
             do {
                 let json = try await fetchString(from: UpdateChecker.latestReleaseURL,
                                                  extraHeaders: ["Accept": "application/vnd.github+json",
                                                                 "User-Agent": "MacTidy"])
                 guard let manifest = UpdateChecker.parseRelease(json: json) else {
-                    phase = .failed("Couldn't read the release information from GitHub.")
+                    if !silent { phase = .failed("Couldn't read the release information from GitHub.") }
                     return
                 }
                 if UpdateChecker.isUpdateAvailable(manifest: manifest, current: currentVersion) {
                     if manifest.downloadURL != nil {
                         phase = .available(manifest)
+                        if silent && installAutomatically && canInstallAutomatically {
+                            downloadAndInstall(silent: true)
+                        }
                     } else {
                         phase = .noDownloadableAsset(manifest)
                     }
@@ -76,18 +118,17 @@ final class UpdateManager {
                     phase = .upToDate
                 }
             } catch {
-                phase = .failed("Couldn't reach GitHub: \(error.localizedDescription)")
+                NSLog("[MacTidy.update] check failed: \(error.localizedDescription)")
+                if !silent { phase = .failed("Couldn't reach GitHub: \(error.localizedDescription)") }
             }
         }
     }
 
     // MARK: - Download + install
 
-    /// Downloads the update asset, verifies it, writes the swap helper, and
-    /// spawns it detached. The caller (UI) is responsible for quitting the
-    /// app immediately after this returns `.ok` — the helper waits for the
-    /// process to exit before swapping.
-    func downloadAndInstall() {
+    /// Downloads the update asset, verifies it and holds it ready. Nothing is
+    /// swapped until the app quits, through `relaunchToApply` or `applyOnQuit`.
+    func downloadAndInstall(silent: Bool = false) {
         guard case .available(let manifest) = phase,
               let url = manifest.downloadURL else {
             phase = .failed("No update is ready to install.")
@@ -101,29 +142,51 @@ final class UpdateManager {
                 let zippedURL = try await download(from: url, expectedSize: manifest.downloadSize)
                 NSLog("[MacTidy.update] download done (\(Int(Date().timeIntervalSince(t0) * 1000))ms)")
                 phase = .installing
-                try await verifyAndInstall(zippedURL: zippedURL, manifest: manifest)
-                NSLog("[MacTidy.update] verify+install done (\(Int(Date().timeIntervalSince(t0) * 1000))ms total)")
-                // Helper is spawned and detached; signal the UI to quit so the
-                // helper can swap the bundle and relaunch.
+                stagedApp = try await verifiedBundle(zippedURL: zippedURL, manifest: manifest)
+                NSLog("[MacTidy.update] verified (\(Int(Date().timeIntervalSince(t0) * 1000))ms total)")
                 phase = .readyToRelaunch(manifest)
             } catch {
-                phase = .failed(error.localizedDescription)
+                NSLog("[MacTidy.update] install failed: \(error.localizedDescription)")
+                // A quiet attempt stays offered, so one bad download isn't an alarm.
+                phase = silent ? .available(manifest) : .failed(error.localizedDescription)
             }
         }
     }
 
-    /// Quits the app so the spawned swap helper can replace the bundle and
+    /// Starts the swap helper and quits so it can replace the bundle and
     /// relaunch. Called by the UI once `phase` is `.readyToRelaunch`.
     func relaunchToApply() {
-        NSApplication.shared.terminate(nil)
+        do {
+            try spawnStagedHelper(relaunch: true)
+            NSApplication.shared.terminate(nil)
+        } catch {
+            phase = .failed(error.localizedDescription)
+        }
+    }
+
+    /// The user quit with an update ready: install it without reopening.
+    func applyOnQuit() {
+        guard installAutomatically, canInstallAutomatically else { return }
+        do {
+            try spawnStagedHelper(relaunch: false)
+        } catch {
+            NSLog("[MacTidy.update] couldn't start the helper: \(error.localizedDescription)")
+        }
+    }
+
+    private func spawnStagedHelper(relaunch: Bool) throws {
+        guard !helperSpawned, let stagedApp else { return }
+        guard FileManager.default.fileExists(atPath: stagedApp.path) else { throw UpdateError.notAppBundle }
+        try spawnSwapHelper(newAppURL: stagedApp, relaunch: relaunch)
+        helperSpawned = true
     }
 
     /// Cancels any in-flight check/download so nothing keeps the run loop
     /// alive during termination. Called from `AppState.prepareForTermination`.
-    /// The swap helper is already detached by this point, so cancelling the
-    /// download task does not affect a pending swap.
+    /// The swap helper is detached, so this does not affect a pending swap.
     func cancelInFlight() {
         task?.cancel()
+        automaticChecks?.cancel()
     }
 
     /// Convenience for the UI: open the release page when there's no zip asset.
@@ -193,10 +256,9 @@ final class UpdateManager {
 
     // MARK: - Verify + install
 
-    /// Unzips the downloaded asset, verifies the resulting bundle, writes the
-    /// detached swap helper, and launches it. Throws on any verification
-    /// failure — the running app is left untouched.
-    private func verifyAndInstall(zippedURL: URL, manifest: UpdateChecker.ReleaseManifest) async throws {
+    /// Unzips the downloaded asset and returns the verified bundle. Throws on
+    /// any verification failure — the running app is left untouched.
+    private func verifiedBundle(zippedURL: URL, manifest: UpdateChecker.ReleaseManifest) async throws -> URL {
         let t = Date()
         // 1. Unzip into a temp staging dir.
         let staging = FileManager.default.temporaryDirectory
@@ -213,11 +275,7 @@ final class UpdateManager {
         // 3. Verify it's a real MacTidy bundle, signed, and actually newer.
         try verifyBundle(at: newAppURL, expectedVersion: manifest.version)
         NSLog("[MacTidy.update] verifyBundle done (\(Int(Date().timeIntervalSince(t) * 1000))ms)")
-
-        // 4. Write + spawn the detached swap helper, then signal success so
-        //    the UI can quit the app.
-        try spawnSwapHelper(newAppURL: newAppURL)
-        NSLog("[MacTidy.update] helper spawned (\(Int(Date().timeIntervalSince(t) * 1000))ms)")
+        return newAppURL
     }
 
     /// Extracts the downloaded update zip into `dest`.
@@ -274,18 +332,10 @@ final class UpdateManager {
         }
     }
 
-    /// Writes a detached shell helper to /tmp and launches it with
-    /// `Process.disown`. The helper:
-    ///   1. waits up to 30s for the current MacTidy process to exit (150 × 0.2s),
-    ///      then force-kills it if it's still alive (termination can hang when
-    ///      something holds the run loop — the force-kill guarantees the swap
-    ///      proceeds and the app relaunches),
-    ///   2. rm -rf the old /Applications/MacTidy.app,
-    ///   3. moves the new bundle into place,
-    ///   4. strips the quarantine attribute (updates aren't notarized),
-    ///   5. relaunches the new app,
-    ///   6. self-deletes.
-    private func spawnSwapHelper(newAppURL: URL) throws {
+    /// Writes a detached shell helper to the temp folder and launches it. It
+    /// must only start once the app is quitting, because it force-kills this
+    /// process after 30s. See `UpdateInstaller.swapHelperScript` for its steps.
+    private func spawnSwapHelper(newAppURL: URL, relaunch: Bool) throws {
         let pid = ProcessInfo.processInfo.processIdentifier
         let helper = FileManager.default.temporaryDirectory
             .appendingPathComponent("mactidy-swap-\(pid).sh")
@@ -293,7 +343,8 @@ final class UpdateManager {
         let script = UpdateInstaller.swapHelperScript(
             newAppURL: newAppURL,
             installURL: Self.installURL,
-            currentPID: pid
+            currentPID: pid,
+            relaunch: relaunch
         )
         try script.write(to: helper, atomically: true, encoding: .utf8)
         // Make executable (octal 0700 — readable/writable/executable by owner).

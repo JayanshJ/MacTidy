@@ -41,9 +41,15 @@ public struct RunningAppMemory: Identifiable, Sendable {
         guard processes.allSatisfy({ $0.physicalFootprintBytes != nil }) else { return nil }
         return processes.reduce(0) { $0 + ($1.physicalFootprintBytes ?? 0) }
     }
+    public var cpuPercent: Double {
+        processes.reduce(0) { $0 + $1.cpuPercent }
+    }
+    public var canQuitGracefully: Bool {
+        !path.hasPrefix("/System/") && processes.allSatisfy { !ProcessDenylist.isDenied($0.name) }
+    }
     public var isSafeToQuit: Bool {
         !path.hasPrefix("/System/") && processes.allSatisfy(\.isSafeToQuit)
-            && processes.reduce(0) { $0 + $1.cpuPercent } < ProcessScanner.idleCpuThreshold
+            && cpuPercent < ProcessScanner.idleCpuThreshold
     }
 
     public static func grouped(_ processes: [RunningProcess]) -> [Self] {
@@ -53,6 +59,10 @@ public struct RunningAppMemory: Identifiable, Sendable {
                      processes: processes)
             }
             .sorted { ($0.footprintBytes ?? 0) > ($1.footprintBytes ?? 0) }
+    }
+
+    public static func topByCPU(_ processes: [RunningProcess]) -> [Self] {
+        grouped(processes).sorted { $0.cpuPercent > $1.cpuPercent }
     }
 }
 

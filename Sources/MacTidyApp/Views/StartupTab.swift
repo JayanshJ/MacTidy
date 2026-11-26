@@ -8,11 +8,18 @@ struct DashboardStartup: View {
     @State private var items: [LaunchItem] = []
     @State private var disabledItems: [LaunchItem] = []
     @State private var isLoading = false
+    @State private var showBrokenOnly = false
     @State private var errorMessage: String?
+
+    private var brokenCount: Int { items.filter(\.isBroken).count }
 
     var body: some View {
         Page("Login Items",
              subtitle: "Background agents and daemons that start with your Mac. Disabling parks the plist so it can be restored.") {
+            if brokenCount > 0 {
+                Toggle("Broken only (\(brokenCount))", isOn: $showBrokenOnly)
+                    .toggleStyle(.button)
+            }
             Button { reload() } label: {
                 if isLoading { ProgressView().controlSize(.small) } else { Label("Refresh", systemImage: "arrow.clockwise") }
             }
@@ -20,6 +27,24 @@ struct DashboardStartup: View {
         } content: {
             if isLoading && items.isEmpty {
                 ProgressView("Reading launch agents").frame(maxWidth: .infinity).padding(Theme.Spacing.xxl)
+            }
+            if brokenCount > 0 {
+                SurfaceSection {
+                    HStack(spacing: Theme.Spacing.md) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(Theme.Status.caution)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(brokenCount) broken login item\(brokenCount == 1 ? "" : "s") detected")
+                                .font(Theme.Font.bodyStrong)
+                            Text("Their target executable no longer exists on disk — usually left behind by a deleted app. You can safely disable them.")
+                                .font(Theme.Font.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                    }
+                    .padding(.horizontal, Theme.Spacing.lg)
+                    .padding(.vertical, Theme.Spacing.md)
+                }
             }
             ForEach(LaunchItem.Domain.allCases, id: \.self) { domain in
                 section(for: domain)
@@ -42,7 +67,7 @@ struct DashboardStartup: View {
 
     @ViewBuilder
     private func section(for domain: LaunchItem.Domain) -> some View {
-        let domainItems = items.filter { $0.domain == domain }
+        let domainItems = items.filter { $0.domain == domain && (!showBrokenOnly || $0.isBroken) }
         if !domainItems.isEmpty {
             SurfaceSection(domain.rawValue,
                            footer: domain.requiresAdmin ? "Changing these asks for your administrator password." : nil) {
@@ -67,6 +92,7 @@ struct DashboardStartup: View {
                 HStack(spacing: Theme.Spacing.sm) {
                     Text(item.label).font(Theme.Font.bodyStrong).lineLimit(1)
                     if item.runAtLoad == true { Badge(text: "At login", tint: .secondary) }
+                    if item.isBroken { Badge(text: "Missing binary", tint: Theme.Status.caution) }
                 }
                 if let program = item.program {
                     Text(program).font(.system(size: 11, design: .monospaced)).foregroundStyle(.secondary)

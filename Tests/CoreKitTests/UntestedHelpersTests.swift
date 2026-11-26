@@ -64,6 +64,30 @@ struct UntestedHelpersTests {
         #expect(result != nil)
     }
 
+    @Test func shellDefaultSearchDirectoriesIncludeDockerLocations() {
+        let dirs = Shell.defaultSearchDirectories(home: "/Users/demo")
+        #expect(dirs.contains("/Users/demo/.docker/bin"))
+        #expect(dirs.contains("/Applications/Docker.app/Contents/Resources/bin"))
+        #expect(dirs.contains("/Users/demo/.orbstack/bin"))
+        #expect(dirs.contains("/Applications/OrbStack.app/Contents/MacOS/xbin"))
+        #expect(dirs.contains("/Users/demo/.rd/bin"))
+    }
+
+    @Test func shellFindLocatesExecutableInUserDockerBin() throws {
+        let tempHome = FileManager.default.temporaryDirectory
+            .appending(path: "mactidy-shell-find-\(UUID().uuidString)")
+        let dockerBin = tempHome.appending(path: ".docker/bin")
+        try FileManager.default.createDirectory(at: dockerBin, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempHome) }
+
+        let fakeDocker = dockerBin.appending(path: "docker")
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: fakeDocker)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fakeDocker.path)
+
+        let found = Shell.find("docker", in: Shell.defaultSearchDirectories(home: tempHome.path))
+        #expect(found == fakeDocker.path)
+    }
+
     // MARK: - TrashUsage
 
     @Test func trashURLIsInHomeDotTrash() {

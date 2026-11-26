@@ -38,10 +38,33 @@ public struct LaunchItem: Identifiable, Hashable, Sendable {
     public let url: URL
     public let label: String
     public let program: String?
+    public let executablePath: String?
+    public let executableExists: Bool?
     public let runAtLoad: Bool?
     public let isLoaded: Bool
     public let domain: Domain
     public var id: String { url.path }
+    public var isBroken: Bool { executableExists == false }
+
+    public init(
+        url: URL,
+        label: String,
+        program: String?,
+        executablePath: String? = nil,
+        executableExists: Bool? = nil,
+        runAtLoad: Bool?,
+        isLoaded: Bool,
+        domain: Domain
+    ) {
+        self.url = url
+        self.label = label
+        self.program = program
+        self.executablePath = executablePath
+        self.executableExists = executableExists
+        self.runAtLoad = runAtLoad
+        self.isLoaded = isLoaded
+        self.domain = domain
+    }
 }
 
 /// Audits launchd plists — the real levers behind "my Mac starts slow".
@@ -103,18 +126,42 @@ public enum LaunchItemsAuditor {
                              loadedLabels: Set<String>) -> LaunchItem {
         var label = url.deletingPathExtension().lastPathComponent
         var program: String?
+        var executablePath: String?
         var runAtLoad: Bool?
         if let data = try? Data(contentsOf: url),
            let plist = try? PropertyListSerialization.propertyList(from: data, format: nil)
             as? [String: Any] {
             label = plist["Label"] as? String ?? label
+            executablePath = parseExecutablePath(plist: plist)
             program = plist["Program"] as? String
                 ?? (plist["ProgramArguments"] as? [String])?.joined(separator: " ")
             runAtLoad = plist["RunAtLoad"] as? Bool
         }
-        return LaunchItem(url: url, label: label, program: program,
-                          runAtLoad: runAtLoad,
-                          isLoaded: loadedLabels.contains(label), domain: domain)
+        return LaunchItem(
+            url: url,
+            label: label,
+            program: program,
+            executablePath: executablePath,
+            executableExists: checkExecutableExists(path: executablePath),
+            runAtLoad: runAtLoad,
+            isLoaded: loadedLabels.contains(label),
+            domain: domain
+        )
+    }
+
+    public static func parseExecutablePath(plist: [String: Any]) -> String? {
+        let raw = (plist["Program"] as? String)
+            ?? (plist["ProgramArguments"] as? [String])?.first
+        let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (trimmed?.isEmpty == false) ? trimmed : nil
+    }
+
+    public static func checkExecutableExists(
+        path: String?,
+        fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
+    ) -> Bool? {
+        guard let path, path.hasPrefix("/") else { return nil }
+        return fileExists(path)
     }
 
     /// Labels from `launchctl list` (third column). Empty set if launchctl

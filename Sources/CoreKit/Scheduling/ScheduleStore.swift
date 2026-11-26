@@ -19,6 +19,22 @@ public enum ScheduleCadence: String, Codable, Sendable, CaseIterable, Identifiab
     }
 }
 
+/// What a scheduled job does when it fires.
+public enum ScheduleMode: String, Codable, Sendable, CaseIterable, Identifiable {
+    /// Rescan the job's safe categories and move their safe items to Trash.
+    case clean
+    /// Rescan everything and record it to scan history. Deletes nothing.
+    case scanOnly
+    public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .clean: "Clean"
+        case .scanOnly: "Scan only"
+        }
+    }
+}
+
 /// One scheduled cleanup job. A cadence plus the subset of *safe*
 /// (`isPreselectable`) categories to auto-trash on each fire. The category
 /// subset is deliberately restricted to preselectable categories — automated
@@ -28,6 +44,8 @@ public enum ScheduleCadence: String, Codable, Sendable, CaseIterable, Identifiab
 public struct ScheduledJob: Codable, Identifiable, Sendable, Equatable {
     public let id: UUID
     public var enabled: Bool
+    /// Clean or scan only. Files written before this existed decode as `.clean`.
+    public var mode: ScheduleMode
     public var cadence: ScheduleCadence
     /// Hour of the day (0–23) at which the job fires.
     public var hour: Int
@@ -47,6 +65,7 @@ public struct ScheduledJob: Codable, Identifiable, Sendable, Equatable {
     public init(
         id: UUID = UUID(),
         enabled: Bool = true,
+        mode: ScheduleMode = .clean,
         cadence: ScheduleCadence = .weekly,
         hour: Int = 3,
         weekday: Int = 7,
@@ -57,6 +76,7 @@ public struct ScheduledJob: Codable, Identifiable, Sendable, Equatable {
     ) {
         self.id = id
         self.enabled = enabled
+        self.mode = mode
         self.cadence = cadence
         self.hour = max(0, min(23, hour))
         self.weekday = max(1, min(7, weekday))
@@ -66,6 +86,35 @@ public struct ScheduledJob: Codable, Identifiable, Sendable, Equatable {
         self.categories = categories.filter { $0.isPreselectable }
         self.lastRun = lastRun
         self.nextRun = nextRun
+    }
+
+    /// Whether launchd should fire for this job: a clean job needs at least
+    /// one category; a scan-only job scans everything and needs none.
+    public var isRunnable: Bool {
+        enabled && (mode == .scanOnly || !categories.isEmpty)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, enabled, mode, cadence, hour, weekday, dayOfMonth, categories, lastRun, nextRun
+    }
+
+    /// Hand-written so `schedules.json` files from before `mode` existed still
+    /// load (the store returns no jobs on any decode failure, and the next save
+    /// would overwrite the file).
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try c.decode(UUID.self, forKey: .id),
+            enabled: try c.decode(Bool.self, forKey: .enabled),
+            mode: try c.decodeIfPresent(ScheduleMode.self, forKey: .mode) ?? .clean,
+            cadence: try c.decode(ScheduleCadence.self, forKey: .cadence),
+            hour: try c.decode(Int.self, forKey: .hour),
+            weekday: try c.decode(Int.self, forKey: .weekday),
+            dayOfMonth: try c.decode(Int.self, forKey: .dayOfMonth),
+            categories: try c.decode(Set<Category>.self, forKey: .categories),
+            lastRun: try c.decodeIfPresent(Date.self, forKey: .lastRun),
+            nextRun: try c.decodeIfPresent(Date.self, forKey: .nextRun)
+        )
     }
 }
 

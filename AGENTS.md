@@ -112,6 +112,18 @@ the Undo toast afterward, including partial failures. Record the observed change
 in free blocks separately from estimated cleanup bytes; do not add it to the
 reclaimed total again. Never test this by emptying the owner's Trash.
 
+### Self-update
+
+`UpdateManager` (app) and `UpdateInstaller`/`UpdateChecker` (CoreKit) check GitHub on
+launch and daily, then download and verify in the background when
+`installAutomatically` is on and the running copy is `/Applications/MacTidy.app`
+(so `dist/` builds never replace it). The swap helper starts only as the app quits,
+through `applyOnQuit` or the banner's Relaunch Now, because it force-kills the app
+after 30s. It moves the old bundle aside, moves the new one in, runs `codesign -v`,
+and puts the old one back on failure. It deletes nothing. A failure is written to
+`~/Library/Logs/MacTidy-update-failed.txt` and shown on next launch. Ad-hoc releases
+lose Full Disk Access on each update; only a stable certificate (`make cert`) fixes that.
+
 ### Cleanup source registry
 
 `Sources/CoreKit/Model/CleanSource.swift` is the declarative table behind
@@ -178,6 +190,23 @@ a root symlink, so `~/.swiftpm/cache` would double-count), and `.children` sourc
 drop children the policy refuses and hidden loose files. `~/.local/share` children
 are Caution unless named; a child holding a named source (`claude`, `uv`) never
 appears whole.
+
+### What Changed and scan-only schedules
+
+`ScheduledJob.mode` is `.clean` or `.scanOnly` (old `schedules.json` decodes as
+`.clean` via a hand-written decoder; keep it that way or every job is lost).
+A scan-only job never contributes categories to the plan; `ScheduledRunner`
+reports `wantsFullScan` and `AppState.runScheduledIfDue` runs the normal
+`rescanCategories()` after any cleanup (only with Full Disk Access, so a partial
+scan never reads as growth), then flushes persistence. A running
+app picks it up on activation and when the menu bar panel opens
+(`reloadScanIfUpdatedElsewhere`). A period never compares with a scan outside it.
+`WhatChanged` (Scanning/) reuses `growthReport` with lower thresholds and a
+week/month/quarter window; `ChangeLocator` finds a Disk Map folder from the
+current scan (nil rather than a guess). `AppState.openInDiskMap` is the one-shot
+deep link `DiskView` consumes. `DiskAccounting.Part.destination` links rows
+(Trash is carved out of home, so nothing double-counts; macOS volumes and
+`/private/var/vm` stay unlinked). `DownloadsHygiene` only reads `.oldInstallers`.
 
 ### Handled elsewhere and growth nudges
 
@@ -297,7 +326,7 @@ shows only when there is no saved scan.
 
 UI structure (`Views/`): `RootView` routes onboarding → welcome → `MainShell`.
 `MainShell` is a `NavigationSplitView` sidebar (Overview, Cleanup, Insights ·
-Developer · Apps · Files · History) with a boot-volume footer; Settings is a
+Developer · Apps · Files · History, which holds What Changed) with a boot-volume footer; Settings is a
 native `Settings` scene (tabs). Design system lives in `Theme.swift`: adaptive
 light/dark color tokens, type ramp, spacing, and components (`Page`,
 `PageHeader`, `SurfaceSection` + `RowDivider`, `Meter`, `CapacityBar`,

@@ -232,6 +232,8 @@ struct SettingsView: View {
                 Toggle("Scan automatically on launch", isOn: $state.autoScanOnLaunch)
                     .help("Run a category scan when the app opens, if nothing is cached.")
                 Stepper("Old installers cutoff: \(state.installerMinAgeDays) days", value: $state.installerMinAgeDays, in: 7...365, step: 7)
+                Toggle("Remind me about old installers on the Overview", isOn: $state.showInstallersNudge)
+                    .help("Shows .dmg and .pkg files in Downloads and Desktop older than the cutoff. Nothing is removed without your confirmation.")
                 Stepper("Stale screenshots cutoff: \(state.screenshotMinAgeDays) days", value: $state.screenshotMinAgeDays, in: 7...365, step: 7)
             }
 
@@ -242,6 +244,13 @@ struct SettingsView: View {
             // MARK: - Menu bar & alerts
             Section {
                 @Bindable var monitor = state.monitor
+                @Bindable var vitals = state.vitals
+                Picker("Menu bar readout", selection: $vitals.menuBarReadout) {
+                    ForEach(MenuBarReadout.allCases) { option in
+                        Text(option.title).tag(option)
+                    }
+                }
+                .pickerStyle(.menu)
                 Toggle("Notify me when space piles up", isOn: $monitor.notificationsEnabled)
                     .help("A quick background check runs every 6 hours and alerts you only when reclaimable space crosses your threshold AND has grown since the last alert.")
                 if monitor.notificationsEnabled {
@@ -462,7 +471,7 @@ struct SettingsView: View {
         } header: {
             Text("Scheduled cleanup")
         } footer: {
-            Text("Runs automatically via launchd — even when MacTidy is closed. Only safe categories (caches, build artifacts, old installers) are auto-trashed; suggest-only categories like node_modules and iOS backups are never touched automatically. Every item still passes the same safety check as a manual cleanup.")
+            Text("Runs automatically via launchd — even when MacTidy is closed. Scan-only schedules just keep scan history fresh. Only safe categories (caches, build artifacts, old installers) are auto-trashed; suggest-only categories like node_modules and iOS backups are never touched automatically. Every item still passes the same safety check as a manual cleanup.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -510,7 +519,8 @@ struct SettingsView: View {
                 .buttonStyle(.borderless)
                 .help("Edit this schedule")
             }
-            Text(job.categories.sorted(by: { $0.displayName < $1.displayName })
+            Text(job.mode == .scanOnly ? "Scan only. Nothing is deleted."
+                 : job.categories.sorted(by: { $0.displayName < $1.displayName })
                     .map(\.displayName).joined(separator: " · "))
                 .font(.caption).foregroundStyle(.secondary)
             if let next = job.nextRun {

@@ -4,10 +4,21 @@ import Foundation
 /// snapshots and APFS sharing stay explicit rather than being called junk.
 public struct DiskAccounting: Sendable {
     public struct Part: Identifiable, Sendable {
+        /// Where a row can lead. macOS volumes and memory files lead nowhere:
+        /// there is nothing there for the user to act on.
+        public enum Destination: Sendable, Equatable {
+            /// Open this folder in Disk Map.
+            case folder(URL)
+            /// The Trash (MacTidy's Recently Trashed page).
+            case trash
+        }
         public let name: String
         public let bytes: Int64
+        public let destination: Destination?
         public var id: String { name }
-        public init(name: String, bytes: Int64) { self.name = name; self.bytes = bytes }
+        public init(name: String, bytes: Int64, destination: Destination? = nil) {
+            self.name = name; self.bytes = bytes; self.destination = destination
+        }
     }
     public let parts: [Part]
     public let pressure: DiskPressure?
@@ -46,13 +57,11 @@ public struct DiskAccounting: Sendable {
             if let values = try? root.resourceValues(forKeys: [.isRegularFileKey, .totalFileAllocatedSizeKey]),
                values.isRegularFile == true { sizes[index] = Int64(values.totalFileAllocatedSize ?? 0) }
         }
-        var library: Int64 = 0, rest: Int64 = 0
-        for (child, bytes) in zip(localChildren, sizes) {
-            if child.lastPathComponent == "Library" { library += bytes } else { rest += bytes }
-        }
-        var parts = [Part(name: "Home Library", bytes: library), Part(name: "Other home files", bytes: rest)]
+        var parts = Self.homeParts(home: home, children: Array(zip(localChildren, sizes)))
         for (index, root) in outside.enumerated() {
-            parts.append(Part(name: root.0, bytes: sizes[localChildren.count + index]))
+            // Memory files belong to macOS: shown, never linked.
+            let link: Part.Destination? = root.1.path == "/private/var/vm" ? nil : .folder(root.1)
+            parts.append(Part(name: root.0, bytes: sizes[localChildren.count + index], destination: link))
         }
         if let output = Shell.run("/usr/sbin/diskutil", ["apfs", "list", "-plist"]), output.succeeded,
            let data = output.stdout.data(using: .utf8), let volumes = Self.systemVolumes(in: data) {
@@ -61,6 +70,23 @@ public struct DiskAccounting: Sendable {
         let snapshotOutput = Shell.run("/usr/bin/tmutil", ["listlocalsnapshots", "/"])
         let count = snapshotOutput.flatMap { $0.succeeded ? Self.snapshotCount(in: $0.stdout) : nil }
         return Self(parts: parts, pressure: DiskPressure.current(), physicalFree: TrashEmptying.freeBytes(), snapshotCount: count)
+    }
+
+    /// Splits home's top-level children into disjoint parts: Library, Trash,
+    /// and everything else. Each byte lands in exactly one part.
+    public static func homeParts(home: URL, children: [(URL, Int64)]) -> [Part] {
+        var library: Int64 = 0, trash: Int64 = 0, rest: Int64 = 0
+        for (child, bytes) in children {
+            switch child.lastPathComponent {
+            case "Library": library += bytes
+            case ".Trash": trash += bytes
+            default: rest += bytes
+            }
+        }
+        var parts = [Part(name: "Home Library", bytes: library, destination: .folder(home.appending(path: "Library"))),
+                     Part(name: "Other home files", bytes: rest, destination: .folder(home))]
+        if trash > 0 { parts.append(Part(name: "Trash", bytes: trash, destination: .trash)) }
+        return parts
     }
 
     public static func systemVolumes(in data: Data) -> [Part]? {

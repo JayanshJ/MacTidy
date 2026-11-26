@@ -13,6 +13,10 @@ public struct GrowthNudge: Identifiable, Sendable, Equatable {
     public let delta: Int64
     public let current: Int64
     public let since: Date
+    /// The Application Support owner (`ScanItem.detail`) or handled-elsewhere
+    /// rule ID behind this nudge; nil for a whole category. Lets the UI find
+    /// the folder in the current scan.
+    public var folder: String? = nil
     public var id: String { name }
 
     /// "Claude grew 10 GB since last week"
@@ -71,6 +75,19 @@ extension ScanHistory {
         return totals
     }
 
+    /// The latest growth-tracked scan and the one it is compared with: the
+    /// oldest from the past `window` that is at least `minimumGap` older, or,
+    /// if there is none, the newest older scan.
+    public static func comparison(in history: [ScanSnapshot], minimumGap: TimeInterval = 20 * 3600,
+                                  window: TimeInterval = 8 * 86_400) -> (latest: ScanSnapshot, base: ScanSnapshot)? {
+        let tracked = history.filter { $0.categories != nil }.sorted { $0.date > $1.date }
+        guard let latest = tracked.first else { return nil }
+        let older = tracked.filter { latest.date.timeIntervalSince($0.date) >= minimumGap }
+        let recent = older.filter { latest.date.timeIntervalSince($0.date) <= window }
+        guard let base = recent.last ?? older.first else { return nil }
+        return (latest, base)
+    }
+
     /// The Overview's growth insight. Pure and deterministic.
     ///
     /// Compares the latest scan with the oldest one from the past `window`
@@ -84,17 +101,15 @@ extension ScanHistory {
                                     minimumGap: TimeInterval = 20 * 3600,
                                     window: TimeInterval = 8 * 86_400,
                                     limit: Int = 3) -> GrowthReport {
-        let tracked = history.filter { $0.categories != nil }.sorted { $0.date > $1.date }
-        guard let latest = tracked.first, let now = latest.categories else { return .noHistory }
-        let older = tracked.filter { latest.date.timeIntervalSince($0.date) >= minimumGap }
-        let recent = older.filter { latest.date.timeIntervalSince($0.date) <= window }
-        guard let base = recent.last ?? older.first, let before = base.categories else { return .noHistory }
+        guard let (latest, base) = comparison(in: history, minimumGap: minimumGap, window: window),
+              let now = latest.categories, let before = base.categories else { return .noHistory }
 
         var nudges: [GrowthNudge] = []
-        func consider(_ name: String, _ place: GrowthNudge.Place, current: Int64, baseline: Int64) {
+        func consider(_ name: String, _ place: GrowthNudge.Place, current: Int64, baseline: Int64, folder: String? = nil) {
             let delta = current - baseline
             guard delta >= minimumDelta, Double(delta) >= minimumShare * Double(baseline) else { return }
-            nudges.append(GrowthNudge(name: name, place: place, delta: delta, current: current, since: base.date))
+            nudges.append(GrowthNudge(name: name, place: place, delta: delta, current: current,
+                                      since: base.date, folder: folder))
         }
 
         // Application Support is named app by app when both scans can.
@@ -107,12 +122,13 @@ extension ScanHistory {
         }
         for (key, bytes) in folders?.now ?? [:] {
             if key.hasPrefix(appSupportPrefix) {
-                consider(String(key.dropFirst(appSupportPrefix.count)), .category(.appSupport),
-                         current: bytes, baseline: folders?.before[key] ?? 0)
+                let owner = String(key.dropFirst(appSupportPrefix.count))
+                consider(owner, .category(.appSupport),
+                         current: bytes, baseline: folders?.before[key] ?? 0, folder: owner)
             } else if key.hasPrefix(elsewherePrefix),
                       let rule = HandledElsewhere.rule(id: String(key.dropFirst(elsewherePrefix.count))),
                       let baseline = folders?.before[key] {
-                consider(rule.label, .handledElsewhere, current: bytes, baseline: baseline)
+                consider(rule.label, .handledElsewhere, current: bytes, baseline: baseline, folder: rule.id)
             }
         }
         guard !nudges.isEmpty else { return .steady }
